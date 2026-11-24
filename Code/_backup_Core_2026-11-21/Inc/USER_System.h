@@ -1,0 +1,64 @@
+/*
+ * USER_System.h
+ *
+ *  Created on: Mar 8, 2025
+ *      Author: PC
+ */
+
+#ifndef INC_USER_SYSTEM_H_
+#define INC_USER_SYSTEM_H_
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+#include <USER_PID.h>
+#include <USER_MPU.h>
+typedef struct
+{
+	uint8_t u8DutyCle;
+	uint32_t u32Frequency;
+	uint8_t u8Motor;
+}gMotorParameter;
+
+
+typedef struct
+{
+	double dgry_yaw;
+	double dgry_pitch;
+	double dgry_roll;
+	double dthurst;
+}gCalculatedPIDParam;
+typedef struct
+{
+    uint8_t u8CurrDrvID; // Driver index 0 or 1 //
+
+    uint32_t u32DebugMode; // Debug mode setting //
+
+
+} gSettingTypeDef;
+
+extern gSettingTypeDef g_Setting;
+
+extern PID_TypeDef ROLL_TPID;
+
+extern PID_TypeDef PITCH_TPID;
+
+extern PID_TypeDef YAW_TPID;
+
+extern PID_TypeDef THURST_TPID;
+
+extern Gry_Variable gPIDData_Thurst;
+extern Gry_Variable gPIDData_Roll;
+extern Gry_Variable gPIDData_Pitch;
+extern Gry_Variable gPIDData_Yall;
+
+
+void Sys_Init(void);
+
+bool Sys_Motor_Mixing_Algorithm(gCalculatedPIDParam CalPIDParam);
+
+void Sys_InnerLoop(Struct_MPU6050 mpu6050,double ref_Thurst, double ref_Pitch, double ref_Yaw, double ref_Roll);
+
+
+#endif /* INC_USER_SYSTEM_H_ */

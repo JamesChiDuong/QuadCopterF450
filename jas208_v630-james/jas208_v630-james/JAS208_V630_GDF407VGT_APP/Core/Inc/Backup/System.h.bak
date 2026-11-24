@@ -1,0 +1,1162 @@
+#ifndef _SYSTEM_H_
+#define _SYSTEM_H_
+//============================================================================//
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include <stdint.h>
+#include <time.h>
+
+#include "CAN_Driver.h"
+#include "Config.h"
+#include "cmsis_os.h"
+#include "Default.h"
+#include "GPS_Driver.h"
+#include "GSM_Driver.h"
+#include "Protocol.h"
+#include "UART_Driver.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+// Offset address of product information
+//#define	PRODUCT_INFO_OFFSET		           0x2000
+
+// Actual address of product information
+//#define	PRODUCT_INFO_ADDR		             (APPLICATION_ADDR + PRODUCT_INFO_OFFSET)
+
+// Actual address of system setup
+//#define	SETUP_BACKUP_ADDR		             (FLASH_END_ADDR - SECTOR_128K_SIZE)
+// Number of active tasks
+#define TASK_QUANTITY                    10
+
+// Temporary files folder
+#define DIRNAME_TEMP                     "TEMP" // Folder to store files for temporary packets              
+
+// File system log name
+#define	FILENAME_SYSLOG			             "SYSLOG" // File name for system log
+
+// File data log name
+//#define	FILENAME_DATALOG_DTR	           "DATALOG.DTR"
+
+// File photo name
+//#define	FILENAME_PHOTO_JPG  	           "PHOTO.JPG"
+
+// DFU file name
+#define FILENAME_UPGRADE_DFU	           "UPGRADE.DFU" 
+
+// Upgrade file name
+//#define FILENAME_UPGRADE_BIN	           "UPGRADE.BIN"
+
+#define UPGRADE_FILE_EXT                 "DF2" // Upgrade file name extension
+
+// DFU file name after finish upgrade
+//#define FILENAME_UPGRADE_FINISH	         "UPGRADE"
+
+#define TEMP_FILE_EXT                    "TMP"
+
+#define CHINESE_FONT_FILE                "STDFONT.16" // Name of Chinese font file for LCD display
+
+#define FILENAME_SETUP_TXT							 "SETUP.TXT" 
+
+#define FILENAME_CONFIG_SYS							 "CONFIG.SYS"
+
+#define STR_AUTH_ROOT										 "ROOT"
+
+#define STR_AUTH_FACTORY								 "FACTORY"
+
+#define STR_AUTH_ADMIN									 "ADMIN"
+
+#define STR_AUTH_USER										 "USER"
+
+#define GET_DATALOG_ADMIN_DEF						 7
+
+#define GET_DATALOG_USER_DEF						 2
+
+#define GET_DATALOG_ROOT_DEF						 1
+
+#define GET_DATALOG_ADMIN_MAX						 30
+
+#define GET_DATALOG_USER_MAX						 7
+
+#define GET_DATALOG_ROOT_MAX						 DATALOG_FILE_MAX
+
+#define SYSTICK_COUNT_DEF		             1000000U 
+
+// System tick timebase default is 1mS
+#define SYSTICK_TIMEBASE_DEF	           1000U
+
+#define SYSTICK_CLOCK			               (SYSTICK_COUNT_DEF / SYSTICK_TIMEBASE_DEF) 
+
+#define SysTick_4_mS			               (SYSTICK_CLOCK / 1000) // Systick-milliseconds equivalence
+
+#define mS_2_SysTick(mS)		             ((mS) * SysTick_4_mS) // Convert milliseconds to Systick
+
+#define SysTick_2_mS(SysTick)	           ((SysTick) / SysTick_4_mS) // Convert Systick to milliseconds
+
+#define SETUP_VERSION			               0x02
+
+#define NOT_SETUP_VERSION                0xFD
+
+#define DEFAULT_STRING			             "------"
+
+#define DRIVER_INFO_MAX			             10U
+
+#define INVALID_VALUE_DEF		             0xFFFFFFFF
+
+#define SPEED_LIMIT_BANK_MAX	           3U
+
+#define DISTANCE_MAX	    	             2U // Heinz
+
+#define PHONE_BANK_MAX			             10U
+
+#define DRV_QUANTITY_MAX                 2U
+
+#define	RESET_DELAY_NULL		             0U
+
+#define	RESET_DELAY_SHORT		             1U
+
+#define	RESET_DELAY_NORMAL		           3U
+
+#define	RESET_DELAY_LONG		             5U
+
+#define FUNC_KEY_SPEED_LIMIT_GROUP	     3U
+
+#define FUNC_KEY_PHONE_BANK_MAX		       3U
+
+#define UPSPEED_HOW_LONG_SEC	           30U
+
+#define STR_SYSTEM_LOG                   "\r\n> [SYS]"
+
+// System state code list
+#define SYS_STATE_SYSTEM_INIT_OK		     0x3030 //0x0000
+#define SYS_STATE_SYSTEM_UPGRADE_OK		   0x3130 //0x0001
+#define SYS_STATE_SETUP_RECOVERY		     0x3230 //0x0002
+#define SYS_STATE_DATALOG_SAVE_ERROR	   0x3330 //0x0003
+#define SYS_STATE_SYS_DEFAULT	           0x3430 //0x0004
+#define SYS_STATE_SYS_INIT	        	   0x3530 //0x0005
+#define SYS_STATE_SYS_RENAME1	           0x3730 //0x0007
+#define SYS_STATE_SYS_RENAME2	           0x3830 //0x0007
+#define SYS_STATE_SD_WRITE_ERR		       0x3930 //0x0009
+
+#define SYS_STATE_MOTOR_POWER_ON		     0x3031 //0x0010
+#define SYS_STATE_MOTOR_POWER_DOWN		   0x3131 //0x0011
+#define SYS_STATE_KEY_ON				         0x3231 //0x0012
+#define SYS_STATE_KEY_OFF				         0x3431 //0x0014
+#define SYS_STATE_RTC_SYNC_OK			       0x3531 //0x0015
+
+#define SYS_STATE_GPS_POWER_ON			     0x3032 //0x0020
+#define SYS_STATE_GPS_POWER_OFF			     0x3132 //0x0021
+#define SYS_STATE_GPS_FIX				         0x3232 //0x0022
+#define SYS_STATE_GPS_NOT_FIX			       0x3332 //0x0023
+#define SYS_STATE_GPS_PACKAGE_ERROR		   0x3432 //0x0024
+#define SYS_STATE_GPS_POSITION_ERROR	   0x3532 //0x0025
+#define SYS_STATE_GPS_NMEA_ERROR		     0x3632 //0x0026
+#define SYS_STATE_GPS_NMEA_QUALITY		   0x3732 //0x0027
+
+#define SYS_STATE_GSM_POWER_ON			     0x3033 //0x0030
+#define SYS_STATE_GSM_POWER_OFF			     0x3133 //0x0031
+#define SYS_STATE_GSM_NET_RELEASE		     0x3233 //0X0032
+#define SYS_STATE_GSM_NET_CONNECT		     0x3333 //0x0033
+#define SYS_STATE_GSM_NET_DISCONN	    	 0x3433 //0x0034
+#define SYS_STATE_GSM_AT_CMD_ERROR		   0x3533 //0x0035
+#define SYS_STATE_GSM_AT_CMD_RESET		   0x3633 //0x0036
+
+#define SYS_STATE_USB_DL_DAY			       0x3034 //0x0040
+#define SYS_STATE_USB_DL_HOUR			       0x3134 //0x0041
+#define SYS_STATE_UART_DL_DAY			       0x3234 //0X0042
+#define SYS_STATE_UART_DL_HOUR			     0x3334 //0x0043
+#define SYS_STATE_CHANG_BUS_ID			     0X3434 //0x0044
+#define SYS_STATE_CHANG_SPEED_GAIN		   0x3534 //0x0045
+#define SYS_STATE_CHANG_RPM_GAIN		     0x3634 //0x0046
+#define SYS_STATE_CHANG_DRV_ID			     0x3734 //0x0047
+#define SYS_STATE_CHANG_DISTANCE		     0x3834 //0x0048
+
+#define SYS_STATE_GPS_AUTO_TEST			     0x3035 //0x0050
+#define SYS_STATE_GPS_AUTO_TEST_OK		   0x3135 //0x0051
+#define SYS_STATE_GPS_NG				         0x3235 //0x0052
+#define SYS_STATE_PTR_AUTO_TEST			     0x3335 //0x0053
+#define SYS_STATE_PTR_AUTO_TEST_OK		   0x3435 //0x0054
+#define SYS_STATE_PTR_NG				         0x3535 //0x0055
+#define SYS_STATE_LCM_AUTO_TEST			     0x3635 //0x0056
+#define SYS_STATE_LCM_AUTO_TEST_OK		   0x3735 //0x0057
+#define SYS_STATE_LCM_NG				         0x3835 //0x0058
+#define SYS_STATE_CALIBRATION_ON		     0x3935 //0x0059
+#define SYS_STATE_CALIBRATION_OFF		     0x4135 //0x005A
+#define SYS_STATE_BATTERY_ON			       0x4235 //0x005B
+#define SYS_STATE_BATTERY_OFF			       0x4335 //0x005C
+#define SYS_STATE_NON_AUTH				       0x4435 //0x005D
+#define SYS_STATE_NON_CAL				         0x4535 //0x005E
+
+#define SYS_STATE_POWER_OFF_200MS		     0x3036 //0x0060
+#define SYS_STATE_ADMIN_ON				       0x3136 //0x0061
+#define SYS_STATE_ADMIN_OFF				       0x3236 //0x0062
+
+#define SYS_STATE_AUTO_GAIN_STAR		     0x3039 //0x0090
+#define SYS_STATE_AUTO_GAIN_END		       0x3139 //0x0091
+#define SYS_STATE_AUTO_GAIN_OK			     0x3239 //0x0092
+#define SYS_STATE_DMD_ERROR			         0x3939 //0x0099
+
+#define SYS_STATE_MAKE_VDR_START		     0x3041
+#define SYS_STATE_MAKE_VDR_STOP			     0x3141
+#define SYS_STATE_RENAME_DAY_FILE		     0x3241
+#define SYS_STATE_RECREATE_DAY_FILE		   0x3341
+#define SYS_STATE_CHECK_RECORD_FILE		   0x3441
+#define SYS_STATE_PCF8563T_SYNC_OK		   0x3541
+#define SYS_STATE_DATALOG_HEAD_NG				 0x3641
+#define SYS_STATE_DATALOG_READ_NG				 0x3741
+#define SYS_STATE_DATALOG_FILE_NG				 0x3841
+
+//#define SYS_STATE_LOG_IN	        	     0x45303032 //002
+//#define SYS_STATE_LOG_OUT	        	     0x45303033 //003
+
+// Upgrade file name
+#define FILENAME_UPGRADE_BIN	           "UPGRADE.BIN"
+
+#define FLASH_CRC_SIZE                   4U
+
+#define ENABLE_CRC_CHECK                 1U
+
+#define FLASH_HEADER_SIZE                24U
+
+// JASSLIN EVENT DEFINE
+#define STR_EVENT_DRIVER_ID			        "Drv_ID"
+#define STR_EVENT_DRIVER_ID0		        "Drv_ID0"
+#define STR_EVENT_DRIVER_ID1		        "Drv_ID1"
+#define STR_EVENT_TRAILER_ID		        "Tra_ID"
+#define STR_EVENT_G_IMM				          "G_Imm"
+#define STR_EVENT_IMM_ENABLE		        "Imm_enable"
+#define STR_EVENT_IMM_DISABLE		        "Imm_disable"
+#define STR_EVENT_GEO_ENABLE		        "Geo_enable"
+#define STR_EVENT_GEO_DISABLE		        "Geo_disable"
+#define STR_EVENT_THERMO			          "Tmp"
+#define STR_EVENT_MSG				            "MSG"
+#define STR_EVENT_BARCODE			          "BARCODE"
+#define STR_EVENT_PING				          "PING"
+#define STR_EVENT_PWR_DOWN			        "PWR_DOWN"
+#define STR_EVENT_FIRST_PWR_ON		      "FIRST_PWR_ON"
+#define STR_EVENT_PWR_ON			          "PWR_ON"
+#define STR_EVENT_KEY_ON			          "KEY_ON"
+#define STR_EVENT_KEY_OFF			          "KEY_OFF"
+#define STR_EVENT_PARK_ALM_EN		        "Park_Alarm_enable"
+#define STR_EVENT_PARK_ALM_DIS		      "Park_Alarm_disable"
+#define STR_EVENT_SOS				            "SOS"
+#define STR_EVENT_KEYIN				          "KEYIN"
+#define STR_EVENT_UPGRADE_OK		        "UPGRADE OK"
+#define STR_EVENT_SD_ERROR			        "SD ERROR"
+#define STR_EVENT_BATTERY_ERROR		      "BAT ERROR"
+#define STR_EVENT_UPGRADE_START		      "UPGRADE ERROR"
+#define STR_EVENT_DELETE_FILE		        "DEL FILE ERROR"
+#define STR_EVENT_SD_FORMAT			        "SD FORMAT"
+#define STR_EVENT_ARGUMENT_SMS		      "SMS"
+#define STR_EVENT_SPEED_LINE_OK		      "SPEED LINE OK" // Heinz
+
+#if CUSTOMER_TYPE == CUSTOMER_SKYEYE
+// 天眼衛星科技資料定義
+#define SKYEYE_EVENT_NORMAL			        "000"	// 定時回傳狀態
+#define SKYEYE_EVENT_LOGIN			        "001"	// 駕駛登入
+#define SKYEYE_EVENT_LOGOUT			        "002"	// 駕駛登出
+#define SKYEYE_EVENT_SOS			          "003"	// SOS 緊急按鈕
+#define SKYEYE_EVENT_UPGRADE_OK		      "004"	// 系統版本更新完成
+#define SKYEYE_EVENT_PING	              "005"	//
+#define SKYEYE_EVENT_RS232_PD           "006"	// RS232周邊AT$PD命令
+#define SKYEYE_EVENT_RS232_CODE         "007"	// RS232周邊AT$CODE命令
+#define SKYEYE_EVENT_BATTERY_ERROR	    "008"	// 車機電池異常
+#define SKYEYE_EVENT_UPGRADE_START      "009"	// 開始更新流程
+#define SKYEYE_EVENT_DELETE_FILE	      "010"	// 刪除檔案
+#define SKYEYE_EVENT_SD_FORMAT		      "011"	// SD卡格式化
+#define SKYEYE_EVENT_KEY_ON		          "100"	// 
+#define SKYEYE_EVENT_KEY_OFF		        "100"	// 
+#define SKYEYE_EVENT_IO	        	      "100"	//
+#define SKYEYE_EVENT_IO1	              "101"	//
+#define SKYEYE_EVENT_IO2	              "102"	//
+#define SKYEYE_EVENT_IO3	              "103"	//
+#define SKYEYE_EVENT_IO4	              "104"	//
+#define SKYEYE_EVENT_IO5	              "105"	//
+#define SKYEYE_EVENT_IO6	              "106"	//
+#define SKYEYE_EVENT_IO7	              "105"	//
+#define SKYEYE_EVENT_IO8	              "106"	//
+#define SKYEYE_EVENT_SPEED		          "300"	// 
+#endif
+
+#if CUSTOMER_TYPE ==  CUSTOMER_FPTC
+// 台塑貨運事件定義
+#define FPTC_EVENT_NORMAL			          "000"	// 定時回傳狀態
+#define FPTC_EVENT_SOS				          "065"	// SOS button
+#define FPTC_EVENT_ENG_ON			          "066"	// 引擎起動
+#define FPTC_EVENT_PWR_ON			          "067"	// 車機開機(開始傳送定時回傳)
+#define FPTC_EVENT_ENG_OFF			        "068"	// 引擎熄火
+#define FPTC_EVENT_PWR_DOWN			        "079"	// 車機關機(於引擎熄火一小時後動作並不再傳送定時回傳)
+#define FPTC_EVENT_PWR_LOST			        "500"	// 無外部電源，鋰電池供電
+
+#define FPTC_EVENT_100				          "100"	// 氣壓閥作動
+#define FPTC_EVENT_101				          "101"	// 輪胎偵測壓力異常 : 曳引車
+#define FPTC_EVENT_102				          "102"	// 輪胎偵測線路異常 : 曳引車
+#define FPTC_EVENT_110				          "110"	// 輪胎偵測溫度異常 : 曳引車
+#define FPTC_EVENT_201				          "201"	// 輪胎偵測壓力異常 : 尾車
+#define FPTC_EVENT_202				          "202"	// 輪胎偵測線路異常 : 尾車
+#define FPTC_EVENT_210				          "210"	// 輪胎偵測溫度異常 : 尾車
+#define FPTC_EVENT_700				          "700"	// 車門開啟
+#define FPTC_EVENT_701				          "701"	// 車門關閉
+#define FPTC_EVENT_702				          "702"	// 尾車連接
+#define FPTC_EVENT_703				          "703"	// 氣壓閥關閉
+#define FPTC_EVENT_704				          "704"	// 溢位計開啟
+#define FPTC_EVENT_705				          "705"	// 溢位計關閉
+#define FPTC_EVENT_710				          "710"	// 定時回報警報啟動
+#define FPTC_EVENT_711				          "711"	// 定時回報警報解除
+#define FPTC_EVENT_800				          "800"	// 車斗未放下
+#define FPTC_EVENT_801				          "801"	// 車斗已放下
+
+#define MBEYE_EVENT_900				          "900"	// 碰撞警告
+#define MBEYE_EVENT_910				          "910"	// 右偏車道
+#define MBEYE_EVENT_911				          "911"	// 左偏車道
+#define MBEYE_EVENT_912				          "912"	// 嚴重車道偏移
+#define MBEYE_EVENT_913				          "913"	// 鏡頭遮蔽警告
+#define MBEYE_EVENT_914				          "914"	// 鏡頭持續遮蔽警告
+#define MBEYE_EVENT_920				          "920"	// 車距警告LV1
+#define MBEYE_EVENT_921				          "921"	// 車距警告LV2
+#define MBEYE_EVENT_922				          "922"	// 危險跟車
+#endif
+
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+// CPTI  首都客運+台北客運
+#define CPTI_EVENT_LDWS				          "LDWS" // 防撞系統
+#define CPTI_EVENT_TPMS				          "TPMS" // 胎壓胎溫
+
+// 以下要用定時回傳格式回報
+#define CPTI_EVENT_PWR_DOWN			        "PWR_DOWN" // PWR_DOWN(500)：外部電源移除事件.-ok		 
+#define CPTI_EVENT_PWR_DOWN_VALUE	      "500"	// PWR_DOWN(500)：外部電源移除事件.-ok
+
+#define CPTI_EVENT_SPEED_L3			        "OVER_SPEED"	// OVER_RPM(74)：超過設定轉速上限15秒.		 
+#define CPTI_EVENT_SPEED_L3_VALUE	      "71" // OVER_RPM(74)：超過設定轉速上限15秒.		  
+
+#define CPTI_EVENT_RPM_OVER			        "OVER_RPM" //OVER_SPEED(71)：超過第3段速度警示15秒.		 
+#define CPTI_EVENT_RPM_OVER_VALUE	      "74" //OVER_SPEED(71)：超過第3段速度警示15秒.
+#endif
+
+#if ENABLE_GSM_NET
+// System events that need to be reported to server through GSM
+
+// 1.System
+#define EVENT_KEY_OFF		  	            "100"	
+#define EVENT_KEY_ON		                "101"	
+
+#define EVENT_USB_DISCON		            "110"	 
+#define EVENT_USB_CON				            "111"	
+
+#define EVENT_SYSTEM_OFF	              "120"	
+#define EVENT_SYSTEM_ON	                "121"	
+
+#define EVENT_G_SENSOR_NOT_CALIB        "130"
+#define EVENT_G_SENSOR_CALIB            "131"
+
+#define EVENT_BRAKE_OFF	   		          "140"	
+#define EVENT_BRAKE_ON	                "141"
+
+#define EVENT_LEFT_SIGNAL_OFF	    	    "150"	
+#define EVENT_LEFT_SIGNAL_ON	          "151"	
+
+#define EVENT_RIGHT_SIGNAL_OFF	    	  "160"	
+#define EVENT_RIGHT_SIGNAL_ON	          "161"	
+
+// 2. IOs
+#define EVENT_IO1_OFF	   	      	      "200"	
+#define EVENT_IO1_ON	                  "201"	
+
+#define EVENT_IO2_OFF	   	      	      "210"	
+#define EVENT_IO2_ON	                  "211"	
+
+#define EVENT_IO3_OFF	   	      	      "220"	
+#define EVENT_IO3_ON	                  "221"	
+
+#define EVENT_IO4_OFF	   	      	      "230"	
+#define EVENT_IO4_ON	                  "231"	
+
+// 3. Speed
+#define EVENT_OVER_SPEED_END            "300"
+#define EVENT_OVER_SPEED_START		      "301"	
+
+#define EVENT_OVER_ACCEL_START          "311"
+#define EVENT_OVER_DECEL_START          "321"
+
+#define EVENT_OVER_RPM_END              "340"
+#define EVENT_OVER_RPM_START            "341"
+
+#define EVENT_RPM_IDLE_END              "350"
+#define EVENT_RPM_IDLE_START			      "351"	
+
+// 4. Sensors
+#define EVENT_LDWS_ON                   "400"
+
+#define EVENT_TIRE_TEMP_HIGH				    "410"	 
+#define EVENT_TIRE_PRESS_HIGH			      "411"	
+#define EVENT_TIRE_PRESS_LOW            "412"
+
+// 5. Peripherals
+#define EVENT_MDVR_VID_LOSS	 		 	      "500"	
+#define EVENT_MDVR_DISK_ERR				      "501"
+#define EVENT_MDVR_GPS_ERR              "502"
+
+#define EVENT_TIRE_SENSOR_POWER_LOW     "521"
+#define EVENT_TIRE_NO_SIGNAL            "522"
+	
+#define EVENT_EXTERNAL_POWER_ISSUE	    "531"	
+
+#define EVENT_GPS_FAIL                  "541"
+#define EVENT_FOTA_FAIL                 "542"
+#define EVENT_FTP_UPLOAD_FAIL           "543"
+
+#define EVENT_SD_FAIL                   "551"
+#define EVENT_MX25L_FAIL                "552"
+#define EVENT_PCF_FAIL                  "553"
+
+#define EVENT_SPEED_INIT	      	      "560"
+#endif
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+#pragma pack(1)
+typedef enum
+{
+  TASK_LOG_PROC = 0,
+	
+	TASK_EXTIO_PROC,
+	
+	TASK_GPS_PROC,
+	
+	TASK_GSM_PROC,
+	
+	TASK_LCD_KEY,
+	
+	TASK_RS232_PROC,
+	
+	TASK_HIGH_LOAD,
+	
+	TASK_SD_PROC,
+	
+	TASK_GSM_RX,
+	
+	TASK_GSM_TX
+	
+}TaskTagTypeDef;
+
+typedef struct 
+{
+	bool bTaskState;
+	
+	osThreadId taskID;
+	
+	osThreadDef_t tTaskDef;
+	
+  char cTaskName[20];
+	
+	uint32_t u32TaskTimeout;
+	
+	uint32_t u32LastTick;
+	
+	uint16_t u16TaskStep;
+	
+	bool bTaskDelay;
+	
+	//bool bTaskCheck;
+	
+} TaskInfoTypeDef;
+
+typedef struct
+{
+	char cBus_ID[11]; // Device ID
+
+	char cBus_SN[11]; // Device serial number
+
+	char cVIN[21]; // Vehicle VIN number
+
+	CarTypeTypeDef tCarType; // Vehicle type
+
+} BusSetTypeDef;
+
+//#if ENABLE_GSM_NET
+// Phonebook
+typedef struct
+{
+	char cLabel[16]; // Phone name
+
+	char cNumber[16]; // Phone number
+
+} PhoneBankTypeDef;
+
+// Internet information
+typedef struct
+{
+	// APN name, default:internet
+	char cAPN[31];
+
+	// User name, default:(blank)
+	char cAPN_UserName[21];
+
+	// Password, default:(blank)
+	char cAPN_Password[21];
+
+	// 資料傳輸間隔時間, default: 60 seconds
+	//uint16_t u16SendNormal;
+
+	// 休眠狀態資料傳輸間隔時間, default: 600(秒)
+	uint16_t u16SendStandby;
+
+	uint8_t u8GSM_CSQ; ///Heinz
+	
+	uint8_t u8Reserve[8];
+
+} NetSetTypeDef;
+
+// GSM module information
+typedef struct
+{
+	// International Mobile Subscriber Identity, 國際移動簽署者標識
+	char cIMSI[16];
+
+	// International Mobile Equipment Identity, 國際移動設備標識
+	char cIMEI[16];
+
+} MobileInfoTypeDef;
+
+// Server IP
+typedef struct
+{
+	// IP address, XXX.XXX.XXX.XXX
+	char cIP_Addr[20]; // IP address in string
+
+	MEM_U32_t u32IP_Addr; // IP address in 4 bytes format
+	
+	//伺服器 address
+	char cDomainName[31]; // Server domain name
+
+	// Socket port, XXXXX
+	uint16_t u16Port; // Destination port
+	
+	bool bEnableChk;
+	bool bEnableLog;
+	bool bEnableEvent;
+	
+	char cHeaderChk[10];
+	char cHeaderLog[10];
+	char cHeaderEvent[10];
+	
+	uint32_t u32ChkType;
+	
+	uint8_t u8LogPeriod;
+	
+	uint8_t u8EventType;
+	
+	uint8_t u8Reserve[8];
+
+} ServerInfo_TypeDef;
+
+// Server name
+//typedef struct
+//{
+	// 伺服器 address, XXX.XXX.XXX.XXX
+//	char szADDR[31]; // Server IP address
+
+	// 伺服器 port, XXXXX
+//	uint16_t u16Port; // Server port
+
+//} ServerNameTypeDef;
+
+// FTP setup
+typedef struct
+{
+	// 伺服器 address
+	char cAddr[31]; // FTP server domain name or IP address
+
+	// Socket port, XXXXX
+	uint16_t u16Port; // Destination port
+
+	// 檔案伺服器使用者名稱
+	char cUserName[21]; // FTP username
+
+	// 檔案伺服器使用者密碼
+	char cPassword[21]; // FTP user password
+	
+	uint8_t u8Reserve[8];
+
+} FTP_SetTypeDef;
+
+typedef struct
+{
+  bool bGSM_ModuleErr; // Is GSM module having issue?
+	
+	uint8_t u8Function_ErrCnt; // GSM module error count //
+	uint8_t u8SIM_ErrCnt; // GSM PS unregister number count //
+	uint8_t u8TCP_ErrCnt; // TCP related error count
+	uint8_t u8FTP_ErrCnt; // FTP related error count
+	uint8_t u8SMS_ErrCnt; // Temporary message error count 
+	uint8_t u8PkgErrCnt; // Temporary packet error count  
+	
+	uint8_t u8Reserve[8];
+	
+} GSM_ErrTypeDef;
+
+// GSM setup
+typedef struct
+{
+	// Sim PIN number
+	char szSimPin[5];	//SIM PIN // 5,
+	
+	// 國碼
+	char cCountryCode[5]; // Country code
+	
+	// Mobile info
+	MobileInfoTypeDef tMobileInfo; // Mobile info 
+
+	// 預設電話號碼
+	PhoneBankTypeDef tPhoneBank[PHONE_BANK_MAX]; // Phone number bank
+
+	NetSetTypeDef tNetSet; // Internet setup
+
+	FTP_SetTypeDef	tFTP_Set; // FTP setup
+
+	ServerInfo_TypeDef tServerInfo[2]; // Set of server IP
+
+	//ServerNameTypeDef	tServerName[2]; // Set of server name
+
+	// 麥克風增益值, default: 10
+	uint8_t u8LevelMicGain; // Mic gain
+
+	// 通話聲音增益值, default: 90
+	uint8_t u8LevelSpkGain; // Speaker gain
+
+	// 來電鈴聲增益值, default: 100
+	uint8_t u8LevelRingSound; // Ring sound level
+	
+	GSM_ErrTypeDef tGSM_Err;
+	
+	uint8_t u8Reserve[16];
+
+} GSM_SetTypeDef;
+//#endif
+
+// Speed determination setup
+typedef struct
+{
+	// 速度增益值, default: 0 (Disable)
+	// 代表一個時速訊號所行走的距離, 單位為公尺
+	float fGain;
+
+	// SPEED trigger level, default: 100 (= 1.00V)
+	uint16_t u16Trig;
+
+	// 限速警示設定
+	uint32_t u32Limit[SPEED_LIMIT_BANK_MAX]; // Set of speed limit
+
+	uint8_t u8Offset;	  // Heinz // Speed offset
+
+	uint16_t u16Star;		// Heinz 32 // speed star
+
+	uint8_t u8Auto_Gain_Count; // Heinz // AUto gain count
+
+	float fAutoGain;  // Heinz // Autogain in float.
+	
+	uint16_t u16SPEED_LIMIT; // SPEED LIMIT value
+	
+	uint16_t u16OVER_SPEED_END_CNT_MAX; // Maximum over speed event count
+	
+	uint16_t u16ACCEL_LIMIT; // Acceleration speed limit
+	
+	uint16_t u16DECEL_LIMIT; // Deceleration speed limit
+	
+	uint8_t u8ACCEL_LIM_DURA; // Acceleration Limit Duration
+	
+	time_t ttAgain_Time; // Need ReCalibration Auto Gain time 
+	
+	uint8_t u8Reserve[16];
+
+} SpeedSetTypeDef;
+
+// RPM determination setup
+typedef struct
+{
+	// 轉速切割值, default: 1
+	uint16_t u16DIV;
+
+	// RPM trigger level, default: 100 (= 1.00V)
+	uint16_t u16Trig;
+
+	// 轉速限制, default: 0
+	uint16_t u16Limit; // RPM limit.
+	
+	uint16_t u16RPM_OVER_ON_CNT_MAX; // Maximum count for over RPM event start
+	
+	uint16_t u16RPM_OVER_OFF_CNT_MAX; // Maximum count for over RPM event end
+	
+	uint16_t u16RPM_IDLE_CNT_MAX; // Maximum count for RPM idle event start
+	
+	uint8_t u8Reserve[16];
+
+} RPM_SetTypeDef;
+
+typedef struct
+{
+	uint8_t u8UpSpeed[UPSPEED_HOW_LONG_SEC + 1]; // Speed data to upload
+
+	float fRPM; // RPM in float
+
+	uint16_t u16RPM_Hz; // RPM frequency
+
+	uint16_t u16Speed_Hz; // Speed frequency
+
+	uint32_t u32SpeedCount; // Speed pulse count
+
+	uint32_t u32RealSpeed; // Real speed
+	
+	float fAccelRate; // Acceleration rate
+	
+	bool bIsOverSpeed; // Is the vehicle currently running over speed limit?
+	
+	bool bIsRPM_Idle; // Is the engine currently idle?
+	
+	bool bIsOver_RPM; // Is the RPM currently over limit?
+	
+	bool bIsOverAccel; // Is the acceleration too much?
+	
+	bool bIsOverDecel; // Is the deceleration too much?
+	
+	uint8_t u8Reserve[16];
+
+} SpeedInfoTypeDef;
+
+// Functions enable control
+typedef union
+{
+	uint16_t u16Byte;
+
+	struct
+	{
+		unsigned DRV_ID		     :1;	// 駕駛識別功能, 0:停用 | 1:啟用
+		unsigned EXP_ID		     :1; // 擴充識別功能, 0:停用 | 1:啟用
+		unsigned ImmoCtrl	     :1; // 防盜器設定, 0:停用 | 1:啟用
+		unsigned ASCII_UNI	   :1; // 簡訊字碼設定, 0:ASCII | 1:UNI-CODE
+		unsigned ADDR_MAP	     :1; // 目前位置回報, 0:Address | 1:Map
+		unsigned CAN_DIST	     :1; // CAN BUS 里程, 0:停用 | 1:啟用; 若停用則採用 sensor 資訊累計
+		unsigned CAN_SPEED	   :1; // CAN BUS 時速, 0:停用 | 1:啟用; 若停用則採用 (SPEED GAIN = 0): GPS | (SPEED GAIN > 0): sensor 資訊
+		unsigned CAN_RPM	     :1; // CAN BUS 轉速, 0:停用 | 1:啟用; 若停用則採用 sensor 資訊
+		unsigned CAN_OTHER     :1; // CAN BUS other data, 0: Disable | 1: Enable		
+		unsigned ENG_MODE    	 :1; // Data in English
+		unsigned CORRECT_MODE	 :1;
+
+	} bits;
+
+} EnableSetTypeDef;
+/*
+// KF5096 setup
+typedef struct
+{
+	// KF-5096 out hi-duty, default: 1000 (uS)
+	uint16_t HiDuty;
+
+}KF5096_SetTypeDef;
+*/
+
+// I/O States
+typedef union
+{
+	uint16_t word;
+
+	struct
+	{
+		unsigned IN_PWR :1;
+		unsigned IN_CHG :1;
+		unsigned IN_ACC :1;
+		unsigned IN_SOS :1;
+		unsigned IN_1	:1;
+		unsigned IN_2	:1;
+		unsigned IN_3	:1;
+		unsigned IN_4	:1;
+		unsigned IN_5	:1;
+		unsigned IN_6	:1;
+		unsigned IN_7	:1;
+		unsigned IN_8	:1;
+		unsigned IN_9	:1;
+		unsigned IN_10  :1;
+		unsigned IN_11  :1;
+		unsigned RES    :1;
+	} bits;
+
+} EXTIO_StateTypeDef;
+
+// Vehicle state struct
+typedef struct
+{
+	bool bPWR_ON; // Power state
+
+	bool bPWR_CHK; // Power check state
+
+	bool bACC_ON; // ACC state
+
+	bool bACC_CHK; // ACC check state
+
+	uint16_t u16RPM; // RPM
+
+	uint32_t u32Speed; // Speed, Unit: m/s
+
+	// GPS Speed
+	uint32_t u32Speed_GPS; // GPS speed, Heinz 07202018
+
+	// 目前里程, default: 0
+	double dDistance; // Unit: m
+
+	double dDistance1; // Heinz
+	double dDistance2; // Heinz
+
+	uint32_t u32DistCount1; // Distance count 1
+	uint32_t u32DistCount2; // Distance count 2
+ 
+	double dDistance_GPS; // GPS distance
+
+	// 校正里程, default: 0
+	uint32_t u32AdjDist; // Adjust distance
+
+	double dDistBase; 
+
+	double dDistBase_GPS;
+
+	// 里程計數, default: 0
+	uint32_t u32DistCount;
+
+	uint32_t u32DistCount_AGain; // Heinz
+
+	uint16_t u16EVENT;
+	
+	uint8_t u8Reserve[16];
+
+} VehicleStateTypeDef;
+
+// Driver information
+typedef struct
+{
+	// ACC OFF 時間以秒為單位, ACC ON 歸零
+	uint32_t u32TimeEngineOff;
+
+	// 駕駛逾時違規記點次數
+	uint8_t	u8CntOverWork;
+
+	// 駕駛逾時違規累積時間, 以秒為單位
+	uint32_t u32AccOverWork;
+
+	// 駕駛時間以秒為單位, 完成休息規定時歸零	(用uint32_t才不會溢位)
+	uint32_t u32WorkTime;
+
+	// 駕駛總工作時間逾時違規記點次數
+	uint8_t	u8CntOverAccum;
+
+	// 總工作時間以秒為單位, 駕駛員更換時歸零
+	uint32_t u32AccumTime;
+
+	// 超速次數
+	uint16_t u16CntOverSpeed;
+
+	// 開門次數
+	uint16_t u16CntDoorOpen;
+
+	// 關門次數
+	uint16_t u16CntDoorClose;
+
+	// ACC ON 次數
+	uint16_t u16CntEngineOn;
+
+	// ACC OFF 次數
+	uint16_t u16CntEngineOff;
+
+	// 最近一次連續駕駛時間
+	// (Lately Continuous Driving Time)
+	uint16_t u16LCDT;
+
+	// 最近一次總工作時間
+	// (Lately Total Working Time)
+	uint16_t u16LTWT;
+
+	// 駕駛開始工作的時間
+	time_t ttStartUCT;
+
+	// 駕駛開始經度開始緯度
+	GPS_DataTypeDef tGPS_Data;
+
+	bool bResponse;
+	
+	uint8_t u8Reserve[16];
+
+} DrivingInfoTypedef;
+
+typedef struct
+{
+  time_t ttDrvWorkStartTime; // Start working time  
+
+	uint16_t u16DrvResponse; // Driver response   
+	
+	uint8_t u8DriveThreshold[2]; // Driving time threshold 
+	uint8_t u8RestThreshold[2]; // Rest time threshold
+	
+	uint8_t u8Reserve[8];
+	
+} DRV_SetTypeDef;
+
+// Driver record
+typedef struct
+{
+	uint32_t u32WorkTime; // Driver work time
+
+	uint32_t u32PauseTime; // Driver pause time
+
+	uint32_t u32StandByTime; // Driver standby time
+
+	uint32_t u32RestTime; // Driver rest time
+	
+	uint8_t u8Reserve[8];
+
+} DrvRecTypeDef;
+
+// Driver Info
+typedef struct 
+{
+  uint32_t u32DrvIdNum; 
+	
+	uint8_t	u8DrvStatus;
+	
+	uint32_t u32DrWorkTime;
+	
+	uint32_t u32DrRestTime;
+	
+	DrvRecTypeDef stDrvRecDay[14];
+	
+	double dDriverDistance;
+	
+	uint8_t u8Reserve[16];
+	
+} DRV_InfoTypeDef;
+
+// Restart log
+typedef struct
+{
+	uint8_t	u8RestartCnt; // Count number of restart
+
+	uint32_t u32SysTickBuf; // SysTick buffer
+	
+	uint8_t u8Reserve[8];
+
+} RestartLogTypeDef;
+
+typedef struct
+{
+	uint16_t u16DataLogPeriod; // Datalog writing period 
+	
+  RestartLogTypeDef stRestartLog; // Restart log setting
+	
+} LogSetTypeDef;
+
+// SD card state
+typedef struct 
+{
+  bool bSD_State; // SD card permanent state, OK or Error
+	
+	bool bSD_FormatFlag; // SD card format flag 
+	
+	uint8_t u8SD_ResetCnt; // Number of SD card reset
+	
+	uint8_t u8Reserve[8];
+	
+} SD_StateTypeDef;
+
+// Upgrade control
+typedef struct
+{
+	bool bFOTA_Flag; // FOTA request flag
+	
+	bool bUpgradeFlag; // Upgrade flag 
+	
+	char cLastFW_Ver[64]; // Last FW version
+	
+	time_t ttLastUpgrade; // Last upgrade time 
+	
+	time_t ttLastInstall; // Last install time 
+	
+	bool bUpgrade_SMS; // Upgrade through SMS command flag
+	
+	bool bUpgrade_TCP; // Upgrade through TCP command flag
+	
+	char cUpgrade_PhoneNbr[20]; // Phone number from which the SMS was sent
+
+  uint8_t u8Upgrade_Socket; // Socket ID from which the TCP command was received
+	
+	uint8_t u8FOTA_RetryCnt;
+	
+	uint8_t u8Reserve[8];
+
+} UpgradeTypeDef;
+
+#if CAN_CUSTOM == CAN_CUSTOM_MBEYE
+typedef struct
+{
+	uint8_t LDWCnt;
+	
+	uint8_t LDWTime;
+	
+	uint8_t HWTime;
+	
+	uint8_t u8Reserve[4];
+	
+}MBEYE_SetTypeDef;
+#endif
+
+typedef struct
+{
+	uint8_t u8PID; // Product ID
+
+	uint8_t u8CustID; // Customer ID
+
+	uint8_t u8HwID;// Hardware ID
+
+	uint16_t u16VerID; // Version ID
+
+} ProductInfoTypeDef;
+
+// Device setting struct
+typedef struct
+{
+	// g_Setting control //
+	uint8_t u8SetVer; // 1, 0-0
+
+	uint8_t u8SetVerChk; // 1, 
+	
+	uint32_t u32SetSize;// 4
+	
+	// g_Setting info and setup data //
+	char cJAS_Ver[10]; // Version based on GSM function availability // 10, 
+
+	int32_t	i32TimeZoneOffset; // Timezone offset in hours // 4, 
+
+	time_t ttAccOffTime; // ACC off time // 4,
+	
+	uint8_t	u8CurrDrvID; // Driver index 0 or 1 // 1, 
+	
+	uint32_t u32DebugMode; // Debug mode setting // 4, 
+	
+	BusSetTypeDef	tBusInfo;	// BUS_ID, BUS_SN, VIN // 44, 
+	
+	SD_StateTypeDef tSD_State; // SD card state //
+	
+	LogSetTypeDef tLogSet; // Datalog setting //
+
+	GSM_SetTypeDef tGSM_SET; // GSM setting // 540,
+	
+	DRV_SetTypeDef tDRV_SET; // Driver setting and general info // 
+	
+	DRV_InfoTypeDef tDrvInfo[DRV_QUANTITY_MAX]; // Individual drivers' info //
+	
+	PowerModeTypeDef tPowerMode; // Power mode setting // 1, 
+
+	SpeedSetTypeDef tSpeedSet; // Speed setting // 35, 
+
+	RPM_SetTypeDef tRPM_Set; // RPM setting // 12, 
+	
+	CAN_LinkTypeDef	tCanLinkType; // CAN Link type // 1, 
+	
+	EnableSetTypeDef tENABLE_SET; // Enable setting // 2,
+
+	EXTIO_StateTypeDef tReverse; // Reserve EXTIO // 2, 
+
+	UpgradeTypeDef tUpgrade; // Upgrade control  
+	
+	uint8_t u8Reserve[128];
+	
+	#if ENABLE_CAN == 1 && CAN_CUSTOM == CAN_CUSTOM_MBEYE
+	MBEYE_SetTypeDef tMBEYE_SET;
+	#endif
+
+} gSettingTypeDef;
+
+// System info struct
+typedef struct
+{
+	// Current time of the system in seconds
+	time_t ttNow; // Current system local time 
+
+	uint16_t u16GSensorMeter; // G sensor value
+
+	uint8_t u8VdrInfo; // Heinz
+
+	DrivingInfoTypedef tDrivingInfo; // Driver info
+
+	GPS_DataTypeDef tGPS_Data; // GPS data
+
+	SpeedInfoTypeDef	tSpeedInfo; // Speed data
+
+	EXTIO_StateTypeDef tEXTIO; // EXTIO data
+
+	VehicleStateTypeDef tVehicleState; // Vehicle state data
+
+} gSysInfoTypeDef;
+#pragma pack()
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+extern TaskInfoTypeDef taskInfo[TASK_QUANTITY];
+
+// Public Setting_t instant g_Setting
+extern gSettingTypeDef g_Setting;
+
+extern gSysInfoTypeDef g_SysInfo;
+
+extern char g_cVDRFileName[100];
+
+//extern bool g_bUSBDownloadFlg;
+
+extern bool g_bSystemBootFlag;
+
+extern bool g_bDoFormatFlag;
+
+extern const ProductInfoTypeDef PRODUCT_INFO;
+
+extern bool bSysLogEn;
+
+extern uint8_t g_u8HwInfo;
+
+extern bool g_bPTestMode;
+
+extern bool bSystemStop;
+
+extern bool bSystemTimeReady;
+
+//extern uint8_t u8PublicDataBuf[8192];
+
+
+//============================================================================//
+// User Functions Prototypes
+//============================================================================//
+void System_TaskInfoInit(void);
+void System_TaskCheck(void);
+void System_TaskWdgRefresh(TaskTagTypeDef taskTag);
+void System_IO_3V3_Enable(void);
+void System_IO_3V3_Disable(void);
+void System_SetupDefault(void);
+void System_Init(void);
+void System_DeInit(void);
+void System_Reset(void);
+time_t System_GetTime(void);
+void System_EnterStandbyMode(void);
+void System_SaveSetupData(void);
+bool System_SaveSetting(void);
+bool System_GetSetting(void);
+bool System_CheckSetting(void);
+void System_Stop(void);
+bool SystemFLASH_Erase(void);
+void System_CheckTempFile(void);
+
+
+//============================================================================//
+#endif //_SYSTEM_H_

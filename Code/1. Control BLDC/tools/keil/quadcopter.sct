@@ -1,0 +1,14 @@
+; Scatter file for the Keil armclang build (tools/keil/build_keil.sh).
+; Same memory map as STM32F429ZITX_FLASH.ld: 2 MB flash at 0x08000000,
+; 192 KB SRAM at 0x20000000 (CCM RAM is not used by this firmware).
+LR_IROM1 0x08000000 0x00200000 {
+  ER_IROM1 0x08000000 0x00200000 {
+    *.o (.isr_vector, +First)
+    *(InRoot$$Sections)
+    .ANY (+RO)
+    .ANY (+XO)
+  }
+  RW_IRAM1 0x20000000 0x00030000 {
+    .ANY (+RW +ZI)
+  }
+}

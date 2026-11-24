@@ -1,0 +1,11 @@
+USER_MPU.c:17:13:MPU6050_I2C_ReInit	16	static
+USER_MPU.c:41:6:MPU6050_Writebyte	32	static
+USER_MPU.c:97:6:MPU6050_Writebytes	40	static
+USER_MPU.c:148:6:MPU6050_Readbyte	40	static
+USER_MPU.c:238:6:MPU6050_Readbytes	40	static
+USER_MPU.c:329:6:MPU6050_Initialization	32	static
+USER_MPU.c:434:6:MPU6050_Get6AxisRawData	32	static
+USER_MPU.c:455:6:MPU6050_Get_LSB_Sensitivity	16	static
+USER_MPU.c:490:6:MPU6050_DataConvert	16	static
+USER_MPU.c:505:5:MPU6050_DataReady	8	static
+USER_MPU.c:530:6:MPU6050_ProcessData	16	static

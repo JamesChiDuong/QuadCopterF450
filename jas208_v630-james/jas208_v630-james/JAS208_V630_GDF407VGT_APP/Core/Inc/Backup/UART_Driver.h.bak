@@ -1,0 +1,183 @@
+#ifndef _UART_DRIVER_H_
+#define _UART_DRIVER_H_
+//============================================================================//
+
+
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include <stdint.h>
+
+#include "DataType.h"
+#include "Protocol.h"
+#include "RingBuf.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+#define UART_BUFFER_QUANTITY          5
+
+#define EXT_COMPORT_DEF               UART_PORT5
+#define GPS_COMPORT_DEF               UART_PORT2
+#define SET_COMPORT_DEF               UART_PORT3
+#define DB9_COMPORT_DEF               UART_PORT4
+#define GSM_COMPORT_DEF               UART_PORT1
+
+#define UART_BASE_BUFFER_SIZE         256
+
+#define UART_RX_BUFFER_MAX		        (UART_BASE_BUFFER_SIZE * 4)
+
+#define UART1_BUFFER_SIZE             (UART_BASE_BUFFER_SIZE * 6)
+#define UART2_BUFFER_SIZE             (UART_BASE_BUFFER_SIZE * 4)
+#define UART3_BUFFER_SIZE             (UART_BASE_BUFFER_SIZE * 2)
+#define UART4_BUFFER_SIZE             (UART_BASE_BUFFER_SIZE * 2)
+#define UART5_BUFFER_SIZE             (UART_BASE_BUFFER_SIZE * 0)
+
+#define GSM_BUFFER_SIZE               UART1_BUFFER_SIZE
+#define GPS_BUFFER_SIZE               UART2_BUFFER_SIZE
+#define SET_BUFFER_SIZE               UART3_BUFFER_SIZE
+#define DB9_BUFFER_SIZE               UART4_BUFFER_SIZE
+#define EXT_BUFFER_SIZE               UART5_BUFFER_SIZE
+
+#define GSM_BAUDRATE_DEFAULT          115200
+//#define GSM_BAUDRATE_APPLY            38400
+//#define GSM_BAUDRATE_APPLY            57600
+#define GSM_BAUDRATE_APPLY            115200
+
+
+// Command set
+#define RS232CMD_PC_DATA                   0x10
+#define RS232CMD_PC_ACK_OK                 0x11
+#define RS232CMD_PC_ACK_ERR                0x12
+#define RS232CMD_PC_MAKEFILE               0x13
+
+#define RS232CMD_RESP_ACK_ERR              0xFA
+#define RS232CMD_RESP_F0                   0xF0
+#define RS232CMD_RESP_F1                   0xF1
+#define RS232CMD_RESP_F2                   0xF2
+#define RS232CMD_RESP_F3                   0xF3
+#define RS232CMD_RESP_F4                   0xF4
+#define RS232CMD_RESP_F5                   0xF5
+
+#define RS232FILE_TRANSFER_MAX_RETRY       3U
+
+#define RS232FILE_TRANSFER_MAX_LEN         1024U
+
+#define RS232FILE_TRANSFER_TIMEOUT         S_2_mS(5)
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+
+typedef enum
+{
+	UART_PORT1 = 0x0,
+	UART_PORT2,
+	UART_PORT3,
+	UART_PORT4,
+	UART_PORT5
+} UART_PortTypeDef;
+
+// UART baud rate define
+typedef enum
+{
+	BR_4800bps	= 4800,
+	BR_9600bps	= 9600,
+	BR_19200bps = 19200,
+	BR_38400bps = 38400,
+	BR_57600bps = 57600,
+	BR_115200bps = 115200,
+	BR_230400bps = 230400,
+	BR_460800bps = 460800,
+	BR_921600bps = 921600,
+} UART_BaudRateDef_t;
+
+typedef enum
+{
+	STEP_IDLE = 0x0,
+	STEP_F0,
+	STEP_F1,
+	STEP_F2,
+	STEP_F3,
+	STEP_F4,
+	STEP_F5
+} PC_DownloadStepTypeDef;
+
+typedef enum
+{
+	QUE_EMPTY = 0,
+
+	QUE_RX,
+
+	QUE_PROC
+
+} QueueStateTypeDef;
+
+#pragma pack(1)
+typedef	struct
+{
+	uint8_t Data[UART_BASE_BUFFER_SIZE];
+
+	uint8_t u8DataLen;
+
+	QueueStateTypeDef State;
+	
+} DataQueueTypeDef;
+#pragma pack()
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+
+extern RingBufTypeDef rbBuf[5];
+
+extern RingBufTypeDef rbRS232Buf;
+
+extern PC_DownloadStepTypeDef u8FilTransStep;
+
+extern uint8_t u8ProcRetry;
+
+extern bool bPC_Trans;
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+bool UART_IsTerminalUsingSET(void);
+bool UART_IsDebugMode(DebugModeTypeDef tDebugMode);
+void UART_Setup(UART_PortTypeDef uartPort);
+void UART_SetupAll(void);
+bool UART_ReInit(UART_PortTypeDef uartPort, uint32_t u32BaudRate);
+void UART_CheckInterrupt(void);
+void UART_Reset(UART_PortTypeDef uartPort);
+bool UART_SendBuffer(UART_PortTypeDef uartPort, uint8_t *pu8Dat, uint16_t u16DatLen);
+bool UART_SaveRecvData(UART_PortTypeDef uartPort, uint8_t *pu8Dat, uint16_t u16DatLen);
+uint16_t UART_GetRecvData(UART_PortTypeDef uartPort, uint8_t *pu8Dat, uint16_t u16DatLen);
+uint16_t UART_GetRecvDataPos(UART_PortTypeDef uartPort, uint16_t u16Pos,
+                             uint8_t *pu8Dat, uint16_t u16DatLen);
+uint16_t UART_PeekRecvData(UART_PortTypeDef uartPort, uint16_t u16Pos, uint8_t *pu8Dat,
+                           uint16_t u16DatLen);
+uint16_t UART_RecvDataLen(UART_PortTypeDef uartPort);
+uint16_t UART_RecvDataLenPos(UART_PortTypeDef uartPort, uint16_t u16Pos);
+bool UART_RecvFind(UART_PortTypeDef uartPort, char* pcDat, uint16_t* pu16Pos);
+bool UART_RecvFindPos(UART_PortTypeDef uartPort, char* pcDat, uint16_t* pu16Pos,
+                      uint16_t u16StartPos);
+//void UART_SET_COM_PORT_Proc(void);
+//void UART_DB9_COM_PORT_Proc(void);
+void UART_TerminalProc(void);
+void UART_PC_TransProc(void);
+void UART_PC_TransCallBackHandle(void);
+#if ENABLE_DVR
+void UART_DVR_TransProc(void);
+#endif
+#if ENABLE_RELAY_CONTROL_BOARD
+void UART_RelayControl(void);
+#endif
+
+//============================================================================//
+#endif //_UART_DRIVER_H_

@@ -1,0 +1,359 @@
+/*
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "TTIA_EDR.h"
+
+#include <string.h>
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Default.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#define EDR_QUEUE_MAX			16
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+#pragma pack(1)
+typedef	struct
+{
+	TTIA_EDR_PROC_t EdrProc;
+
+	MEM_U16_t EdrArg;
+
+}TTIA_EDR_QUEUE_t;
+
+// Protocol head for TTIA EDR transmit
+typedef struct
+{
+	uint8_t DLE;
+
+	uint8_t STX;
+
+	uint8_t CMD;
+
+	uint16_t LEN;
+
+}EDR_SEND_HEAD_t;
+
+typedef struct
+{
+	EDR_SEND_HEAD_t HEAD;
+
+	uint8_t ETX;
+
+}STD_SEND_t;
+
+typedef struct
+{
+	EDR_SEND_HEAD_t HEAD;
+
+	uint16_t DATA;
+
+	uint8_t ETX;
+
+}CMDA6_SEND_t;
+
+typedef struct
+{
+	// GPS UTC, Unix-time
+	uint32_t UTC;
+
+	// GPS 經度, 1/600000 度
+	int32_t i32Latitude;
+
+	// GPS 緯度, 1/600000 度
+	int32_t i32Longitude;
+
+	// 航向, 1/10
+	uint16_t u16Course;
+
+	// 時速, 單位為 KM/H
+	uint8_t u8Speed;
+
+	// 是否定位, 0=有效定位 ; 1=無效定位
+	uint8_t u8Fixed;
+
+}SEND_DATA_A8_t;
+
+typedef struct
+{
+	EDR_SEND_HEAD_t HEAD;
+
+	SEND_DATA_A8_t DATA;
+
+	uint8_t ETX;
+
+}CMDA8_SEND_t;
+#pragma pack()
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+TTIA_EDR_QUEUE_t gTTIA_EdrQueue[EDR_QUEUE_MAX];
+
+uint8_t gTTIA_EdrQueueWI;
+
+uint8_t gTTIA_EdrQueueRI;
+
+TTIA_EDR_PROC_t gTTIA_EdrProc = EDR_BREAK;
+
+MEM_U16_t gTTIA_EdrArg;
+
+uint8_t gTTIA_EdrBuf[UART_BASE_BUFFER_SIZE];
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+void TTIA_EdrClrReg(void)
+{
+	memset(&gTTIA_EdrQueue, 0x00, sizeof(gTTIA_EdrQueue));
+
+	gTTIA_EdrQueueWI = 0;
+
+	gTTIA_EdrQueueRI = 0;
+}
+
+void TTIA_EdrGetQueue(void)
+{
+	if(gTTIA_EdrQueueRI == gTTIA_EdrQueueWI)
+	{
+		return;
+	}
+
+	gTTIA_EdrProc = gTTIA_EdrQueue[gTTIA_EdrQueueRI].EdrProc;
+
+	gTTIA_EdrArg = gTTIA_EdrQueue[gTTIA_EdrQueueRI].EdrArg;
+
+	gTTIA_EdrQueueRI++;
+
+	if(gTTIA_EdrQueueRI >= EDR_QUEUE_MAX)
+	{
+		gTTIA_EdrQueueRI = 0;
+	}
+}
+
+bool TTIA_EdrAppendQueue(TTIA_EDR_PROC_t EdrProc, uint16_t EdrArg)
+{
+	if(gTTIA_EdrQueueWI >= EDR_QUEUE_MAX
+		&& gTTIA_EdrQueueRI == 0)
+		return FALSE;
+
+	gTTIA_EdrQueue[gTTIA_EdrQueueWI].EdrProc = EdrProc;
+
+	gTTIA_EdrQueue[gTTIA_EdrQueueWI].EdrArg._U16 = EdrArg;
+
+	gTTIA_EdrQueueWI++;
+
+	if(gTTIA_EdrQueueWI >= EDR_QUEUE_MAX)
+	{
+		gTTIA_EdrQueueWI = 0;
+	}
+
+	return TRUE;
+}
+
+void TTIA_EdrSendPkg(uint8_t *Buf, uint8_t BufLen)
+{
+	uint8_t i, BCC;
+
+
+	BCC = 0;
+
+	for(i = 2; i < BufLen; i++)
+	{
+		BCC ^= Buf[i];
+	}
+
+	Buf[BufLen++] = BCC;
+
+	UART_SendBuffer(UART_PORT3, Buf, BufLen);
+}
+
+void TTIA_EdrStdSend(uint8_t CMD)
+{
+	STD_SEND_t *STD_SEND;
+
+
+	memset(gTTIA_EdrBuf, 0x00, sizeof(gTTIA_EdrBuf));
+
+	STD_SEND = (STD_SEND_t*)gTTIA_EdrBuf;
+
+	STD_SEND->HEAD.DLE = 0x10;
+
+	STD_SEND->HEAD.STX = 0x02;
+
+	STD_SEND->HEAD.CMD = CMD;
+
+	STD_SEND->ETX = 0x03;
+
+	TTIA_EdrSendPkg(gTTIA_EdrBuf, sizeof(STD_SEND_t));
+}
+
+void TTIA_EdrCmdA6Send(void)
+{
+	CMDA6_SEND_t *CMDA6_SEND;
+
+
+	memset(gTTIA_EdrBuf, 0x00, sizeof(gTTIA_EdrBuf));
+
+	CMDA6_SEND = (CMDA6_SEND_t*)gTTIA_EdrBuf;
+
+	CMDA6_SEND->HEAD.DLE = 0x10;
+
+	CMDA6_SEND->HEAD.STX = 0x02;
+
+	CMDA6_SEND->HEAD.CMD = 0xA6;
+
+	CMDA6_SEND->HEAD.LEN = OFFSET_SIZE(CMDA6_SEND_t, DATA);
+
+	CMDA6_SEND->DATA = gTTIA_EdrArg._U16;
+
+	CMDA6_SEND->ETX = 0x03;
+
+	TTIA_EdrSendPkg(gTTIA_EdrBuf, sizeof(CMDA6_SEND_t));
+}
+
+void TTIA_EdrCmdA8Send(void)
+{
+	CMDA8_SEND_t *CMDA8_SEND;
+
+
+	memset(gTTIA_EdrBuf, 0x00, sizeof(gTTIA_EdrBuf));
+
+	CMDA8_SEND = (CMDA8_SEND_t*)gTTIA_EdrBuf;
+
+	CMDA8_SEND->HEAD.DLE = 0x10;
+
+	CMDA8_SEND->HEAD.STX = 0x02;
+
+	CMDA8_SEND->HEAD.CMD = 0xA8;
+
+	CMDA8_SEND->HEAD.LEN = OFFSET_SIZE(CMDA8_SEND_t, DATA);
+
+	{
+		time_t rawtime;
+		GpsCoordTypeDef Location;
+
+
+		GPS_GetUTC(&rawtime);
+
+		CMDA8_SEND->DATA.UTC = rawtime;
+
+		GPS_GetCoordinate(&Location);
+
+		CMDA8_SEND->DATA.i32Latitude = Location.dLatitude * 10000;
+
+		CMDA8_SEND->DATA.i32Longitude = Location.dLongitude * 10000;
+
+		CMDA8_SEND->DATA.u16Course = GPS_GetCourse();
+
+		CMDA8_SEND->DATA.u8Speed = M_2_KM(GPS_GetSpeed());
+
+		CMDA8_SEND->DATA.u8Fixed = (GPS_GetFixed()) ? 0 : 1;
+	}
+
+	CMDA8_SEND->ETX = 0x03;
+
+	TTIA_EdrSendPkg(gTTIA_EdrBuf, sizeof(CMDA8_SEND_t));
+}
+
+void TTIA_EdrProc(void)
+{
+	switch(gTTIA_EdrProc)
+	{
+		case EDR_BREAK:
+			TTIA_EdrGetQueue();
+
+		  break;
+
+		case EDR_INIT:
+			TTIA_EdrClrReg();
+
+
+			TTIA_EdrAppendQueue(EDR_A1, NULL);
+
+			TTIA_EdrAppendQueue(EDR_A2, NULL);
+
+			TTIA_EdrAppendQueue(EDR_A3, NULL);
+
+			TTIA_EdrAppendQueue(EDR_A4, NULL);
+
+			TTIA_EdrAppendQueue(EDR_A5, NULL);
+
+			TTIA_EdrAppendQueue(EDR_A6, 20);
+
+			TTIA_EdrAppendQueue(EDR_A7, NULL);
+
+			TTIA_EdrAppendQueue(EDR_A8, NULL);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A1:
+			TTIA_EdrStdSend(0xA1);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A2:
+			TTIA_EdrStdSend(0xA2);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A3:
+			TTIA_EdrStdSend(0xA3);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A4:
+			TTIA_EdrStdSend(0xA4);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A5:
+			TTIA_EdrStdSend(0xA5);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A6:
+			TTIA_EdrCmdA6Send();
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+   		break;
+
+		case EDR_A7:
+			TTIA_EdrStdSend(0xA7);
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+
+		case EDR_A8:
+			TTIA_EdrCmdA8Send();
+
+			gTTIA_EdrProc = EDR_BREAK;
+
+		  break;
+	}
+}
+*/

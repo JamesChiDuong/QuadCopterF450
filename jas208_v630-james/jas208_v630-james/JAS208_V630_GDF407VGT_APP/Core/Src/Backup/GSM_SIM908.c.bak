@@ -1,0 +1,2799 @@
+//============================================================================//
+// Includes
+//============================================================================//
+/*
+#include "GSM_SIM908.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "stm32fxxx_hal_user.h"
+
+#include "Buzzer.h"
+#include "DataSend.h"
+#include "Default.h"
+#include "GSM_Driver.h"
+#include "Protocol.h"
+#include "TTIA.h"
+*/
+
+#if ENABLE_GSM_SIM908
+//============================================================================//
+// Private define
+//============================================================================//
+//
+#define	GSM_BAUDRATE_DEF		BR_115200bps
+
+//
+#define	MAX_GET_PKG_SIZE		128
+// How many command it can process at the same time
+#define	MAX_DATA_QUEUE_NUM		32
+
+//
+#define	MAIN_AUDIO_HANDSET		0
+//
+#define	AUX_AUDIO_HEADSET		1
+//
+#define	MAIN_AUDIO_HANDFREE		2
+//
+#define	AUX_AUDIO_HANDFREE		3
+//
+#define AUDIO_CHANNEL_DEF		MAIN_AUDIO_HANDSET
+
+//
+#define	SEND_DATA_PROMPT		'>'
+
+//
+#define	STR_RESPONSE_OK			"OK"
+//
+#define	STR_RESPONSE_ERROR		"ERROR"
+
+//
+#define STR_RESPONSE_RING		"RING"
+//
+#define STR_RESPONSE_BUSY		"BUSY"
+//
+#define STR_RESPONSE_NO_CARRIER	"NO CARRIER"
+//
+#define STR_RESPONSE_NO_ANSWER	"NO ANSWER"
+
+//
+#define STR_CONNECT_OK			"CONNECT OK"
+//
+#define STR_CONNECT_FAIL		"CONNECT FAIL"
+
+//
+#define STR_SEND_OK				"SEND OK"
+//
+#define STR_SEND_FAIL			"SEND FAIL"
+
+//
+#define	STR_CME_ERROR			"+CME ERROR:"
+//
+#define STR_PDP_DEACT			"+PDP: DEACT"
+
+//
+#define	STR_CMTI				"+CMTI:"
+//
+#define	STR_CMGR				"+CMGR:"
+//
+#define	STR_CSQ					"+CSQ:"
+//
+#define	STR_COPS				"+COPS:"
+//
+#define	STR_RECEIVE				"+RECEIVE"
+
+//============================================================================//
+//
+#define NMEA_MODE_GSA			8
+//
+#define NMEA_MODE_RMC			32
+// 衛星數量最大值
+#define	MAXSATELLITE			12
+
+//============================================================================//
+// Private typedef
+//============================================================================//
+//
+typedef enum
+{
+	//
+	AT_CMD_BEGIN,
+	//
+	AT_ECHO_SET,
+	AT_CME_ERR_EN,
+	//
+	AT_GPS_START_COLD,
+	AT_GPS_DATA_OUT,
+	//
+	AT_MSG_FORMAT,
+	AT_MSG_NEW,
+	//
+	AT_AUDIO_PATH_SET,
+	AT_SPK_VOLUME_INIT,
+	AT_MIC_GAIN_INIT,
+	//
+	AT_REQUEST_IMSI,
+	AT_REQUEST_IMEI,
+	//
+	AT_CGATT_RD,
+	//
+	AT_NET_SET_MULTI_IP,
+	AT_NET_APN_SET,
+	AT_NET_BRING_UP,
+	AT_NET_GET_LOCAL_IP,
+	AT_NET_CONNECT,
+	AT_NET_DISCONN,
+	AT_NET_CLOSE,
+	//
+	AT_SEND_DATA,
+	AT_SEND_DATA_BEGIN,
+	//
+	AT_SEND_MSG,
+	AT_SEND_MSG_BEGIN,
+	//
+	AT_SMS_READ,
+	AT_SMS_DELETE,
+	//
+	AT_SPK_VOLUME_SET,
+	AT_MIC_GAIN_SET,
+	//
+	AT_CALL_DIAL,
+	AT_CALL_ANSWER,
+	AT_CALL_HOOK,
+	//
+	AT_CMD_CSQ,
+	//
+	AT_GPS_TURN_ON,
+	AT_GPS_TURN_OFF,
+	//
+	AT_CMD_TEST,
+	//
+	AT_CMD_BREAK,
+} AT_CMD_t;
+// GSM command status
+typedef enum
+{
+	//
+	CMD_INIT = 0,
+	//
+	CMD_SEND,
+	//
+	CMD_OK,
+	//
+	CMD_ERROR,
+} CMD_STATE_t;
+
+//============================================================================//
+#pragma pack(1)
+//
+typedef struct
+{
+	//
+	bool CREATE;
+	//
+	bool CONN;
+	//
+	uint8_t NUM;
+
+} SOCKET_STATE_t;
+
+//
+typedef struct
+{
+	//
+	uint8_t SocketNum;
+	//
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	//
+	uint16_t BufLen;
+
+} DATA_SEND_t;
+
+#pragma pack()
+
+//============================================================================//
+// Private macro
+//============================================================================//
+
+//============================================================================//
+// Private variables
+//============================================================================//
+//
+bool bGSM_PowerOn = FALSE;
+
+//
+DATA_QUEUE_t gGSM_CmdQue[MAX_DATA_QUEUE_NUM];
+// Write data queue index
+uint8_t ucGSM_QueWI;
+// Read data queue index
+uint8_t ucGSM_QueRI;
+// Data queue receive index
+uint8_t ucGSM_RxIdx;
+
+// 目前 AT command
+AT_CMD_t gGSM_CurrCmd = AT_CMD_BREAK;
+// 下一個 AT command
+AT_CMD_t gGSM_NextCmd = AT_CMD_BREAK;
+
+//
+CMD_STATE_t gCMD_STATE;
+//
+uint8_t ucGSM_CmdInterval;
+//
+uint16_t ucGSM_CmdTimeout;
+//
+uint8_t ucGSM_CmdErrCnt;
+
+//
+SOCKET_STATE_t SocketState[MAX_SOCKET_BANK];
+//
+uint8_t ucGSM_SocketInit;
+//
+uint8_t ucGSM_SocketConnCnt;
+
+//
+char szSendCmd[UART_MAX_BUFFER_SIZE];
+//
+DATA_SEND_t gGSM_DataSend = {0};
+
+//
+bool bGSM_Operator;
+//
+bool bGSM_Dialling;
+//
+bool bGSM_Calling;
+//
+bool bGSM_WriteSocket;
+
+//
+uint8_t u8GSM_CSQ;
+
+//
+bool bGSM_GpsPower;
+
+//============================================================================//
+// Private constants
+//============================================================================//
+
+//============================================================================//
+// Private function prototypes
+//============================================================================//
+
+//============================================================================//
+// Private functions
+//============================================================================//
+//
+static void SetTID_GsmProc(void);
+//
+static void ClrTID_GsmProc(void);
+
+//
+static void SIM908_ChkNetStatus(FlagStatus NET_FLAG);
+//
+static void SIM908_ChkProcIdle(FlagStatus IDLE_FLAG);
+
+//
+static uint8_t SIM908_GetSpkGain(void);
+//
+static uint8_t SIM908_GetMicGain(void);
+
+//
+static void SIM908_GpsClrReg(void);
+
+//============================================================================//
+// Public variables
+//============================================================================//
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ClrReg(void)
+{
+	//
+	memset(gGSM_CmdQue, 0x00, sizeof(gGSM_CmdQue));
+	//
+	ucGSM_QueWI = 0;
+	//
+	ucGSM_QueRI = 0;
+	//
+	ucGSM_RxIdx = 0;
+
+	//
+	gGSM_CurrCmd = AT_CMD_BREAK;
+	//
+	gGSM_NextCmd = AT_CMD_BREAK;
+	//
+	gCMD_STATE = CMD_INIT;
+	//
+	ucGSM_CmdInterval = 0;
+	//
+	ucGSM_CmdTimeout = 0;
+	//
+	ucGSM_CmdErrCnt = 0;
+
+	//
+	memset(SocketState, 0x00, sizeof(SocketState));
+	//
+	ucGSM_SocketInit = SOCKET_BANK_DEF;
+	//
+	ucGSM_SocketConnCnt = 0;
+	//
+	SocketState[SOCKET_BANK_DEF].NUM = SOCKET_BANK_DEF;
+	//
+	SocketState[SOCKET_BANK_EXT].NUM = SOCKET_BANK_EXT;
+
+	//
+	memset(szSendCmd, 0x00, sizeof(szSendCmd));
+
+	//
+	bGSM_Operator = TRUE;
+	//
+	bGSM_Dialling = FALSE;
+	//
+	bGSM_Calling = FALSE;
+	//
+	bGSM_WriteSocket = FALSE;
+
+	//
+	memset(g_SysInfo.MobileInfo.IMSI, 0x00, OFFSET_SIZE(MOBILE_INFO_t, IMSI));
+	//
+	memset(g_SysInfo.MobileInfo.IMEI, 0x00, OFFSET_SIZE(MOBILE_INFO_t, IMEI));
+
+	//
+	u8GSM_CSQ = 99;
+
+	//
+	DataSend_ClrCmdQue();
+	//
+	SIM908_ChkNetStatus(RESET);
+	//
+	SIM908_ChkProcIdle(RESET);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_PowerOn(void)
+{
+	//
+	HwCfg_PBClr(GSM_EN);
+	//
+	HwCfg_PBClr(GSM_PWR);
+	//
+	Delay_mS(100);
+
+	//
+	HwCfg_PBSet(GSM_PWR);
+	//
+	Delay_mS(1000);
+	//
+	HwCfg_PBClr(GSM_PWR);
+
+	//
+	bGSM_PowerOn = TRUE;
+
+	//
+	RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_POWER_ON);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_PowerOff(void)
+{
+	//
+	HwCfg_PBClr(GSM_PWR);
+	//
+	HwCfg_PBSet(GSM_EN);
+
+	//
+	bGSM_PowerOn = FALSE;
+
+	//
+	RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_POWER_OFF);
+}
+
+//============================================================================//
+//
+uint8_t TID_GprsReset = TIMER_INVALID_ID;
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM908_Start(void)
+{
+	// 若還有命令正在執行則延後重置 GSM
+	if(SIM908_ChkCmdBusy() == TRUE
+	        || SIM908_GetDialStatus() == TRUE)
+		return FALSE;
+
+	//
+	ClrTID_GsmProc();
+	//
+	SIM908_ClrReg();
+
+	//
+	if(bGSM_PowerOn == TRUE)
+	{
+		//
+		SIM908_PowerOff();
+		//
+		return FALSE;
+	}
+
+	// 引擎熄火後將不重開 GSM
+	if(g_Setting.ENABLE_SET.bits.ImmoCtrl == 0
+	        && g_SysInfo.VehicleState.ACC_ON == FALSE)
+		return FALSE;
+
+	//
+	TID_GprsReset = TIMER_INVALID_ID;
+	//
+	gGSM_CurrCmd = AT_CMD_BEGIN;
+
+	//
+	SIM908_PowerOn();
+	//
+	SetTID_GsmProc();
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_Reset(uint8_t RestartTime)
+{
+	//
+	if(TID_GprsReset != TIMER_INVALID_ID)
+	{
+		//
+		if(RestartTime > RESET_DELAY_SHORT)
+			return;
+
+		//
+		SWTIM_ClrTimer(TID_GprsReset);
+		//
+		TID_GprsReset = TIMER_INVALID_ID;
+	}
+	//
+	TID_GprsReset = SWTIM_SetTimer(S_2_mS(RestartTime), TIMER_ONESHOT, SIM908_Start);
+
+	//
+	RTOSprintf("> GSM will restart after %d second\r\n", RestartTime);
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_Init(void)
+{
+	//
+	UART_Init(GSM_COMPORT_DEF, GSM_BAUDRATE_DEF);
+	//
+	SIM908_Reset(RESET_DELAY_SHORT);
+}
+
+//============================================================================//
+// GSM SEND
+//============================================================================//
+static void SIM908_SendBuffer(uint8_t *Buf, uint16_t BufLen)
+{
+	//
+	UART_SendBuffer(GSM_COMPORT_DEF, Buf, BufLen);
+
+	//
+	if(g_Setting.DebugMode == DBG_GSM)
+	{
+		//
+		SET_SendBuffer(Buf, BufLen);
+	}
+}
+
+//============================================================================//
+// GSM SEND COMMAND
+//============================================================================//
+void SIM908_SendCmd(void)
+{
+	//
+	SIM908_SendBuffer((uint8_t*)szSendCmd, strlen(szSendCmd));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_BuildCmd(char *CMD)
+{
+	//
+	sprintf(szSendCmd, "%s\r\n", CMD);
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_SendData(GSM_SOCKET_DATA_t SocketData)
+{
+	char Buf[32];
+
+	//
+	gGSM_DataSend.SocketNum = SocketData.SocketNum;
+	//
+	memcpy(gGSM_DataSend.Buf, SocketData.Data, SocketData.u16DataLen);
+	//
+	gGSM_DataSend.BufLen = SocketData.u16DataLen;
+
+	//
+	sprintf(Buf, "AT+CIPSEND=%d,%d", gGSM_DataSend.SocketNum, gGSM_DataSend.BufLen);
+	//
+	SIM908_BuildCmd(Buf);
+
+	//
+	gGSM_NextCmd = AT_SEND_DATA;
+	//
+	bGSM_WriteSocket = FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_ReSendData(void)
+{
+	//
+	if(gGSM_DataSend.BufLen == 0)
+		return;
+
+	//
+	DataStream_BuffBuild(gGSM_DataSend.SocketNum, gGSM_DataSend.Buf, gGSM_DataSend.BufLen);
+	//
+	memset(&gGSM_DataSend, 0x00, sizeof(DATA_SEND_t));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ReceiveData(GSM_SOCKET_DATA_t SocketData)
+{
+#if ENABLE_TTIA
+	//
+	TTIA_MsgReply(SocketData);
+#else
+	char szTEMP1[UART_MAX_BUFFER_SIZE];
+	char szTEMP2[UART_MAX_BUFFER_SIZE];
+
+	//
+	memcpy(szTEMP1, SocketData.Data, SocketData.u16DataLen);
+	//
+	Protocl_ChkCmdPkg(szTEMP1, szTEMP2);
+	//
+	if(strlen(szTEMP2) == 0)
+		return;
+
+	//
+	sprintf(szTEMP1, "%d,%s", SocketData.SocketNum, szTEMP2);
+	//
+	DataSend_AddDataToQue((uint8_t*)szTEMP1, strlen(szTEMP1));
+
+#endif
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ChkSQ(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CSQ", AT_CMD_CSQ);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM908_ChkCmdIdle(void)
+{
+	if(gGSM_CurrCmd == AT_CMD_BREAK
+	        || gGSM_CurrCmd == AT_CMD_CSQ)
+	{
+		//
+		return TRUE;
+	}
+	else
+	{
+		//
+		return FALSE;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_NetClose(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CIPSHUT", AT_NET_CLOSE);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_NetConnect(uint8_t SocketNum)
+{
+	uint8_t Buf[128];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CIPSTART=%d,\"TCP\",\"%d.%d.%d.%d\",\"%d\"",
+	        AT_NET_CONNECT,
+	        SocketState[SocketNum].NUM,
+	        g_Setting.GSM_SET.tServerIP[SocketNum].ADDR._U8[3],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].ADDR._U8[2],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].ADDR._U8[1],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].ADDR._U8[0],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].PORT);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_NetDisconn(uint8_t SocketNum)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CIPCLOSE=%d",
+	        AT_NET_DISCONN,
+	        SocketState[SocketNum].NUM);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ClrMsg(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CMGD=0,1", AT_SMS_DELETE);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ChkNetStatus(FlagStatus NET_FLAG)
+{
+	static uint8_t LED_COUNT = COUNT_LED_NET_DISCONN;
+	static uint16_t RECONN_COUNT = COUNT_NET_RECONNECT;
+	static uint16_t RESTART_COUNT = COUNT_GSM_RESTART;
+
+	//
+	LED_COUNT--;
+	//
+	if(LED_COUNT == 0)
+	{
+		//
+		if(SIM908_GetPowerStatus() == TRUE)
+			HwCfg_LEDOn(LED_GPRS);
+
+		//
+		if(SIM908_GetNetStatus() == TRUE)
+			LED_COUNT = COUNT_LED_NET_CONN;
+		else
+			LED_COUNT = COUNT_LED_NET_DISCONN;
+	}
+	else
+	{
+		//
+		HwCfg_LEDOff(LED_GPRS);
+	}
+
+	//
+	if(NET_FLAG == SET
+	        && SIM908_GetNetStatus() == FALSE
+	        && SIM908_ChkCmdIdle() == TRUE
+	        && TID_GprsReset == TIMER_INVALID_ID)
+	{
+		//
+		RECONN_COUNT--;
+	}
+	else
+	{
+		//
+		RECONN_COUNT = COUNT_NET_RECONNECT;
+	}
+	//
+	if(RECONN_COUNT == 0)
+	{
+#if ENABLE_MULTI_IP
+		//
+		SIM908_NetDisconn(SOCKET_BANK_DEF);
+		//
+		SIM908_NetDisconn(SOCKET_BANK_EXT);
+#else
+		//
+		SIM908_NetDisconn(SOCKET_BANK_DEF);
+#endif
+
+		//
+		ucGSM_SocketInit = SOCKET_BANK_DEF;
+
+		//
+		SIM908_NetConnect(ucGSM_SocketInit);
+
+		//
+		RECONN_COUNT = COUNT_NET_RECONNECT;
+	}
+
+	//
+	if(NET_FLAG == SET
+	        && SIM908_GetNetStatus() == FALSE
+	        && TID_GprsReset == TIMER_INVALID_ID)
+	{
+		//
+		RESTART_COUNT--;
+	}
+	else
+	{
+		//
+		RESTART_COUNT = COUNT_GSM_RESTART;
+	}
+	//
+	if(RESTART_COUNT == 0)
+	{
+		//
+		SIM908_Reset(RESET_DELAY_NORMAL);
+		//
+		RESTART_COUNT = COUNT_GSM_RESTART;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ChkProcIdle(FlagStatus IDLE_FLAG)
+{
+	static uint8_t IDLE_COUNT = COUNT_GSM_PROC_IDLE;
+
+	//
+	if(IDLE_FLAG == RESET)
+	{
+		//
+		IDLE_COUNT = COUNT_GSM_PROC_IDLE;
+		//
+		return;
+	}
+
+	//
+	if(SIM908_GetPowerStatus() == TRUE
+	        && SIM908_ChkCmdBusy() == FALSE)
+		IDLE_COUNT--;
+
+	//
+	if(IDLE_COUNT == 0)
+	{
+		//
+		SIM908_ChkSQ();
+
+		//
+		IDLE_COUNT = COUNT_GSM_PROC_IDLE;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ChkCallStatus(FlagStatus CALL_FLAG)
+{
+	static uint8_t CALL_COUNT = 0;
+	static uint8_t BID_RING = BUZZER_INVALID_ID;
+
+	//
+	bGSM_Calling = TRUE;
+
+	//
+	if(bGSM_Dialling == TRUE)
+	{
+		//
+		Buzzer_ClrRing(&BID_RING);
+		//
+		CALL_COUNT = 0;
+
+		//
+		bGSM_Calling = FALSE;
+
+		//
+		return;
+	}
+
+	//
+	if(CALL_FLAG == RESET)
+	{
+		//
+		Buzzer_ClrRing(&BID_RING);
+		//
+		Buzzer_SetRing(&BID_RING, BEEP_SHORT, 3);
+		//
+		CALL_COUNT = COUNT_CALL_TIMEOUT;
+		//
+		return;
+	}
+
+	//
+	if(CALL_COUNT)
+		CALL_COUNT--;
+	else
+		bGSM_Calling = FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_ReConnect(void)
+{
+	//
+	SocketState[SOCKET_BANK_DEF].CONN = FALSE;
+	//
+	SocketState[SOCKET_BANK_EXT].CONN = FALSE;
+	//
+	gGSM_CurrCmd = gGSM_NextCmd = AT_CMD_BREAK;
+	//
+	gCMD_STATE = CMD_INIT;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_CmdFinish(void)
+{
+	//
+	gGSM_CurrCmd = gGSM_NextCmd;
+	//
+	gCMD_STATE = CMD_INIT;
+	//
+	ucGSM_CmdInterval = 0;
+	//
+	ucGSM_CmdTimeout = 0;
+	//
+	ucGSM_CmdErrCnt = 0;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_CmdProc(void)
+{
+	//
+	switch(gCMD_STATE)
+	{
+		//
+		case CMD_INIT:
+			//
+			ucGSM_CmdInterval++;
+			//
+			if(ucGSM_CmdInterval < COUNT_AT_CMD_INTERVAL)
+				return;
+
+			//
+			switch(gGSM_CurrCmd)
+			{
+					char szTEMP[64];
+
+				//
+				case AT_CMD_BEGIN:
+					//
+					SIM908_BuildCmd("AT");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_ECHO_SET:
+					//
+					SIM908_BuildCmd("ATE0");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_CME_ERR_EN:
+					//
+					SIM908_BuildCmd("AT+CMEE=2");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPS_START_COLD:
+					//
+					SIM908_BuildCmd("AT+CGPSRST=0");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPS_DATA_OUT:
+					//
+					SIM908_BuildCmd("AT+CGPSOUT=255");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_MSG_FORMAT:
+					//
+					SIM908_BuildCmd("AT+CMGF=1");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_MSG_NEW:
+					//
+					SIM908_BuildCmd("AT+CNMI=1,1,0,0,0");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_AUDIO_PATH_SET:
+					//
+					sprintf(szTEMP, "AT+CHFA=%d", AUDIO_CHANNEL_DEF);
+
+					//
+					SIM908_BuildCmd(szTEMP);
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_SPK_VOLUME_INIT:
+					//
+					sprintf(szTEMP, "AT+CLVL=%d", SIM908_GetSpkGain());
+
+					//
+					SIM908_BuildCmd(szTEMP);
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_MIC_GAIN_INIT:
+					//
+					sprintf(szTEMP, "AT+CMIC=%d,%d", AUDIO_CHANNEL_DEF, SIM908_GetMicGain());
+
+					//
+					SIM908_BuildCmd(szTEMP);
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_REQUEST_IMSI:
+					//
+					SIM908_BuildCmd("AT+CIMI");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_REQUEST_IMEI:
+					//
+					SIM908_BuildCmd("AT+CGSN");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_CGATT_RD:
+					//
+					SIM908_BuildCmd("AT+CGATT?");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_SET_MULTI_IP:
+					//
+					SIM908_BuildCmd("AT+CIPMUX=1");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_APN_SET:
+					//
+					sprintf(szTEMP, "AT+CSTT=\"%s\",\"%s\",\"%s\"",
+					        g_Setting.GSM_SET.NET_SET.APN,
+					        g_Setting.GSM_SET.NET_SET.APN_UserName,
+					        g_Setting.GSM_SET.NET_SET.APN_Password);
+					//
+					SIM908_BuildCmd(szTEMP);
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_BRING_UP:
+					//
+					SIM908_BuildCmd("AT+CIICR");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_GET_LOCAL_IP:
+					//
+					SIM908_BuildCmd("AT+CIFSR");
+					//
+					SIM908_SendCmd();
+
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+					break;
+				//
+				case AT_SEND_DATA:
+					//
+					SIM908_SendCmd();
+					//
+					gGSM_NextCmd = AT_SEND_DATA_BEGIN;
+
+					break;
+				//
+				case AT_SEND_DATA_BEGIN:
+					//
+					SIM908_SendBuffer(gGSM_DataSend.Buf, gGSM_DataSend.BufLen);
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+
+					break;
+				//
+				case AT_SEND_MSG:
+					//
+					SIM908_SendCmd();
+					//
+					gGSM_NextCmd = AT_SEND_MSG_BEGIN;
+
+					break;
+				//
+				case AT_SEND_MSG_BEGIN:
+					//
+					SIM908_SendBuffer(gGSM_DataSend.Buf, gGSM_DataSend.BufLen);
+
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+
+					break;
+
+				//
+				case AT_NET_CONNECT:
+				case AT_NET_DISCONN:
+				case AT_NET_CLOSE:
+				//
+				case AT_SMS_READ:
+				case AT_SMS_DELETE:
+				//
+				case AT_SPK_VOLUME_SET:
+				case AT_MIC_GAIN_SET:
+				//
+				case AT_CALL_DIAL:
+				case AT_CALL_ANSWER:
+				case AT_CALL_HOOK:
+				//
+				case AT_CMD_CSQ:
+				//
+				case AT_GPS_TURN_ON:
+				case AT_GPS_TURN_OFF:
+				//
+				case AT_CMD_TEST:
+					//
+					SIM908_SendCmd();
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+
+					break;
+
+				//
+				case AT_CMD_BREAK:
+					//
+					gGSM_CurrCmd = gGSM_NextCmd;
+				//
+				default:
+					return;
+			}
+
+			//
+			gCMD_STATE = CMD_SEND;
+			break;
+
+		//
+		case CMD_SEND:
+			//
+			ucGSM_CmdTimeout++;
+			//
+			if(ucGSM_CmdTimeout < COUNT_AT_CMD_TIMEOUT)
+				break;
+
+			//
+			ucGSM_CmdTimeout = 0;
+			//
+			gCMD_STATE = CMD_ERROR;
+
+			break;
+
+		//
+		case CMD_OK:
+			//
+			switch(gGSM_CurrCmd)
+			{
+
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+				case AT_MSG_NEW:
+					{
+						//
+						static bool bGSM_InitFirst = TRUE;
+
+						//
+						if(g_Setting.ENABLE_SET.bits.DRV_ID == 0
+						        || g_Setting.u32DrvIdNum != INVALID_VALUE_DEF)
+						{
+							//
+							bGSM_InitFirst = FALSE;
+						}
+
+						//
+						if(bGSM_InitFirst == TRUE)
+						{
+							//
+							bGSM_InitFirst = FALSE;
+							//
+							gGSM_NextCmd = AT_CMD_BREAK;
+						}
+					}
+					break;
+#endif // ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+
+				//
+				case AT_NET_GET_LOCAL_IP:
+					//
+					SIM908_NetConnect(ucGSM_SocketInit);
+
+					break;
+
+				//
+				case AT_SEND_DATA_BEGIN:
+					//
+					bGSM_WriteSocket = TRUE;
+					//
+					memset(&gGSM_DataSend, 0x00, sizeof(DATA_SEND_t));
+
+					break;
+
+				//
+				case AT_SEND_MSG_BEGIN:
+					//
+					SIM908_ClrMsg();
+					break;
+
+				//
+				case AT_CALL_DIAL:
+					//
+					bGSM_Dialling = TRUE;
+
+					break;
+
+				//
+				case AT_CALL_ANSWER:
+					//
+					bGSM_Calling = FALSE;
+					//
+					bGSM_Dialling = TRUE;
+
+					break;
+
+				//
+				case AT_CALL_HOOK:
+					//
+					bGSM_Dialling = FALSE;
+
+					break;
+
+				//
+				case AT_GPS_START_COLD:
+				case AT_GPS_TURN_ON:
+					//
+					bGSM_GpsPower = TRUE;
+					//
+					RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_POWER_ON);
+
+					//
+					SIM908_GpsClrReg();
+					break;
+
+				//
+				case AT_GPS_TURN_OFF:
+					//
+					bGSM_GpsPower = FALSE;
+					//
+					RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_POWER_OFF);
+					break;
+			}
+
+			//
+			SIM908_CmdFinish();
+
+			break;
+
+		//
+		case CMD_ERROR:
+			//
+			ucGSM_CmdErrCnt++;
+			//
+			if(ucGSM_CmdErrCnt >= COUNT_AT_CMD_ERROR)
+			{
+				//
+				RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_AT_CMD_ERROR);
+				//
+				SIM908_ReConnect();
+				//
+				SIM908_Reset(RESET_DELAY_NORMAL);
+				//
+				break;
+			}
+
+			//
+			gCMD_STATE = CMD_INIT;
+			//
+			ucGSM_CmdInterval = 0;
+
+			//
+			switch(gGSM_CurrCmd)
+			{
+				//
+				case AT_SEND_DATA_BEGIN:
+					//
+					gGSM_CurrCmd = AT_SEND_DATA;
+					break;
+				//
+				case AT_SEND_MSG_BEGIN:
+					//
+					gGSM_CurrCmd = AT_SEND_MSG;
+					break;
+
+				//
+				case AT_NET_CONNECT:
+				case AT_NET_DISCONN:
+				case AT_NET_CLOSE:
+				//
+				case AT_CALL_ANSWER:
+				case AT_CMD_TEST:
+					//
+					SIM908_CmdFinish();
+					break;
+
+			}
+
+			break;
+
+		//
+		default:
+			break;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM908_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = COUNT_GSM_PKG_TIMEOUT;
+
+	uint16_t i, BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	uint8_t *pBuf, ch, PreCH;
+
+	//
+	BufLen = UART_GetRxBufLen(GSM_COMPORT_DEF);
+	//
+	if(BufLen == 0)
+	{
+		//
+		GetPkgTimeout = COUNT_GSM_PKG_TIMEOUT;
+		//
+		return FALSE;
+	}
+	else
+	{
+		if(BufLen <= MAX_GET_PKG_SIZE
+		        && GetPkgTimeout > 0)
+		{
+			//
+			GetPkgTimeout--;
+			//
+			return FALSE;
+		}
+
+		//
+		GetPkgTimeout = COUNT_GSM_PKG_TIMEOUT;
+	}
+
+	//
+	memset(Buf, 0x00, sizeof(Buf));
+	//
+	BufLen = UART_GetRxBuffer(GSM_COMPORT_DEF, Buf, sizeof(Buf));
+	//
+	pBuf = Buf;
+
+	//
+	for(i = 0; i < BufLen; i++)
+	{
+		//
+		PreCH = ch;
+		//
+		ch = *pBuf++;
+
+		//
+		gGSM_CmdQue[ucGSM_QueWI].Data[ucGSM_RxIdx++] = ch;
+
+		//
+		if((PreCH == '\r' && ch == '\n')
+		        || (PreCH == '\n' && ch == SEND_DATA_PROMPT)
+		        || ucGSM_RxIdx == OFFSET_SIZE(DATA_QUEUE_t, Data))
+		{
+			//
+			if(ch == SEND_DATA_PROMPT)
+			{
+				//
+				gGSM_CmdQue[ucGSM_QueWI].Data[ucGSM_RxIdx++] = ' ';
+			}
+
+			// Change queue state
+			gGSM_CmdQue[ucGSM_QueWI].State = QUE_PROC;
+			//
+			gGSM_CmdQue[ucGSM_QueWI].DataLen = ucGSM_RxIdx;
+
+			//
+			ucGSM_QueWI++;
+			//
+			if(ucGSM_QueWI >= MAX_DATA_QUEUE_NUM)
+				ucGSM_QueWI = 0;
+
+			// Change queue state
+			gGSM_CmdQue[ucGSM_QueWI].State = QUE_RX;
+			//
+			gGSM_CmdQue[ucGSM_QueWI].DataLen = 0;
+			//
+			memset(gGSM_CmdQue[ucGSM_QueWI].Data, 0x00, OFFSET_SIZE(DATA_QUEUE_t, Data));
+			//
+			ucGSM_RxIdx = 0;
+		}
+	}
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//+CMTI: "ME",1
+//AT+CMGR=1
+//+CMGR: "REC UNREAD","+886918031435",,"13/07/05,17:03:43+50"
+//1111@2:AA-0001
+//
+//OK
+//
+//============================================================================//
+static void SIM908_GetMessage(char *pStr)
+{
+	char MsgCmdBuf[UART_MAX_BUFFER_SIZE];
+	char MsgMobile[24];
+
+	char CmdStr[64];
+	char CmdArg[64];
+	char CmdMsg[UART_MAX_BUFFER_SIZE];
+
+	// "REC UNREAD",
+	StopChar(pStr, ',');
+	//
+	pStr += strlen(pStr) + 1;
+
+	// "+886918031435",
+	StopChar(pStr, ',');
+	//
+	if(strlen(pStr) == 0)
+	{
+		strcpy(MsgMobile, g_Setting.GSM_SET.PhoneBank[0].Number);
+	}
+	else
+	{
+		//
+		StopChar(pStr, '"');
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '"');
+		//
+		strcpy(MsgMobile, pStr);
+		//
+		pStr += strlen(pStr) + 1;
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	//
+	StopChar(pStr, '\n');
+	pStr += strlen(pStr) + 1;
+
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+	//
+	if(strncmp(pStr, STR_SMS_IN1_PASS, strlen(STR_SMS_IN1_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_In1_PASS, strlen(STR_SMS_In1_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_IN2_PASS, strlen(STR_SMS_IN2_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_In2_PASS, strlen(STR_SMS_In2_PASS)) == 0)
+	{
+		char *p;
+		uint8_t YEAR, MONTH, DAY;
+		uint8_t HOUR, MINUTE, SECOND;
+
+		//
+		p = MsgCmdBuf;
+
+		//
+		if(strncmp(pStr, STR_SMS_IN1_PASS, strlen(STR_SMS_IN1_PASS)) == 0
+		        || strncmp(pStr, STR_SMS_In1_PASS, strlen(STR_SMS_In1_PASS)) == 0)
+			sprintf(p, "%sEXT1,", STR_AS_PRINT);
+		//
+		if(strncmp(pStr, STR_SMS_IN2_PASS, strlen(STR_SMS_IN2_PASS)) == 0
+		        || strncmp(pStr, STR_SMS_In2_PASS, strlen(STR_SMS_In2_PASS)) == 0)
+			sprintf(p, "%sEXT2,", STR_AS_PRINT);
+		//
+		p += strlen(p);
+
+		//
+		StopChar(pStr, ':');
+		//
+		pStr += strlen(pStr) + 1;
+		// 若遇到的第一個字元為空白則指標再加一
+		if(*pStr == ' ')
+			pStr += 1;
+		//
+		StopChar(pStr, '#');
+		//
+		StopChar(pStr, ',');
+
+		//
+		StopChar(pStr, ' ');
+		DAY = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		MONTH = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		YEAR = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		HOUR = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		MINUTE = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		SECOND = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+
+		//
+		sprintf(p, "%02d%02d%02d%02d%02d%02d\n",
+		        YEAR, MONTH, DAY,
+		        HOUR, MINUTE, SECOND);
+		//
+		if(Protocl_ChkCmdPkg(MsgCmdBuf, NULL) == TRUE)
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Print data success.\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+		else
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_SMS_ID0_PASS, strlen(STR_SMS_ID0_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_ID1_PASS, strlen(STR_SMS_ID1_PASS)) == 0)
+	{
+		char *p;
+		bool isLogin;
+
+		//
+		p = MsgCmdBuf;
+
+		//
+		if(strncmp(pStr, STR_SMS_ID0_PASS, strlen(STR_SMS_ID0_PASS)) == 0)
+		{
+			//
+			sprintf(p, "%s", STR_AS_DRIVER_IN);
+			//
+			isLogin = FALSE;
+		}
+
+		//
+		if(strncmp(pStr, STR_SMS_ID1_PASS, strlen(STR_SMS_ID1_PASS)) == 0)
+		{
+			//
+			sprintf(p, "%s", STR_AS_DRIVER_IN);
+			//
+			isLogin = TRUE;
+		}
+
+		//
+		p += strlen(p);
+
+		//
+		StopChar(pStr, ':');
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '#');
+		//
+		StopChar(pStr, ',');
+
+		//
+		if((isLogin == TRUE && g_Setting.u32DrvIdNum == strtoul(pStr, NULL, 16))
+		        || (isLogin == FALSE && g_Setting.u32DrvIdNum != strtoul(pStr, NULL, 16)))
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Driver id invalid.\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+
+			//
+			return;
+		}
+
+		//
+		strcpy(p, pStr);
+		//
+		if(Protocl_ChkCmdPkg(MsgCmdBuf, NULL) == TRUE)
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Driver id success.\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+		else
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+
+		//
+		return;
+	}
+
+#endif // ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+
+	/*
+	#if CUSTOMER_TYPE == CUSTOMER_EUPFIN
+		//
+		if(*pStr == '<')
+		{
+			//
+			Protocl_ChkCmdPkg(pStr, CmdMsg);
+
+			//
+			StopChar(CmdMsg, '\n');
+			//
+			StopChar(CmdMsg, '\r');
+			//
+			sprintf(MsgCmdBuf, "%s,%s\x1A", MsgMobile, CmdMsg);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+
+			//
+			return;
+		}
+
+	#endif
+	*/
+	//
+	StopChar(pStr, '@');
+	//
+	if(strncmp(pStr, STR_PASS_ADMIN, strlen(STR_PASS_ADMIN)) != 0)
+	{
+		//
+		if(strncmp(pStr, STR_PASS_USER, strlen(STR_PASS_USER)) != 0)
+		{
+			// 驗證錯誤, 簡訊命令處理取消並清除
+			SIM908_ClrMsg();
+			// 驗證錯誤, 簡訊命令處理取消
+			return;
+		}
+		else
+		{
+			// 使用者權限
+		}
+	}
+	else
+	{
+		// 管理者權限
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	//
+	StopChar(pStr, '\n');
+	//
+	StopChar(pStr, '\r');
+
+	//
+	StopChar(pStr, ':');
+	//
+	memset(CmdStr, 0x00, sizeof(CmdStr));
+	//
+	GSM_GetMsgCmd(pStr, CmdStr);
+
+	//
+	if(strlen(CmdStr) == 0)
+	{
+		//
+		sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+		//
+		DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		//
+		return;
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	//
+	if(strlen(pStr) == 0)
+	{
+		//
+		strcpy(CmdArg, "?");
+	}
+	else
+	{
+		//
+		strcpy(CmdArg, pStr);
+
+		//
+		if(strcmp(CmdStr, STR_AS_RESET) == 0)
+		{
+			//
+			if(strncmp(CmdArg, szResetCmd[RST_SYS], strlen(szResetCmd[RST_SYS])) == 0
+			        || strncmp(CmdArg, szResetCmd[RST_GPS], strlen(szResetCmd[RST_GPS])) == 0
+			        || strncmp(CmdArg, szResetCmd[RST_GSM], strlen(szResetCmd[RST_GSM])) == 0
+			        || strncmp(CmdArg, szResetCmd[RST_LOG], strlen(szResetCmd[RST_LOG])) == 0
+			        || strncmp(CmdArg, szResetCmd[RST_TEMP], strlen(szResetCmd[RST_TEMP])) == 0
+			        || strncmp(CmdArg, szResetCmd[RST_ALL], strlen(szResetCmd[RST_ALL])) == 0)
+			{
+				//
+				StopChar(CmdArg, ',');
+				//
+				sprintf(CmdArg, "%s,%d", CmdArg, RESET_DELAY_NORMAL);
+			}
+
+			//
+			if(strncmp(CmdArg, szResetCmd[RST_DEFAULT], strlen(szResetCmd[RST_DEFAULT])) == 0
+			        || strncmp(CmdArg, szResetCmd[RST_UPGRADE], strlen(szResetCmd[RST_UPGRADE])) == 0)
+			{
+				//
+				sprintf(MsgCmdBuf, "%s,Warning:command cancel!!\x1A", MsgMobile);
+				//
+				DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+			}
+		}
+	}
+
+	//
+	sprintf(MsgCmdBuf, "%s%s\r\n", CmdStr, CmdArg);
+	//
+	if(Protocl_ChkCmdPkg(MsgCmdBuf, CmdMsg) == TRUE)
+	{
+		char *pCmd;
+
+		//
+		if(strlen(CmdMsg) > 0)
+		{
+			//
+			pCmd = CmdMsg;
+			//
+			StopChar(pCmd, '$');
+			//
+			pCmd += strlen(pCmd) + 1;
+
+			//
+			StopChar(pCmd, '\n');
+			//
+			StopChar(pCmd, '\r');
+
+			//
+			sprintf(MsgCmdBuf, "%s,%s\x1A", MsgMobile, pCmd);
+		}
+		else
+		{
+			//
+			pCmd = CmdStr;
+			//
+			StopChar(pCmd, '$');
+			//
+			pCmd += strlen(pCmd) + 1;
+			//
+			StopChar(pCmd, '=');
+
+			//
+			sprintf(MsgCmdBuf, "%s,%s success.\x1A", MsgMobile, pCmd);
+		}
+
+		//
+		DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+	}
+	else
+	{
+		//
+		sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+		//
+		DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+	}
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_CmdChk(uint8_t *CmdPkg, uint16_t PkgLen)
+{
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	char *pStr;
+
+	//
+	memcpy(Buf, CmdPkg, PkgLen);
+	//
+	pStr = (char*)Buf;
+
+	//
+	if(strncmp(pStr, STR_CMGR, strlen(STR_CMGR)) == 0)
+	{
+		//
+		pStr += strlen(STR_CMGR) + 1;
+		//
+		SIM908_GetMessage(pStr);
+		//
+		return;
+	}
+
+	// +RECEIVE,0,15:
+	if(strncmp(pStr, STR_RECEIVE, strlen(STR_RECEIVE)) == 0)
+	{
+		uint8_t SocketNum;
+		uint8_t DataLen;
+		GSM_SOCKET_DATA_t SocketData;
+
+		//
+		StopChar(pStr, ',');
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, ',');
+		SocketNum = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, ':');
+		DataLen = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '\n');
+		pStr += strlen(pStr) + 1;
+
+		//
+		SocketData.SocketNum = SocketNum;
+		//
+		SocketData.Data = (uint8_t*)pStr;
+		//
+		SocketData.u16DataLen = DataLen;
+		//
+		SIM908_ReceiveData(SocketData);
+
+		//
+		return;
+	}
+
+	//
+	StopChar(pStr, '\n');
+	//
+	StopChar(pStr, '\r');
+
+	//
+	if(*pStr == SEND_DATA_PROMPT)
+	{
+		//
+		if(gGSM_CurrCmd == AT_SEND_DATA)
+		{
+			//
+			gGSM_CurrCmd = AT_SEND_DATA_BEGIN;
+		}
+
+		//
+		if(gGSM_CurrCmd == AT_SEND_MSG)
+		{
+			//
+			gGSM_CurrCmd = AT_SEND_MSG_BEGIN;
+		}
+
+		//
+		gCMD_STATE = CMD_INIT;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_OK, strlen(STR_RESPONSE_OK)) == 0)
+	{
+		//
+		gCMD_STATE = CMD_OK;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_ERROR, strlen(STR_RESPONSE_ERROR)) == 0)
+	{
+		//
+		gCMD_STATE = CMD_ERROR;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_NO_CARRIER, strlen(STR_RESPONSE_NO_CARRIER)) == 0
+	        || strncmp(pStr, STR_RESPONSE_BUSY, strlen(STR_RESPONSE_BUSY)) == 0
+	        || strncmp(pStr, STR_RESPONSE_NO_ANSWER, strlen(STR_RESPONSE_NO_ANSWER)) == 0)
+	{
+		//
+		bGSM_Dialling = FALSE;
+
+		//
+		if(gGSM_CurrCmd == AT_CALL_DIAL)
+		{
+			//
+			SIM908_CmdFinish();
+		}
+
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_RING, strlen(STR_RESPONSE_RING)) == 0)
+	{
+		//
+		SIM908_ChkCallStatus(RESET);
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_CME_ERROR, strlen(STR_CME_ERROR)) == 0)
+	{
+		//
+		gCMD_STATE = CMD_ERROR;
+		//
+		return;
+	}
+
+#if ENABLE_MULTI_IP
+	//
+	if(strncmp(strstr(pStr, STR_CONNECT_OK), STR_CONNECT_OK, strlen(STR_CONNECT_OK)) == 0)
+	{
+		//
+		SocketState[ucGSM_SocketInit].CONN = TRUE;
+
+		//
+		if(ucGSM_SocketInit == SOCKET_BANK_DEF)
+		{
+			//
+			ucGSM_SocketInit = SOCKET_BANK_EXT;
+			//
+			SIM908_NetConnect(ucGSM_SocketInit);
+		}
+
+		//
+		return;
+	}
+
+#else // ENABLE_MULTI_IP
+	//
+	if(strncmp(strstr(pStr, STR_CONNECT_OK), STR_CONNECT_OK, strlen(STR_CONNECT_OK)) == 0)
+	{
+		//
+		SocketState[ucGSM_SocketInit].CONN = TRUE;
+		//
+		return;
+	}
+
+#endif // ENABLE_MULTI_IP
+
+	//
+	if(strncmp(pStr, STR_PDP_DEACT, strlen(STR_PDP_DEACT)) == 0)
+	{
+		//
+		RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_RELEASE);
+		//
+		SIM908_ReSendData();
+		//
+		SIM908_ReConnect();
+		//
+		return;
+	}
+
+	//
+	if(strncmp(strstr(pStr, STR_SEND_OK), STR_SEND_OK, strlen(STR_SEND_OK)) == 0)
+	{
+		//
+		gCMD_STATE = CMD_OK;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(strstr(pStr, STR_SEND_FAIL), STR_SEND_FAIL, strlen(STR_SEND_FAIL)) == 0)
+	{
+		//
+		gGSM_CurrCmd = AT_SEND_DATA;
+		//
+		gCMD_STATE = CMD_INIT;
+		//
+		ucGSM_CmdInterval = 0;
+
+		//
+		return;
+	}
+
+	// +CMTI: "ME",1
+	if(strncmp(pStr, STR_CMTI, strlen(STR_CMTI)) == 0)
+	{
+		uint16_t MsgIdx;
+
+		//
+		pStr += strlen(STR_CMTI) + 1;
+
+		//
+		StopChar(pStr, ',');
+		pStr += strlen(pStr) + 1;
+
+		//
+		MsgIdx = atoi(pStr);
+
+		//
+		pStr = (char*)Buf;
+		//
+		sprintf(pStr, "%d,AT+CMGR=%d", AT_SMS_READ, MsgIdx);
+		//
+		DataSend_AddCmdToQue((uint8_t*)pStr, strlen(pStr));
+
+		//
+		return;
+	}
+
+	// +CSQ: 20,99
+	if(strncmp(pStr, STR_CSQ, strlen(STR_CSQ)) == 0)
+	{
+		//
+		pStr += strlen(STR_CSQ) + 1;
+
+		//
+		StopChar(pStr, ',');
+		u8GSM_CSQ = atoi(pStr);
+
+		//
+		return;
+	}
+
+	// 根據 AT command 取得 GSM module 特定資料
+	switch(gGSM_CurrCmd)
+	{
+		//
+		case AT_REQUEST_IMSI:
+			//
+			if(strlen(pStr) == MAX_IMSI_STR_SIZE)
+			{
+				//
+				strcpy(g_SysInfo.MobileInfo.IMSI, pStr);
+			}
+			break;
+		//
+		case AT_REQUEST_IMEI:
+			//
+			if(strlen(pStr) == MAX_IMEI_STR_SIZE)
+			{
+				//
+				strcpy(g_SysInfo.MobileInfo.IMEI, pStr);
+			}
+			break;
+		//
+		case AT_NET_GET_LOCAL_IP:
+			//
+			gCMD_STATE = CMD_OK;
+			break;
+		//
+		default:
+			break;
+	}
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM908_GetCmd(void)
+{
+	uint8_t *pData, DataLen;
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	uint8_t BufLen;
+	char *pStr;
+
+	//
+	if(SIM908_GetCmdPkg() == FALSE)
+	{
+		//
+		return;
+	}
+
+	//
+	memset(Buf, 0x00, sizeof(Buf));
+	//
+	BufLen = 0;
+	//
+	pStr = (char*)Buf;
+
+	//
+	while(ucGSM_QueRI != ucGSM_QueWI)
+	{
+		//
+		pData = gGSM_CmdQue[ucGSM_QueRI].Data;
+		//
+		DataLen = gGSM_CmdQue[ucGSM_QueRI].DataLen;
+
+		//
+		memcpy(&Buf[BufLen], pData, DataLen);
+		//
+		BufLen += DataLen;
+		//
+		gGSM_CmdQue[ucGSM_QueRI].State = QUE_EMPTY;
+
+		//
+		ucGSM_QueRI++;
+		//
+		if(ucGSM_QueRI >= MAX_DATA_QUEUE_NUM)
+			ucGSM_QueRI = 0;
+
+		//
+		if(DataLen == OFFSET_SIZE(DATA_QUEUE_t, Data)
+		        && pData[DataLen - 1] != '\n' )
+		{
+			//
+			continue;
+		}
+
+		//
+		if((strncmp(pStr, STR_CMGR, strlen(STR_CMGR)) == 0 && CountChar(pStr, '\n') < 2)
+		        || (strncmp(pStr, STR_RECEIVE, strlen(STR_RECEIVE)) == 0 && CountChar(pStr, '\n') < 2))
+		{
+			//
+			continue;
+		}
+
+		//
+		if(g_Setting.DebugMode == DBG_GSM)
+		{
+			//
+			SET_SendBuffer(Buf, BufLen);
+		}
+
+		//
+		SIM908_CmdChk(Buf, BufLen);
+
+		//
+		memset(Buf, 0x00, sizeof(Buf));
+		//
+		BufLen = 0;
+
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM908_Process(void)
+{
+	//
+	SIM908_CmdProc();
+	//
+	SIM908_GetCmd();
+
+	//
+	SIM908_ChkNetStatus(SET);
+	//
+	SIM908_ChkProcIdle(SET);
+	//
+	SIM908_ChkCallStatus(SET);
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+uint8_t TID_GsmProc = TIMER_INVALID_ID;
+
+//============================================================================//
+//
+//============================================================================//
+static void SetTID_GsmProc(void)
+{
+	//
+	if(TID_GsmProc != TIMER_INVALID_ID)
+		return;
+
+	//
+	TID_GsmProc = SWTIM_SetTimer(TIMER_GSM_PROC, TIMER_CONTINUE, SIM908_Process);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void ClrTID_GsmProc(void)
+{
+	//
+	if(TID_GsmProc == TIMER_INVALID_ID)
+		return;
+
+	//
+	SWTIM_ClrTimer(TID_GsmProc);
+	//
+	TID_GsmProc = TIMER_INVALID_ID;
+}
+
+//============================================================================//
+//
+//============================================================================//
+uint8_t SIM908_GetSocketNum(uint8_t BankNum)
+{
+	//
+	if(BankNum >= MAX_SOCKET_BANK)
+		BankNum = MAX_SOCKET_BANK;
+
+	//
+	return SocketState[BankNum].NUM;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetPowerStatus(void)
+{
+	//
+	return bGSM_PowerOn;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_ChkCmdBusy(void)
+{
+	if(gGSM_CurrCmd == AT_CMD_BREAK
+	        && gGSM_NextCmd == AT_CMD_BREAK)
+	{
+		//
+		return FALSE;
+	}
+	else
+	{
+		//
+		return TRUE;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetOperatorStatus(void)
+{
+	//
+	return bGSM_Operator;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetNetStatus(void)
+{
+	static bool NetStatus;
+
+#if ENABLE_MULTI_IP
+	//
+	if(SocketState[SOCKET_BANK_DEF].CONN == TRUE
+	        && SocketState[SOCKET_BANK_EXT].CONN == TRUE)
+	{
+		//
+		if(NetStatus == FALSE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_CONNECT);
+		}
+		//
+		NetStatus = TRUE;
+	}
+	else
+	{
+		//
+		if(NetStatus == TRUE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_DISCONN);
+		}
+		//
+		NetStatus = FALSE;
+	}
+#else
+	//
+	if(SocketState[SOCKET_BANK_DEF].CONN == TRUE)
+	{
+		//
+		if(NetStatus == FALSE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_CONNECT);
+		}
+		//
+		NetStatus = TRUE;
+	}
+	else
+	{
+		//
+		if(NetStatus == TRUE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_DISCONN);
+		}
+		//
+		NetStatus = FALSE;
+	}
+#endif
+
+	//
+	return NetStatus;
+}
+
+//============================================================================//
+//
+//============================================================================//
+GSM_NET_MODE_t SIM908_GetNetMode(void)
+{
+	//
+	if(SIM908_GetNetStatus() == FALSE)
+		return MODE_NULL;
+
+	//
+	return MODE_GPRS;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetDialStatus(void)
+{
+	//
+	return bGSM_Dialling;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetCallStatus(void)
+{
+	//
+	return bGSM_Calling;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetSendStatus(void)
+{
+	//
+	return bGSM_WriteSocket;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetSQ(uint8_t *pGSM_SQ)
+{
+	//
+	if(u8GSM_CSQ == 99)
+		return FALSE;
+
+	//
+	*pGSM_SQ = u8GSM_CSQ;
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+#define	RANGE_FULL_LEVEL		100
+//
+#define	RANGE_SPK_LEVEL_MAX		100
+//
+#define	RANGE_MIC_LEVEL_MAX		15
+
+//============================================================================//
+//
+//============================================================================//
+static uint8_t SIM908_GetSpkGain(void)
+{
+	//
+	return (uint16_t)g_Setting.GSM_SET.LevelSpkGain * RANGE_SPK_LEVEL_MAX / RANGE_FULL_LEVEL;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_SetSpeakerGain(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CLVL=%d",
+	        AT_SPK_VOLUME_SET,
+	        SIM908_GetSpkGain());
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static uint8_t SIM908_GetMicGain(void)
+{
+	//
+	return (uint16_t)g_Setting.GSM_SET.LevelMicGain * RANGE_MIC_LEVEL_MAX / RANGE_FULL_LEVEL;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_SetMicrophoneGain(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CMIC=%d,%d",
+	        AT_MIC_GAIN_SET,
+	        AUDIO_CHANNEL_DEF,
+	        SIM908_GetMicGain());
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_CallDialNum(char *pNum)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,ATD%s;", AT_CALL_DIAL, pNum);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_CallAnswer(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,ATA", AT_CALL_ANSWER);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_CallHangUp(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,ATH", AT_CALL_HOOK);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_SendMessage(GSM_MSG_DATA_t MsgData)
+{
+	char szTEMP[32];
+
+	//
+	memcpy(gGSM_DataSend.Buf, MsgData.Data, MsgData.u16DataLen);
+	//
+	gGSM_DataSend.BufLen = MsgData.u16DataLen;
+
+	//
+	sprintf(szTEMP, "AT+CMGS=\"%s\"", MsgData.PhoneNum);
+	//
+	SIM908_BuildCmd(szTEMP);
+
+	//
+	gGSM_NextCmd = AT_SEND_MSG;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_SendMessageEvent(char *pStr)
+{
+	//
+	char EventMsg[UART_MAX_BUFFER_SIZE];
+	//
+	char EventName[24];
+	char EventMobile[24];
+	char EventTime[24];
+	char EventSpeed[16];
+	char EventCourse[16];
+	char EventAddr[100];
+	char EventData[UART_MAX_BUFFER_SIZE];
+
+	//
+	strcpy(EventMsg, pStr);
+	//
+	pStr = EventMsg;
+
+	// 事件名稱
+	StopChar(pStr, ',');
+	//
+	GSM_GetSmsEvent(pStr, EventName);
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 手機門號
+	StopChar(pStr, ',');
+	//
+	if(strlen(pStr) == 0)
+	{
+		//
+		strcpy(EventMobile, g_Setting.GSM_SET.PhoneBank[0].Number);
+		//
+		if(strlen(EventMobile) == 0)
+			return FALSE;
+	}
+	else
+	{
+		//
+		strcpy(EventMobile, pStr);
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 事件時間
+	StopChar(pStr, ',');
+	//
+	{
+		time_t rawtime;
+		struct tm * timeinfo;
+		char TEMP[6];
+
+		//
+		time(&rawtime);
+		//
+		rawtime += g_Setting.i32TimeZoneOffset;
+		//
+		timeinfo = localtime(&rawtime);
+		//
+		strncpy(TEMP, pStr, 2);
+		timeinfo->tm_hour = atoi(TEMP);
+		//
+		strncpy(TEMP, pStr + 2, 2);
+		timeinfo->tm_min = atoi(TEMP);
+		//
+		strncpy(TEMP, pStr + 4, 2);
+		timeinfo->tm_sec = atoi(TEMP);
+		//
+		rawtime = mktime(timeinfo);
+
+		//
+		strftime(EventTime, sizeof(EventTime), "%Y-%m-%d %H:%M:%S", localtime(&rawtime));
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 事件速度
+	StopChar(pStr, ',');
+	//
+	sprintf(EventSpeed, "%dkm/hr", atoi(pStr));
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 事件方向
+	StopChar(pStr, ',');
+	//
+	if(pStr[3] == '1')
+		strcpy(EventCourse, STR_NORTH);
+	else if(pStr[3] == '7')
+		strcpy(EventCourse, STR_NORTH_EAST);
+	else if(pStr[3] == '2')
+		strcpy(EventCourse, STR_EAST);
+	else if(pStr[3] == '8')
+		strcpy(EventCourse, STR_SOUTH_EAST);
+	else if(pStr[3] == '3')
+		strcpy(EventCourse, STR_SOUTH);
+	else if(pStr[3] == '9')
+		strcpy(EventCourse, STR_SOUTH_WEST);
+	else if(pStr[3] == '0')
+		strcpy(EventCourse, STR_WEST);
+	else if(pStr[3] == '6')
+		strcpy(EventCourse, STR_NORTH_WEST);
+	//
+	pStr += strlen(pStr) + 1;
+
+	// GEO名稱
+	StopChar(pStr, ',');
+	pStr += strlen(pStr) + 1;
+
+	// 事件地址
+	strcpy(EventAddr, pStr);
+
+#if CUSTOMER_TYPE == CUSTOMER_POPE
+	//
+	sprintf(EventData, "%s,%s %s\n%s\n%s\n%s,%s\nWe Track24/7\x1A",
+	        EventMobile,
+	        g_Setting.szBus_ID,
+	        EventName,
+	        EventTime,
+	        EventAddr,
+	        EventCourse,
+	        EventSpeed);
+#else
+	//
+	sprintf(EventData, "%s,%s %s\n%s\n%s\n%s,%s\x1A",
+	        EventMobile,
+	        g_Setting.szBus_ID,
+	        EventName,
+	        EventTime,
+	        EventAddr,
+	        EventCourse,
+	        EventSpeed);
+#endif
+
+	//
+	DataSend_AddMsgToQue((uint8_t*)EventData, strlen(EventData));
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_BuildCmdData(GSM_CMD_DATA_t CmdData)
+{
+	//
+	SIM908_BuildCmd((char*)CmdData.Data);
+	//
+	gGSM_NextCmd = (AT_CMD_t)CmdData.CmdNum;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_BuildTestCmd(char *CMD)
+{
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,%s", AT_CMD_TEST, CMD);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_SystemUpgrade(void)
+{
+	//
+	return FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_SystemBackup(time_t BackupTime)
+{
+	//
+	return FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_SystemPhoto(time_t PhotoTime)
+{
+	//
+	return FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+//
+void GPS_ClrReg(void);
+//
+static void SIM908_GpsClrReg(void)
+{
+	//
+	GPS_ClrReg();
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_GpsTurnOn(GPS_START_t GpsStart)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	if(GpsStart == START_COLD)
+	{
+		//
+		sprintf(pStr, "%d,AT+CGPSRST=0", AT_GPS_TURN_ON);
+		//
+		DataSend_AddCmdToQue(Buf, strlen(pStr));
+	}
+
+	//
+	if(GpsStart == START_HOT)
+	{
+		//
+		sprintf(pStr, "%d,AT+CGPSRST=1", AT_GPS_TURN_ON);
+		//
+		DataSend_AddCmdToQue(Buf, strlen(pStr));
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM908_GpsTurnOff(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CGPSPWR=0", AT_GPS_TURN_OFF);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM908_GetGpsPower(void)
+{
+	//
+	return bGSM_GpsPower;
+}
+
+//============================================================================//
+#endif // ENABLE_GSM_SIM908

@@ -1,0 +1,7798 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "PRN_Driver.h"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "CommFunc.h"
+#include "DWT_Delay.h"
+#include "LCD_Key.h"
+#include "main.h"
+#include "print_driver.h"
+#include "PCF_Driver.h"
+#include "RuleV161.h"
+#include "SD_Module.h"
+
+//============================================================================//
+// User Variables
+//============================================================================//
+const char cEventString1[] = {"電源供應中斷"};
+const char cEventString2[] = {"安全防護攻擊"};
+const char cEventString3[] = {"參數調整"};
+const char cEventString4[] = {"時間調整"};
+const char cEventString5[] = {"車機下載一天"};
+const char cEventString6[] = {"車機下載小時"};
+const char cEventString7[] = {"電腦下載一天"};
+const char cEventString8[] = {"電腦下載小時"};
+const char cEventString9[] = {"印表機缺紙"};
+const char cEventString10[] = {"列印駕駛活動"};
+const char cEventString11[] = {"列印事件故障"};
+const char cEventString12[] = {"列印曲線圖"};
+
+const char cBreakString1[] = {"定位模組故障"};
+const char cBreakString2[] = {"印表機模組故障"};
+const char cBreakString3[] = {"顯示器模組故障"};
+
+const uint8_t u8BitMask16[16] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+								 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+const uint8_t u8BitMask8[8] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80};
+
+uint8_t u8Speed[10] = {160, 125, 145, 80, 175, 189, 155, 123, 87, 114};
+uint8_t u8Time[10] = {0, 5, 10, 15, 20, 25, 30, 35, 40, 45};
+
+uint8_t u8SpeedRecord[SPEED_RECORD_SIZE] = {0};
+
+uint8_t u8SpeedRecordTemp[SPEED_RECORD_SIZE] = {0};
+
+uint8_t Prinu8TWord[16][48] = {0};
+uint8_t u8Prinu8TWordXY[DRAW_COLUMN_SIZE_MAX][48] = {0};
+uint8_t u8PrintBuffer[32];
+uint8_t u8HoursNum = 24;
+uint16_t u16DrawColumnSize = 0;
+uint16_t u16TemplateWidth = 0;
+
+PrintStepTypeDef step = PRT_INIT; // Nancy add
+PrintStepTypeDef u8PStep = PRT_IDLE;
+uint8_t u8LStep = 0;
+uint8_t u8SStep = 0;
+uint8_t u8PrintItem = 0;
+uint16_t u16LineCnt = 0;
+uint16_t u16yOffset = 0;
+uint16_t u16CurrRowMaxDots;
+uint16_t u16StartMin;
+
+pt487fb_driver_need_struct PSetting; //[Nancy add]
+// PRINT_DRIVER_S PSetting;
+TechnicalDataTypeDef stPtrTechnical;
+BreakdownDataTypeDef stPtrBreakDown;
+EventDataTypeDef stPtrEvent;
+CalibrationDataTypeDef stPtrCalibration;
+AdjustDataTypeDef stPtrAdjust;
+DrivingTimeTypeDef stPtrDrivingTime;
+RestDataTypeDef stPtrRestTime;
+// NormalStepTypeDef	Rec_Step;
+
+char cPreDate[11], cCurrDate[11];
+
+PrintDataTypeDef prtDataHandle;
+
+uint16_t u16PrintRequestNum = 0;
+
+bool bPRN_Run = FALSE;
+
+bool bRequireReprint = FALSE;
+
+bool bGetSpeedRecord = FALSE;
+
+bool res = FALSE;
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Return printer's paper status.
+// @param  None.
+// @retval TRUE: There is still paper left in the printer.
+//         FALSE: There is no paper left in the printer.
+//============================================================================//
+bool PRN_PaperStatus(void)
+{
+	return HW_PBGetState(PRN_PA_EXIST);
+}
+
+//============================================================================//
+// @brief  Set CLK pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_CLK_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(P_CLK_GPIO_Port, P_CLK_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(P_CLK_GPIO_Port, P_CLK_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set DI pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_DI_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(P_DI_GPIO_Port, P_DI_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(P_DI_GPIO_Port, P_DI_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set LAT pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_LAT_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(N_P_LAT_GPIO_Port, N_P_LAT_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(N_P_LAT_GPIO_Port, N_P_LAT_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set MTA P pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_MA_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(P_MTA_P_GPIO_Port, P_MTA_P_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(P_MTA_P_GPIO_Port, P_MTA_P_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set MTA M pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_MNA_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(P_MTA_M_GPIO_Port, P_MTA_M_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(P_MTA_M_GPIO_Port, P_MTA_M_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set MTB P pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_MB_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(P_MTB_P_GPIO_Port, P_MTB_P_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(P_MTB_P_GPIO_Port, P_MTB_P_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set MTB M pin value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_MNB_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+		HAL_GPIO_WritePin(P_MTB_M_GPIO_Port, P_MTB_M_Pin, GPIO_PIN_RESET);
+	else
+		HAL_GPIO_WritePin(P_MTB_M_GPIO_Port, P_MTB_M_Pin, GPIO_PIN_SET);
+}
+
+//============================================================================//
+// @brief  Set STB1 and STB6 pins value.
+// @param  s: Set value.
+// @retval None.
+//============================================================================//
+static void PRN_Heat_Set(BIT_ENUM beBit)
+{
+	if (beBit == 0)
+	{
+		HAL_GPIO_WritePin(P_STB1_GPIO_Port, P_STB1_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(P_STB6_GPIO_Port, P_STB6_Pin, GPIO_PIN_RESET);
+	}
+	else
+	{
+		HAL_GPIO_WritePin(P_STB1_GPIO_Port, P_STB1_Pin, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(P_STB6_GPIO_Port, P_STB6_Pin, GPIO_PIN_SET);
+	}
+}
+
+//============================================================================//
+// @brief  Draw a point on the array template.
+// @param  u16x: x coordinate of the point.
+//         u16y: y coordinate of the spoint.
+// @retval None.
+//============================================================================//
+void PRN_PrintPointXY(uint16_t u16x, uint16_t u16y)
+{
+	if (((u16y - u16yOffset) >= 0) && ((u16y - u16yOffset) < DRAW_COLUMN_SIZE_MAX))
+	{
+		u8Prinu8TWordXY[u16y - u16yOffset][u16x / 8] |= u8BitMask8[u16x % 8];
+		u8Prinu8TWordXY[u16y - u16yOffset][(u16x - 1) / 8] |= u8BitMask8[(u16x - 1) % 8];
+	}
+}
+
+//============================================================================//
+// @brief  Draw a line on the array template.
+// @param  u16x1: x coordinate of the start point.
+//         u16y1: y coordinate of the start point.
+//         u16x2: x coordinate of the end point.
+//         u16y2: y coordinate of the end point.
+// @retval None.
+//============================================================================//
+void PRN_PrintLineXY(uint16_t u16x1, uint16_t u16y1, uint16_t u16x2, uint16_t u16y2)
+{
+	float fSlope, fOffset;
+	uint16_t u16xBegin, u16xEnd, u16yBegin, u16yEnd;
+
+	// EXTprintf("\r\n> Print LineXY: x1: %d, y1: %d, x2: %d, y2: %d.", x1, y1, x2, y2);
+
+	if (u16x1 < u16x2)
+	{
+		u16xBegin = u16x1;
+		u16xEnd = u16x2;
+	}
+	else
+	{
+		u16xBegin = u16x2;
+		u16xEnd = u16x1;
+	}
+
+	if (u16y1 < u16y2)
+	{
+		u16yBegin = u16y1;
+		u16yEnd = u16y2;
+	}
+	else
+	{
+		u16yBegin = u16y2;
+		u16yEnd = u16y1;
+	}
+
+	if (!((u16yBegin <= (u16yOffset + DRAW_COLUMN_SIZE_MAX)) && (u16yEnd >= u16yOffset)))
+		return;
+
+	if (u16x1 == u16x2)
+	{
+		for (uint16_t u16y = u16yBegin; u16y <= u16yEnd; u16y++)
+		{
+			if (((u16y - u16yOffset) >= 0) && ((u16y - u16yOffset) < DRAW_COLUMN_SIZE_MAX))
+				u8Prinu8TWordXY[u16y - u16yOffset][u16x1 / 8] |= u8BitMask8[u16x1 % 8];
+		}
+	}
+	else
+	{
+		fSlope = (float)(u16y2 - u16y1) / (u16x2 - u16x1);
+
+		fOffset = (float)(u16x2 * u16y1 - u16x1 * u16y2) / (u16x2 - u16x1);
+
+		if ((fSlope > -1) && (fSlope < 1))
+		{
+			for (float f_x = u16xBegin; f_x <= u16xEnd; f_x += 0.5f)
+			{
+				float f_y = fSlope * f_x + fOffset;
+				int16_t i16y = (int)(round(f_y)) - u16yOffset;
+				uint16_t u16x = (int)(round(f_x));
+
+				if ((i16y >= 0) && (i16y < DRAW_COLUMN_SIZE_MAX))
+					u8Prinu8TWordXY[i16y][u16x / 8] |= u8BitMask8[u16x % 8];
+			}
+		}
+		else
+		{
+			for (float f_y = u16yBegin; f_y <= u16yEnd; f_y += 0.5f)
+			{
+				float f_x = (f_y - fOffset) / fSlope;
+				int16_t i16y = (int)(round(f_y)) - u16yOffset;
+				uint16_t u16x = (int)(round(f_x));
+
+				if ((i16y >= 0) && (i16y < DRAW_COLUMN_SIZE_MAX))
+					u8Prinu8TWordXY[i16y][u16x / 8] |= u8BitMask8[u16x % 8];
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Draw a 8x16 number versus horizontal axis on the array template.
+// @param  u8x: position on a row of the start number.
+//         u16y: y coordinate of the start number.
+//         pu8Number: Pointer to the array of the number to print.
+//         u8DotPos: if > 0 then is the position of the floating point.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_NumberXY(uint8_t u8x, uint16_t u16y, uint8_t *pu8Number, uint8_t u8DotPos)
+{
+	uint16_t u16Addr;
+	uint8_t u8Buf, u8Buf2, u8Buf3[16];
+	uint8_t u8NumCnt = 0;
+
+	// EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_NumberXY");
+
+	if (!((u16y <= (u16yOffset + DRAW_COLUMN_SIZE_MAX - 1)) &&
+		  ((u16y + 15) >= u16yOffset)))
+		return;
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf3, 0x00, sizeof(u8Buf3));
+
+	while (pu8Number[u8NumCnt] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u16Addr = (pu8Number[u8NumCnt] - 0x20) * 16;
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8PrintBuffer[i] = ASCII_WORD[u16Addr + u8PosCnt];
+
+			u8PrintBuffer[8 + i] = ASCII_WORD[u16Addr + u8PosCnt + 1];
+
+			u8PosCnt += 2;
+		}
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8Buf = 0;
+			u8Buf2 = 0;
+
+			for (int j = 0; j < 8; j++)
+			{
+				if ((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					u8Buf |= 0x80;
+				else
+					u8Buf &= 0x7F;
+
+				if ((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					u8Buf2 |= 0x80;
+				else
+					u8Buf2 &= 0x7F;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf2 = u8Buf2 >> 1;
+				}
+			}
+
+			u8Buf3[i] = u8Buf;
+			u8Buf3[8 + i] = u8Buf2;
+		}
+
+		for (int i = 0; i < DRAW_COLUMN_SIZE_MAX; i++)
+		{
+			if (((i + u16yOffset - u16y) >= 0) && ((i + u16yOffset - u16y) < 16))
+			{
+				u8Prinu8TWordXY[i][u8x * 2] = u8Buf3[i + u16yOffset - u16y];
+
+				if (u8DotPos > 0)
+					if ((((i + u16yOffset - u16y) == 11) || ((i + u16yOffset - u16y) == 12)) &&
+						(u8NumCnt == u8DotPos))
+						u8Prinu8TWordXY[i][u8x * 2 - 1] |= (u8BitMask8[2] | u8BitMask8[3]);
+			}
+		}
+
+		u8NumCnt++;
+		u8x++;
+	}
+}
+
+//============================================================================//
+// @brief  Draw a 8x16 string versus horizontal axis on the array template.
+// @param  u8x: position on a row of the start character.
+//         u16y: y coordinate of the start character.
+//         pu8Text: Pointer to the array of the text to print.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_StringXY(uint8_t u8x, uint16_t u16y, uint8_t *pu8Text)
+{
+	uint16_t u16Addr;
+	uint8_t u8Buf, u8Buf2, u8Buf3[16];
+	uint8_t u8CharCnt = 0;
+
+	// EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_StringXY");
+
+	if (!((u16y <= (u16yOffset + DRAW_COLUMN_SIZE_MAX - 1)) && ((u16y + 15) >= u16yOffset)))
+		return;
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf3, 0x00, sizeof(u8Buf3));
+
+	while (pu8Text[u8CharCnt] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u16Addr = (pu8Text[u8CharCnt] - 0x20) * 16;
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8PrintBuffer[i] = ASCII_WORD[u16Addr + u8PosCnt];
+
+			u8PrintBuffer[8 + i] = ASCII_WORD[u16Addr + u8PosCnt + 1];
+
+			u8PosCnt += 2;
+		}
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8Buf = 0;
+			u8Buf2 = 0;
+
+			for (int j = 0; j < 8; j++)
+			{
+				if ((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					u8Buf |= 0x80;
+				else
+					u8Buf &= 0x7F;
+
+				if ((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					u8Buf2 |= 0x80;
+				else
+					u8Buf2 &= 0x7F;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf2 = u8Buf2 >> 1;
+				}
+			}
+
+			u8Buf3[i] = u8Buf;
+			u8Buf3[8 + i] = u8Buf2;
+		}
+
+		for (int i = 0; i < DRAW_COLUMN_SIZE_MAX; i++)
+		{
+			if (((i + u16yOffset - u16y) >= 0) && ((i + u16yOffset - u16y) < 16))
+				u8Prinu8TWordXY[i][u8x * 2] = u8Buf3[i + u16yOffset - u16y];
+		}
+
+		u8CharCnt++;
+		u8x++;
+	}
+}
+
+//============================================================================//
+// @brief  Draw a 8x16 number versus vertical axis on the array template.
+// @param  u16x: x coordinate of the start number.
+//         u16y: y coordinate of the start number.
+//         pu8Number: Pointer to the array of the number to print.
+//         u8DotPos: if > 0 then is the position of the floating point.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_NumberXY_Vertical(uint16_t u16x, uint16_t u16y, uint8_t *pu8Number, int iDotPos)
+{
+	uint16_t u16Addr, u16yDot;
+	int16_t i16xT, i16yT;
+	uint8_t u8Buf, u8Buf2, u8Buf3[16];
+	uint8_t u8NumCnt = 0;
+
+	// EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_String");
+
+	if (!((u16y <= (u16yOffset + DRAW_COLUMN_SIZE_MAX - 1)) &&
+		  ((u16y + (strlen((char *)pu8Number) * 9) - 1) >= u16yOffset)))
+		return;
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf3, 0x00, sizeof(u8Buf3));
+
+	u16yDot = u16y + (9 * iDotPos) - 1;
+
+	while (pu8Number[u8NumCnt] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u16Addr = (pu8Number[u8NumCnt] - 0x20) * 16;
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8PrintBuffer[i] = ASCII_WORD[u16Addr + u8PosCnt];
+
+			u8PrintBuffer[8 + i] = ASCII_WORD[u16Addr + u8PosCnt + 1];
+
+			u8PosCnt += 2;
+		}
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8Buf = 0;
+			u8Buf2 = 0;
+
+			for (int j = 0; j < 8; j++)
+			{
+				if ((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					u8Buf |= 0x80;
+				else
+					u8Buf &= 0x7F;
+
+				if ((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					u8Buf2 |= 0x80;
+				else
+					u8Buf2 &= 0x7F;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf2 = u8Buf2 >> 1;
+				}
+			}
+
+			u8Buf3[i] = u8Buf;
+			u8Buf3[8 + i] = u8Buf2;
+		}
+
+		for (int i = 0; i < 16; i++)
+		{
+			i16xT = u16x + 16 - i;
+
+			for (int j = 0; j < 8; j++)
+			{
+				i16yT = u16y + j - u16yOffset;
+
+				if ((i16yT >= 0) && (i16yT < DRAW_COLUMN_SIZE_MAX))
+				{
+					if ((u8Buf3[i] & u8BitMask8[j]))
+						u8Prinu8TWordXY[i16yT][i16xT / 8] |= u8BitMask8[i16xT % 8];
+					else
+						u8Prinu8TWordXY[i16yT][i16xT / 8] &= ~u8BitMask8[i16xT % 8];
+				}
+			}
+		}
+
+		u8NumCnt++;
+		u16y += 9;
+	}
+
+	if (iDotPos > -1)
+	{
+		if (((u16yDot - u16yOffset) >= 0) && ((u16yDot - u16yOffset) < DRAW_COLUMN_SIZE_MAX))
+		{
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 5) / 8] |= u8BitMask8[(u16x + 5) % 8];
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 6) / 8] |= u8BitMask8[(u16x + 6) % 8];
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 11) / 8] |= u8BitMask8[(u16x + 11) % 8];
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 12) / 8] |= u8BitMask8[(u16x + 12) % 8];
+		}
+	}
+}
+
+/*
+//============================================================================//
+// @brief  Draw a 8x16 number versus vertical axis on the array template.
+// @param  u16x: x coordinate of the start number.
+//         u16y: y coordinate of the start number.
+//         pu8Number: Pointer to the array of the number to print.
+//         u8DotPos: if > 0 then is the position of the floating point.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_NumberXY_Vertical2(uint16_t u16x, uint16_t u16y, uint8_t *pu8Number, int iDotPos)
+{
+	uint16_t u16Addr, u16yDot;
+	int16_t i16xT, i16yT;
+	uint8_t u8Buf[16];
+	uint8_t u8NumCnt = 0;
+
+
+	//EXTprintf("\r\n> ASCII_WORD PrintASCII_6x12_String");
+
+	if(!((u16y <= (u16yOffset + DRAW_COLUMN_SIZE_MAX - 1)) &&
+		((u16y + (strlen((char *)pu8Number) * 7) - 1) >= u16yOffset)))
+		return;
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf, 0x00, sizeof(u8Buf));
+
+	u16yDot = u16y + (7 * iDotPos) - 1;
+
+	while(pu8Number[u8NumCnt] > 0x00)
+	{
+		u16Addr = (pu8Number[u8NumCnt] - 0x20) * 16;
+
+		memcpy(u8Buf, &ASCII_WORD_6x16[u16Addr], 16);
+
+		for(int i = 0; i < 16; i++)
+		{
+			i16xT = u16x + 16 - i;
+
+			for(int j = 0; j < 8; j++)
+			{
+				i16yT = u16y + 8 - j - u16yOffset;
+
+				if((i16yT >= 0) && (i16yT < DRAW_COLUMN_SIZE_MAX))
+				{
+					if((u8Buf[i] & u8BitMask8[j]))
+						u8Prinu8TWordXY[i16yT][i16xT / 8] |= u8BitMask8[i16xT % 8];
+					else
+						u8Prinu8TWordXY[i16yT][i16xT / 8] &= ~u8BitMask8[i16xT % 8];
+				}
+			}
+		}
+
+		u8NumCnt++;
+		u16y += 7;
+	}
+
+	if(iDotPos > -1)
+	{
+		if(((u16yDot - u16yOffset) >= 0) && ((u16yDot - u16yOffset) < DRAW_COLUMN_SIZE_MAX))
+		{
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 4) / 8] |= u8BitMask8[(u16x + 4) % 8];
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 5) / 8] |= u8BitMask8[(u16x + 5) % 8];
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 10) / 8] |= u8BitMask8[(u16x + 10) % 8];
+			u8Prinu8TWordXY[u16yDot - u16yOffset][(u16x + 11) / 8] |= u8BitMask8[(u16x + 11) % 8];
+		}
+	}
+}
+*/
+
+//============================================================================//
+// @brief  Draw a 8x16 string versus vertical axis on the array template.
+// @param  u16x: x coordinate of the start character.
+//         u16y: y coordinate of the start character.
+//         pu8Text: Pointer to the array of the text to print.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_StringXY_Vertical(uint16_t u16x, uint16_t u16y, uint8_t *pu8Text)
+{
+	uint16_t u16Addr;
+	int16_t i16xT, i16yT;
+	uint8_t u8Buf, u8Buf2, u8Buf3[16];
+	uint8_t u8CharCnt = 0;
+
+	// EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_String");
+
+	if (!((u16y <= (u16yOffset + DRAW_COLUMN_SIZE_MAX - 1)) &&
+		  ((u16y + (strlen((char *)pu8Text) * 9) - 1) >= u16yOffset)))
+		return;
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf3, 0x00, sizeof(u8Buf3));
+
+	while (pu8Text[u8CharCnt] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u16Addr = (pu8Text[u8CharCnt] - 0x20) * 16;
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8PrintBuffer[i] = ASCII_WORD[u16Addr + u8PosCnt];
+			u8PrintBuffer[8 + i] = ASCII_WORD[u16Addr + u8PosCnt + 1];
+			u8PosCnt += 2;
+		}
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8Buf = 0;
+			u8Buf2 = 0;
+
+			for (int j = 0; j < 8; j++)
+			{
+				if ((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					u8Buf |= 0x80;
+				else
+					u8Buf &= 0x7F;
+
+				if ((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					u8Buf2 |= 0x80;
+				else
+					u8Buf2 &= 0x7F;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf2 = u8Buf2 >> 1;
+				}
+			}
+
+			u8Buf3[i] = u8Buf;
+			u8Buf3[8 + i] = u8Buf2;
+		}
+
+		for (int i = 0; i < 16; i++)
+		{
+			for (int j = 0; j < 8; j++)
+			{
+				i16xT = u16x + 16 - i;
+
+				i16yT = u16y + j - u16yOffset;
+
+				if ((i16yT >= 0) && (i16yT < DRAW_COLUMN_SIZE_MAX))
+				{
+					if ((u8Buf3[i] & u8BitMask8[j]))
+						u8Prinu8TWordXY[i16yT][i16xT / 8] |= u8BitMask8[i16xT % 8];
+					else
+						u8Prinu8TWordXY[i16yT][i16xT / 8] &= ~u8BitMask8[i16xT % 8];
+				}
+			}
+		}
+
+		u8CharCnt++;
+		u16y += 9;
+	}
+}
+
+#if 0
+//============================================================================//
+// @brief  Draw a 8x16 string versus vertical axis.
+// @param  x: Position on a row of the start character.
+//         text: Pointer to the array of the text to print.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_String(uint8_t u8x, uint8_t *pu8Text)
+{
+	uint16_t u8Addr;
+	uint8_t u8Buf, u8Buf2, u8Buf3[16];
+	uint8_t u8t = 0;
+
+
+	//EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_String");
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf3, 0x00, sizeof(u8Buf3));
+
+	while(pu8Text[u8t] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+
+		u8Addr = (pu8Text[u8t] - 0x20) * 16;
+
+		for(int i = 0; i < 8; i++)
+		{
+			u8PrintBuffer[i] = ASCII_WORD[u8Addr + u8PosCnt];
+			u8PrintBuffer[8 + i] = ASCII_WORD[u8Addr + u8PosCnt + 1];
+			u8PosCnt += 2;
+		}
+
+		for(int i = 0; i < 8; i++)
+		{
+			u8Buf = 0;
+			u8Buf2 = 0;
+
+
+			for(int j = 0; j < 8; j++)
+			{
+				if((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					u8Buf |= 0x80;
+				else
+					u8Buf &= 0x7F;
+
+				if((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					u8Buf2 |= 0x80;
+				else
+					u8Buf2 &= 0x7F;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf2 = u8Buf2 >> 1;
+				}
+			}
+
+			u8Buf3[i] = u8Buf;
+			u8Buf3[8 + i]= u8Buf2;
+		}
+
+		for(int i = 0; i < 16; i++)
+			Prinu8TWord[i][(u8x * 2)] = u8Buf3[i];
+
+		u8t++;
+		u8x++;
+	}
+}
+#endif
+
+// #if 0
+//============================================================================//
+//  @brief  Draw a 8x16 string versus vertical axis.
+//  @param  x: Position on a row of the start character.
+//          text: Pointer to the array of the text to print.
+//  @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_String(uint8_t u8x, uint8_t *pu8Text)
+{
+	uint16_t u8Addr;
+	uint8_t u8t = 0;
+	uint8_t u8Temp, u8TempReversed;
+
+	// EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_String");
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+
+	while (pu8Text[u8t] > 0x00)
+	{
+		u8Addr = pu8Text[u8t] - 0x20;
+
+		for (int i = 0; i < 16; i++)
+		{
+			u8Temp = ucFontFull[u8Addr][i * 2];
+
+			for (int j = 0; j < 8; j++)
+			{
+				u8TempReversed = (u8TempReversed << 1) | ((u8Temp >> j) & 1);
+			}
+
+			Prinu8TWord[i][u8x * 2] = u8TempReversed;
+
+			u8Temp = ucFontFull[u8Addr][i * 2 + 1];
+
+			for (int j = 0; j < 8; j++)
+			{
+				u8TempReversed = (u8TempReversed << 1) | ((u8Temp >> j) & 1);
+			}
+
+			Prinu8TWord[i][u8x * 2 + 1] = u8TempReversed;
+		}
+
+		u8t++;
+		u8x++;
+	}
+}
+// #endif
+
+//============================================================================//
+//[Nancy add]
+// @brief  Draw a 16x16 string versus vertical axis.
+// @param  x: Position on a row of the start character.
+//         text: Pointer to the array of the text to print.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_16x16_String(uint8_t u8x, uint8_t *u8Text)
+{
+	uint8_t u8t;
+	// uint8_t IndexHL[2];
+	// uint32_t Big5Index, Index;
+	uint8_t u8Buf = 0;
+	uint8_t u8Buf2 = 0;
+	// uint8_t u8Buf4 = 0;
+	uint16_t u8Addr;
+	uint8_t u8Buf3[32];
+
+	// EXTprintf("\r\n> PrintBig5_16x16_String");
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+
+	u8t = 0;
+
+	while (u8Text[u8t] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u8Addr = (u8Text[u8t] - 0x20) * 32;
+
+		for (int i = 0; i < 16; i++)
+		{
+			u8PrintBuffer[i] = ASCII_WORD_16x16[u8Addr + u8PosCnt];
+			u8PrintBuffer[16 + i] = ASCII_WORD_16x16[u8Addr + u8PosCnt + 1];
+			u8PosCnt += 2;
+		}
+
+		//[Nancy command]:
+		// recombine ASCII_WORD (16x16):
+		//																			LSB
+		// A[8] B C D E F G H I J K L M N O P-->>(a0b0c0d0e0f0g0h0).....(a7b7c7d7e7f7g7h7)(i0j0k0l0m0n0o0p0).....(i7j7k7l7m7n7o7p7)
+		// Q[8] R S T U V W X Y Z ...........-->>
+		for (int k = 0; k < 2; k++)
+		{
+			for (int i = 0; i < 8; i++)
+			{
+				u8Buf = 0;
+				u8Buf2 = 0;
+
+				for (int j = 0; j < 8; j++)
+				{
+					// if((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					if ((u8PrintBuffer[k * 16 + j] & u8BitMask16[i]) > 0)
+						u8Buf |= 0x80;
+					else
+						u8Buf &= 0x7F;
+
+					// if((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					if ((u8PrintBuffer[k * 16 + (8 + j)] & u8BitMask16[i]) > 0)
+						u8Buf2 |= 0x80;
+					else
+						u8Buf2 &= 0x7F;
+
+					if (j != 7)
+					{
+						u8Buf = u8Buf >> 1;
+						u8Buf2 = u8Buf2 >> 1;
+					}
+				}
+
+				u8Buf3[k * 16 + i] = u8Buf;
+				u8Buf3[k * 16 + (8 + i)] = u8Buf2;
+			}
+		}
+
+		for (int i = 0; i < 32; i++)
+		{
+			Prinu8TWord[i][(u8x * 2)] = u8Buf3[i];
+		}
+
+		u8t++;
+		u8x++;
+	}
+}
+
+//============================================================================//
+// @brief  Draw a 16x16 string versus vertical axis.
+// @param  x: Position on a row of the start character.
+//         text: Pointer to the array of the text to print.
+// @retval None.
+//============================================================================//
+void PRN_PrintBig5_16x16_String(uint8_t u8x, uint8_t *u8Text)
+{
+	uint8_t u8t;
+	// uint8_t IndexHL[2];
+	// uint32_t Big5Index, Index;
+	uint8_t u8Buf = 0;
+	uint8_t u8Buf2 = 0;
+	uint8_t u8Buf3 = 0;
+	uint8_t u8Buf4 = 0;
+	uint16_t u16Word;
+	uint32_t u32Addr;
+
+	// EXTprintf("\r\n> PrintBig5_16x16_String");
+
+	u8t = 0;
+
+	while (u8Text[u8t] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u16Word = 0x0000;
+		u32Addr = 0x00;
+		u16Word = u16Word | u8Text[u8t];
+		u16Word = u16Word << 8;
+		u16Word = (u16Word & 0xFF00) | u8Text[u8t + 1];
+		u32Addr = u16Word - 0xA000;
+		u32Addr = u32Addr * 32;
+
+		// SPI1_Read(u32Addr, 32, u8PrintBuffer);
+		MX25L_MultiBytesRead(u32Addr, u8PrintBuffer, 32);
+
+		for (int i = 0; i < 16; i++)
+		{
+			u8Buf = u8PrintBuffer[u8PosCnt];
+			u8Buf3 = u8PrintBuffer[u8PosCnt + 1];
+
+			for (int j = 0; j < 8; j++)
+			{
+				if (1 == (u8Buf & 0x01))
+					u8Buf2 |= 0x01;
+				else
+					u8Buf2 &= 0xFE;
+
+				if (1 == (u8Buf3 & 0x01))
+					u8Buf4 |= 0x01;
+				else
+					u8Buf4 &= 0xFE;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf3 = u8Buf3 >> 1;
+					u8Buf2 = u8Buf2 << 1;
+					u8Buf4 = u8Buf4 << 1;
+				}
+			}
+			Prinu8TWord[i][(u8x * 2)] = u8Buf2;
+			Prinu8TWord[i][(u8x * 2) + 1] = u8Buf4;
+
+			u8PosCnt += 2;
+		}
+
+		u8x++;
+		u8t += 2;
+	}
+}
+
+//============================================================================//
+// @brief  Draw a 16x16 string versus vertical axis. Chinese word font get from table we build
+// @param  x: Position on a row of the start character.
+//         text: Pointer to the array of the text to print.
+// @retval None.
+//============================================================================//
+void PRN_PrintBig5_16x16_String_FromTable(uint8_t u8x, uint8_t *u8Text)
+{
+	uint8_t u8t;
+	// uint8_t IndexHL[2];
+	// uint32_t Big5Index, Index;
+	uint8_t u8Buf = 0;
+	uint8_t u8Buf2 = 0;
+	uint8_t u8Buf3 = 0;
+	uint8_t u8Buf4 = 0;
+	uint16_t u16Word;
+	uint32_t u32Addr;
+
+	// EXTprintf("\r\n> PrintBig5_16x16_String");
+
+	u8t = 0;
+
+	while (u8Text[u8t] > 0x00)
+	{
+		uint8_t u8PosCnt = 0;
+
+		u16Word = 0x0000;
+		u32Addr = 0x00;
+		u16Word = u16Word | u8Text[u8t];
+		u16Word = u16Word << 8;
+		u16Word = (u16Word & 0xFF00) | u8Text[u8t + 1];
+		u32Addr = u16Word - 0xA000;
+		u32Addr = u32Addr * 32;
+
+		// SPI1_Read(u32Addr, 32, u8PrintBuffer);
+		// MX25L_MultiBytesRead(u32Addr, u8PrintBuffer, 32);
+
+		//		for(int i=0; i<32; i++)
+		//			u8PrintBuffer[i] = Chinese_table[i];
+
+		Chinese_wordFont(u32Addr, u8PrintBuffer);
+
+		for (int i = 0; i < 16; i++)
+		{
+			u8Buf = u8PrintBuffer[u8PosCnt];
+			u8Buf3 = u8PrintBuffer[u8PosCnt + 1];
+
+			for (int j = 0; j < 8; j++)
+			{
+				if (1 == (u8Buf & 0x01))
+					u8Buf2 |= 0x01;
+				else
+					u8Buf2 &= 0xFE;
+
+				if (1 == (u8Buf3 & 0x01))
+					u8Buf4 |= 0x01;
+				else
+					u8Buf4 &= 0xFE;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf3 = u8Buf3 >> 1;
+					u8Buf2 = u8Buf2 << 1;
+					u8Buf4 = u8Buf4 << 1;
+				}
+			}
+			Prinu8TWord[i][(u8x * 2)] = u8Buf2;
+			Prinu8TWord[i][(u8x * 2) + 1] = u8Buf4;
+
+			u8PosCnt += 2;
+		}
+
+		u8x++;
+		u8t += 2;
+	}
+}
+
+//============================================================================//
+// @brief  Draw a 8x16 string.
+// @param  u8x: Position on a row of the start character.
+// @retval None.
+//============================================================================//
+void PRN_PrintASCII_8x16_AllBlock(uint8_t u8x)
+{
+	uint8_t u8Buf, u8Buf2, u8Buf3[16];
+	uint8_t u8t = 0;
+
+	// EXTprintf("\r\n> ASCII_WORD PrintASCII_8x16_String");
+
+	memset(u8PrintBuffer, 0x00, sizeof(u8PrintBuffer));
+	memset(u8Buf3, 0x00, sizeof(u8Buf3));
+
+	for (u8t = 0; u8t < 16; u8t++)
+	{
+		uint8_t u8PosCnt = 0;
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8PrintBuffer[i] = 0xFF;
+			u8PrintBuffer[8 + i] = 0xFF;
+			u8PosCnt += 2;
+		}
+
+		for (int i = 0; i < 8; i++)
+		{
+			u8Buf = 0;
+			u8Buf2 = 0;
+
+			for (int j = 0; j < 8; j++)
+			{
+				if ((u8PrintBuffer[j] & u8BitMask16[i]) > 0)
+					u8Buf |= 0x80;
+				else
+					u8Buf &= 0x7F;
+
+				if ((u8PrintBuffer[8 + j] & u8BitMask16[i]) > 0)
+					u8Buf2 |= 0x80;
+				else
+					u8Buf2 &= 0x7F;
+
+				if (j != 7)
+				{
+					u8Buf = u8Buf >> 1;
+					u8Buf2 = u8Buf2 >> 1;
+				}
+			}
+
+			u8Buf3[i] = u8Buf;
+			u8Buf3[8 + i] = u8Buf2;
+		}
+
+		for (int i = 0; i < 16; i++)
+			Prinu8TWord[i][(u8x * 2)] = u8Buf3[i];
+
+		u8x++;
+	}
+}
+
+//============================================================================//
+// @brief  Reset the template array for normal print functions.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_ClearPrintLine(void)
+{
+	// for(int i = 0; i < 16; i++)
+	//	for(int j = 0; j < 48; j++)
+	//		Prinu8TWord[i][j] = 0;
+	memset(Prinu8TWord, 0x00, sizeof(Prinu8TWord));
+}
+
+//============================================================================//
+// @brief  Reset the template array for XY print functions.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_ClearPrintLineXY(void)
+{
+	// for(int i = 0; i < DRAW_COLUMN_SIZE_MAX; i++)
+	//	for(int j = 0; j < 48; j++)
+	//		u8Prinu8TWordXY[i][j] = 0;
+	memset(u8Prinu8TWordXY, 0x00, sizeof(u8Prinu8TWordXY));
+}
+
+//============================================================================//
+// @brief  Draw a chart on the array template.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All of the data has been printed.
+//============================================================================//
+bool PRN_GetPrintChartXY(void)
+{
+	bool bRes;
+	char cBuf[20];
+	uint16_t u16Min, u16Speed;
+	uint16_t u16Min2, u16Speed2;
+
+	PRN_ClearPrintLineXY();
+
+	if (u16yOffset < u16TemplateWidth)
+	{
+		for (int i = 0; i < ((60 * u8HoursNum) - 1); i += 1)
+		{
+			u16Min = (i + 1440 + u16StartMin - 60 * u8HoursNum) % 1440;
+
+			u16Min2 = (i + 1440 + u16StartMin - 60 * u8HoursNum + 1) % 1440;
+
+			u16Speed = u8SpeedRecordTemp[u16Min];
+
+			u16Speed2 = u8SpeedRecordTemp[u16Min2];
+
+			if (u16Speed > CHART_SPEED_AXIS_MAX)
+				u16Speed = CHART_SPEED_AXIS_MAX;
+
+			if (u16Speed2 > CHART_SPEED_AXIS_MAX)
+				u16Speed2 = CHART_SPEED_AXIS_MAX;
+
+			// PRN_PrintLineXY(42, (38 + i * 2), 42 + (uint16_t)((float)u16Speed * 1.6), (38 + i * 2));
+
+			// PRN_PrintPointXY(42 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2));
+
+			// PRN_PrintLineXY(42, (38 + i * 2), 42 + (uint16_t)((float)u16Speed * 0.6), (38 + i * 2));
+
+			// PRN_PrintLineXY(39 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2), 42 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2));
+
+			PRN_PrintLineXY(42 + (uint16_t)((float)u16Speed * 2.3f), (38 + i * 2), 42 + (uint16_t)((float)u16Speed2 * 2.3f), (38 + i * 2 + 2));
+
+			// PRN_PrintLineXY(40 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2), 44 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2));
+			// PRN_PrintLineXY(42 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2 - 1), 42 + (uint16_t)((float)u16Speed * 2.3), (38 + i * 2 + 1));
+
+			if ((i % 60) == 0)
+			{
+				uint16_t u16Hour = u16Min / 60;
+
+				uint16_t u16Minute = u16Min % 60;
+
+				sprintf(cBuf, "%02d%02d", u16Hour, u16Minute);
+
+				PRN_PrintASCII_8x16_NumberXY_Vertical(20, (38 + i * 2 - 16), (uint8_t *)cBuf, 2);
+
+				PRN_PrintLineXY(36, (38 + i * 2), 42, (38 + i * 2));
+			}
+			else if ((i % 15) == 0)
+			{
+				cBuf[0] = 127U;
+				cBuf[1] = 0x00;
+
+				PRN_PrintASCII_8x16_StringXY_Vertical(20, (38 + i * 2 - 4), (uint8_t *)cBuf);
+
+				PRN_PrintLineXY(36, (38 + i * 2), 42, (38 + i * 2));
+			}
+			else if ((i % 5) == 0)
+			{
+				PRN_PrintLineXY(36, (38 + i * 2), 42, (38 + i * 2));
+			}
+			else
+			{
+				PRN_PrintLineXY(39, (38 + i * 2), 42, (38 + i * 2));
+			}
+		}
+
+		// PRN_PrintASCII_8x16_NumberXY_Vertical2(180, 45, (uint8_t *)"1234567890", -1);
+
+		u16Min = (u16StartMin + 1440 - 1) % 1440;
+
+		uint16_t u16Hour = u16Min / 60;
+
+		uint16_t u16Minute = u16Min % 60;
+
+		sprintf(cBuf, "%02d%02d", u16Hour, u16Minute);
+
+		PRN_PrintASCII_8x16_NumberXY_Vertical(20, 38 + 120 * u8HoursNum - 2 - 16, (uint8_t *)cBuf, 2);
+
+		PRN_PrintLineXY(36, 38 + 120 * u8HoursNum - 2, 42, 38 + 120 * u8HoursNum - 2);
+
+		for (int i = 0; i <= 14; i++)
+		{
+			if ((i % 2) == 0)
+			{
+				sprintf(cBuf, "%03d", (i * 10));
+
+				PRN_PrintASCII_8x16_NumberXY_Vertical((42 + (i * 23) - 8), 4, (uint8_t *)cBuf, -1);
+
+				// PRN_PrintLineXY((42 + 23 * i), 33, (42 + 23 * i), 38 + 120 * u8HoursNum + 20);
+				PRN_PrintLineXY((42 + 23 * i), 33, (42 + 23 * i), 38);
+			}
+			else
+				// PRN_PrintLineXY((42 + 23 * i), 35, (42 + 23 * i), 38 + 120 * u8HoursNum + 20);
+				PRN_PrintLineXY((42 + 23 * i), 35, (42 + 23 * i), 38);
+		}
+
+		memset(cBuf, 0x00, sizeof(cBuf));
+
+		PRN_PrintASCII_8x16_StringXY_Vertical(1, 22, (uint8_t *)cPreDate);
+
+		PRN_PrintASCII_8x16_StringXY_Vertical(368, 38 + 120 * u8HoursNum - 70, (uint8_t *)cCurrDate);
+
+		PRN_PrintLineXY(42, 38, 368, 38);
+
+		PRN_PrintLineXY(42, 38, 42, 38 + 120 * u8HoursNum + 20);
+
+		u8LStep++;
+
+		bRes = TRUE;
+	}
+	else
+		bRes = FALSE;
+
+	return bRes;
+}
+/*
+bool PRN_GetPrintChartXY(void)
+{
+	bool bRes;
+	char cBuf[20];
+	uint16_t u16Min, u16Speed;
+
+
+	PRN_ClearPrintLineXY();
+
+	if(u16yOffset < u16TemplateWidth)
+	{
+		for(int i = 0; i < (60 * u8HoursNum); i += 1)
+		{
+			u16Min = (i + 1440 + u16StartMin - 60 * u8HoursNum) % 1440;
+
+			u16Speed = u8SpeedRecord[u16Min];
+
+			PRN_PrintLineXY(42, (38 + i * 2), 42 + (uint16_t)((float)u16Speed * 1.6), (38 + i * 2));
+
+			//PRN_PrintLineXY(42, (38 + i * 2), 42 + (uint16_t)((float)u16Speed * 0.6), (38 + i * 2));
+
+			//PRN_PrintLineXY(39 + (uint16_t)((float)u16Speed * 1.6), (38 + i * 2), 42 + (uint16_t)((float)u16Speed * 1.6), (38 + i * 2));
+
+			if((i % 60) == 0)
+			{
+				uint16_t u16Hour = u16Min / 60;
+
+				uint16_t u16Minute = u16Min % 60;
+
+				sprintf(cBuf, "%02d%02d", u16Hour, u16Minute);
+
+				PRN_PrintASCII_8x16_NumberXY_Vertical(20, (38 + i * 2 - 16), (uint8_t*)cBuf, 2);
+
+				PRN_PrintLineXY(36, (38 + i * 2), 42, (38 + i * 2));
+			}
+			else if((i % 15) == 0)
+			{
+				cBuf[0] = 127U;
+				cBuf[1] = 0x00;
+
+				PRN_PrintASCII_8x16_StringXY_Vertical(20, (38 + i * 2 - 4), (uint8_t*)cBuf);
+
+				PRN_PrintLineXY(36, (38 + i * 2), 42, (38 + i * 2));
+			}
+			else if((i % 5) == 0)
+			{
+				PRN_PrintLineXY(39, (38 + i * 2), 42, (38 + i * 2));
+			}
+		}
+
+		u16Min = (u16StartMin + 1440 - 1) % 1440;
+
+		uint16_t u16Hour = u16Min / 60;
+
+		uint16_t u16Minute = u16Min % 60;
+
+		sprintf(cBuf, "%02d%02d", u16Hour, u16Minute);
+
+		PRN_PrintASCII_8x16_NumberXY_Vertical(20, 38 + 120 * u8HoursNum - 2 - 16, (uint8_t*)cBuf, 2);
+
+		PRN_PrintLineXY(36, 38 + 120 * u8HoursNum - 2, 42, 38 + 120 * u8HoursNum - 2);
+
+		for(int i = 0; i <= 20; i++)
+		{
+			if((i % 2) == 0)
+			{
+				sprintf(cBuf, "%03d", (i * 10));
+
+				PRN_PrintASCII_8x16_NumberXY_Vertical((42 + (i * 16) - 8), 4, (uint8_t*)cBuf, -1);
+
+				PRN_PrintLineXY((42 + 16 * i), 33, (42 + 16 * i), 38 + 120 * u8HoursNum + 20);
+			}
+			else
+				PRN_PrintLineXY((42 + 16 * i), 35, (42 + 16 * i), 38 + 120 * u8HoursNum + 20);
+		}
+
+		PRN_PrintLineXY(42, 38, 42, 38 + 120 * u8HoursNum + 20);
+
+		u8LStep++;
+
+		bRes = TRUE;
+	}
+	else
+		bRes = FALSE;
+
+	return bRes;
+}
+*/
+
+//============================================================================//
+// @brief  Print a test table.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All the data has been printed.
+//============================================================================//
+bool PRN_GetPrinu8TWord(void)
+{
+	bool RESULT;
+	char cBuf[40];
+	uint32_t u32NowSec;
+	uint8_t u8Buf[7];
+	// RTC_TimeTypeDef rtcTime;
+	// RTC_DateTypeDef rtcDate;
+
+	PRN_ClearPrintLine();
+
+	switch (u8LStep)
+	{
+	case 0:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			memset(cBuf, 0x00, sizeof(cBuf));
+
+			sprintf(cBuf, "Test printer.");
+
+			strcpy(prtDataHandle.cDataBuf[0], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[0]);
+		}
+
+		u8LStep = 1;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 1:
+		u32NowSec = System_GetTime();
+
+		SecToBCDTime(u32NowSec, u8Buf);
+
+		sprintf(cBuf, "Time:%02X/%02X/%02X%02X %02X:%02X",
+				u8Buf[2], u8Buf[3], u8Buf[0], u8Buf[1], u8Buf[4], u8Buf[5]);
+
+		/*
+			HAL_RTC_GetTime(&hrtc, &rtcTime, RTC_FORMAT_BCD);
+			HAL_RTC_GetDate(&hrtc, &rtcDate, RTC_FORMAT_BCD);
+
+			sprintf(Buf, "%c%c/%c%c/%c%c%c%c %c%c:%c%c",
+							HIGHBCDToASCII(rtcDate.Month), LowBCDToASCII(rtcDate.Month),
+							HIGHBCDToASCII(rtcDate.Date), LowBCDToASCII(rtcDate.Date),
+							HIGHBCDToASCII(2), LowBCDToASCII(0),
+							HIGHBCDToASCII(rtcDate.Year), LowBCDToASCII(rtcDate.Year),
+							HIGHBCDToASCII(rtcTime.Hours), LowBCDToASCII(rtcTime.Hours),
+							HIGHBCDToASCII(rtcTime.Minutes), LowBCDToASCII(rtcTime.Minutes));
+		*/
+
+		// PRN_PrintASCII_8x16_String(0, (uint8_t *)"列印日期時間");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[1], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[1]);
+		}
+
+		u8LStep = 2;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 2:
+		sprintf(cBuf, "ABCDEFGHIJKLMNOP");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[2], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[2]);
+
+		u8LStep = 3;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 3:
+		sprintf(cBuf, "QRSTUVWXYZ");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[3], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[3]);
+
+		u8LStep = 4;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 4:
+		sprintf(cBuf, "abcdefghijklmnop");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[4], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[4]);
+
+		u8LStep = 5;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 5:
+		sprintf(cBuf, "qrstuvwxyz");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[5], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[5]);
+
+		u8LStep = 6;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 6:
+		sprintf(cBuf, "1234567890");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[6], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[6]);
+
+		u8LStep = 7;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 7:
+		strcpy(cBuf, (char *)"!@#$%^&*()_+?/.,");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[7], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[7]);
+
+		u8LStep = 8;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 8:
+		// PRN_PrintASCII_8x16_String(0, (uint8_t *)"捷世林科技");
+		sprintf(cBuf, "Finish print");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[8], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[8]);
+
+		u8LStep = 9;
+
+		RESULT = TRUE;
+
+		break;
+
+	case 9:
+		// PRN_PrintASCII_8x16_String(0, (uint8_t *)"測試列印結束");
+		sprintf(cBuf, "Logging out");
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[9], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[9]);
+
+		u8LStep = 10;
+
+		RESULT = TRUE;
+
+		break;
+
+	default:
+		RESULT = FALSE;
+
+		break;
+	}
+
+	return RESULT;
+}
+
+#if 0
+//============================================================================//
+// @brief  Draw print table 1.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All of the data has been printed.
+//============================================================================//
+bool PRN_PrintTable1(void)
+{
+	bool bRESULT;
+	uint8_t RTCTime[7], u8PrtDrvStatus;
+	char Buf[20];
+	time_t ttCTime;
+	uint32_t u32TimeBuf;
+	TechnicalDataTypeDef stTechnical;
+
+
+	PRN_ClearPrintLine();
+
+	ttCTime = System_GetTime();
+
+	memset(RTCTime, 0x00, sizeof(RTCTime));
+
+	SecToBCDTime(ttCTime, RTCTime);
+
+	sprintf(Buf, ":%02X/%02X/%02X%02X %02X:%02X",
+	        RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+	SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stTechnical, sizeof(TechnicalDataTypeDef));
+
+	if(u8LStep == 0)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"列印日期時間");
+
+		PRN_PrintASCII_8x16_String(6, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 1;
+	}
+	else if(u8LStep == 1)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車牌號碼");
+
+		bRESULT = TRUE;
+
+		u8LStep = 101;
+	}
+	else if(u8LStep == 101)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		Buf[0] = 0x20;
+
+		Buf[1] = 0x20;
+
+		for(int i = 0; i < sizeof(stTechnical.u8BusID); i++)
+		{
+			if(stTechnical.u8BusID[i] != '\0')
+				Buf[i + 2] = stTechnical.u8BusID[i];
+			else
+				break;
+		}
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 2;
+
+	}
+	else if(u8LStep == 2)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"駕駛姓名");
+
+		bRESULT = TRUE;
+
+		u8LStep = 102;
+	}
+	else if(u8LStep == 102)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		if (g_Setting.u8CurrDrvID == 0)
+		{
+			sprintf(Buf, "  %08X", g_Setting.u32DrvIdNum);
+		}
+		else if (g_Setting.u8CurrDrvID == 1)
+		{
+			sprintf(Buf, "  %08X", g_Setting.u32DrvIdNum2);
+		}
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 3;
+	}
+	else if(u8LStep == 3)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"駕駛行為");
+
+		bRESULT = TRUE;
+
+		u8LStep = 103;
+	}
+	else if(u8LStep == 103)
+	{
+		if (g_Setting.u8CurrDrvID == 1)
+		{
+			u8PrtDrvStatus = g_Setting.u8DrvStatus;
+		}
+		else if (g_Setting.u8CurrDrvID == 2)
+		{
+			u8PrtDrvStatus = g_Setting.u8DrvStatus2;
+		}
+		else
+		{
+			u8PrtDrvStatus = 3;
+		}
+
+		if(u8PrtDrvStatus == 0)
+		{
+			PRN_PrintBig5_16x16_String(2, (uint8_t *)"車停中");
+		}
+		else if(u8PrtDrvStatus == 1)
+		{
+			PRN_PrintBig5_16x16_String(2, (uint8_t *)"行駛中");
+		}
+		else if(u8PrtDrvStatus == 2)
+		{
+			PRN_PrintBig5_16x16_String(2, (uint8_t *)"待班中");
+		}
+		else if(u8PrtDrvStatus == 3)
+		{
+			PRN_PrintBig5_16x16_String(2, (uint8_t *)"休息中");
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 4;
+	}
+	else if(u8LStep == 4)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"開始日期時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 104;
+	}
+	else if(u8LStep == 104)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		//ttCTime = System_GetTime();
+		ttCTime = g_Setting.tDRV_SET.ttDrvWorkStartTime;
+
+		//ttCTime -= g_SysInfo.DrvInfo.WorkTime;
+		//ttCTime -= g_Setting.u32DrWorkTime;
+
+		//if (g_Setting.u8CurrDrvID == 1) {
+		//	u32TimeBuf = g_Setting.stDrvRecDay[13].u32WorkTime + g_Setting.stDrvRecDay[13].u32PauseTime;
+		//} else if (g_Setting.u8CurrDrvID == 2) {
+		//	u32TimeBuf = g_Setting.stDrvRecDay2[13].u32WorkTime + g_Setting.stDrvRecDay2[13].u32PauseTime;
+		//}
+		//ttCTime -= u32TimeBuf;
+
+		SecToBCDTime(ttCTime, RTCTime);
+
+		sprintf(Buf, "  %02X/%02X/%02X%02X %02X:%02X",
+		        RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 5;
+	}
+	else if(u8LStep == 5)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"歷程");
+
+		bRESULT = TRUE;
+
+		u8LStep = 105;
+	}
+	else if(u8LStep == 105)
+	{
+		//if (g_Setting.u8CurrDrvID == 1) {
+		//	u32TimeBuf = g_Setting.stDrvRecDay[13].u32WorkTime + g_Setting.stDrvRecDay[13].u32PauseTime;
+		//} else if (g_Setting.u8CurrDrvID == 2) {
+		//	u32TimeBuf = g_Setting.stDrvRecDay2[13].u32WorkTime + g_Setting.stDrvRecDay2[13].u32PauseTime;
+		//}
+
+		memset(Buf, '\0', sizeof(Buf));
+
+		u32TimeBuf = System_GetTime() - g_Setting.tDRV_SET.ttDrvWorkStartTime;
+
+		//sprintf(Buf, "  %02d hr %02d min", (g_Setting.u32DrWorkTime / 3600), ((g_Setting.u32DrWorkTime % 3600) / 60));
+		sprintf(Buf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 6;
+	}
+	else if(u8LStep == 6)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"累計行駛時間里程");
+
+		bRESULT = TRUE;
+
+		u8LStep = 106;
+	}
+	else if(u8LStep == 106)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		//sprintf(Buf, "  %09.1f km", (float)M_2_100M(g_SysInfo.VehicleState.dDistance) / 10);
+		if (g_Setting.u8CurrDrvID == 1)
+		{
+			sprintf(Buf, "  %09.1f km", (float)M_2_100M(g_Setting.dDriverDistance) / 10);
+		}
+		else if (g_Setting.u8CurrDrvID == 2)
+		{
+			sprintf(Buf, "  %09.1f km", (float)M_2_100M(g_Setting.dDriverDistance2) / 10);
+		}
+		else
+		{
+			sprintf(Buf, " ");
+		}
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 7;
+	}
+	else if(u8LStep == 7)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"累計車停中時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 107;
+	}
+	else if(u8LStep == 107)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		if (g_Setting.u8CurrDrvID == 1)
+		{
+			u32TimeBuf = g_Setting.stDrvRecDay[13].u32PauseTime;
+		}
+		else if (g_Setting.u8CurrDrvID == 2)
+		{
+			u32TimeBuf = g_Setting.stDrvRecDay2[13].u32PauseTime;
+		}
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(Buf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf%3600) / 60));
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 8;
+	}
+	else if(u8LStep == 8)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"累計待班中時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 108;
+	}
+	else if(u8LStep == 108)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		if (g_Setting.u8CurrDrvID == 1)
+		{
+			u32TimeBuf = g_Setting.stDrvRecDay[13].u32StandByTime;
+		}
+		else if (g_Setting.u8CurrDrvID == 2)
+		{
+			u32TimeBuf = g_Setting.stDrvRecDay2[13].u32StandByTime;
+		}
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(Buf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 9;
+	}
+	else if(u8LStep == 9)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"累計休息中時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 109;
+	}
+	else if(u8LStep == 109)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		if (g_Setting.u8CurrDrvID == 1)
+		{
+			u32TimeBuf = g_Setting.stDrvRecDay[13].u32RestTime;
+		}
+		else if (g_Setting.u8CurrDrvID == 2)
+		{
+			u32TimeBuf = g_Setting.stDrvRecDay2[13].u32RestTime;
+		}
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(Buf, "  %02d hr %02d min", (u32TimeBuf / 3600),	((u32TimeBuf % 3600) / 60));
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 10;
+	}
+	else if(u8LStep == 10)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"時間與距離之車速曲線圖");
+
+		bRESULT = TRUE;
+
+		u8LStep = 11;
+	}
+	else if(u8LStep == 11)
+	{
+		PRN_PrintBig5_16x16_String(2, (uint8_t *)"如下顯示");
+
+		bRESULT = TRUE;
+
+		u8LStep = 12;
+	}
+	else if(u8LStep == 12)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"駕駛簽名");
+
+		bRESULT = TRUE;
+
+		u8LStep = 13;
+	}
+	else if(u8LStep == 13)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 14;
+	}
+	else if(u8LStep == 14)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 15;
+	}
+	else if(u8LStep == 15)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 16;
+	}
+	else if(u8LStep == 16)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 17;
+	}
+	else if(u8LStep == 17)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)"_____________________________________________");
+
+		bRESULT = TRUE;
+
+		u8LStep = 99;
+	}
+	else
+		bRESULT = FALSE;
+
+	return bRESULT;
+}
+#endif
+#if 1
+//============================================================================//
+// @brief  Draw print table 1.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All of the data has been printed.
+//============================================================================//
+bool PRN_PrintTable1(void)
+{
+	bool bRESULT;
+	uint8_t RTCTime[7];
+	char cBuf[20];
+	time_t ttCTime;
+	uint32_t u32TimeBuf;
+	TechnicalDataTypeDef stTechnical;
+
+	PRN_ClearPrintLine();
+
+	if (u8LStep == 0)
+	{
+		SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stTechnical, sizeof(TechnicalDataTypeDef));
+	}
+
+	switch (u8LStep)
+	{
+	case 0:
+		memset(RTCTime, 0x00, sizeof(RTCTime));
+
+		ttCTime = System_GetTime();
+
+		SecToBCDTime(ttCTime, RTCTime);
+
+		sprintf(cBuf, ":%02X/%02X/%02X%02X %02X:%02X",
+				RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[0], (char *)"列印日期時間");
+
+			strcpy(&(prtDataHandle.cDataBuf[0][13]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"列印日期時間");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[0]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[0][13]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 1;
+
+		break;
+
+	case 1:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		// for(int i = 0; i < sizeof(stTechnical.u8BusID); i++)
+		for (int i = 0; i < sizeof(g_Setting.tBusInfo.cBus_ID); i++)
+		{
+			if (g_Setting.tBusInfo.cBus_ID[i] != '\0')
+				cBuf[i] = g_Setting.tBusInfo.cBus_ID[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[1], (char *)"車牌號碼");
+
+			strcpy(&(prtDataHandle.cDataBuf[1][9]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車牌號碼");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[1]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[1][9]));
+		}
+
+		bRESULT = TRUE;
+
+		// u8LStep = 2;
+		u8LStep = 102;
+
+		break;
+
+	case 102:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "VIN:%s", g_Setting.tBusInfo.cVIN);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 2;
+
+		break;
+
+	case 2:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %08X", g_Setting.tDrvInfo[0].u32DrvIdNum);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[2], (char *)"駕駛姓名");
+
+			strcpy(&(prtDataHandle.cDataBuf[2][9]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛姓名");
+
+			PRN_PrintASCII_8x16_String(4, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[2]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[2][9]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 3;
+
+		break;
+
+	case 3:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[3], (char *)"駕駛行為");
+
+			if (g_Setting.tDrvInfo[0].u8DrvStatus == 0)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[3][9]), (char *)"車停中");
+			}
+			else if (g_Setting.tDrvInfo[0].u8DrvStatus == 1)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[3][9]), (char *)"行駛中");
+			}
+			else if (g_Setting.tDrvInfo[0].u8DrvStatus == 2)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[3][9]), (char *)"待班中");
+			}
+			else if (g_Setting.tDrvInfo[0].u8DrvStatus == 3)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[3][9]), (char *)"休息中");
+			}
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛行為");
+
+			if (g_Setting.tDrvInfo[0].u8DrvStatus == 0)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"車停中");
+			}
+			else if (g_Setting.tDrvInfo[0].u8DrvStatus == 1)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"行駛中");
+			}
+			else if (g_Setting.tDrvInfo[0].u8DrvStatus == 2)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"待班中");
+			}
+			else if (g_Setting.tDrvInfo[0].u8DrvStatus == 3)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"休息中");
+			}
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[3]);
+
+			PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)&(prtDataHandle.cDataBuf[3][9]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 4;
+
+		break;
+
+	case 4:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[4], (char *)"開始日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"開始日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[4]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 5;
+
+		break;
+
+	case 5:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		ttCTime = g_Setting.tDRV_SET.ttDrvWorkStartTime;
+
+		SecToBCDTime(ttCTime, RTCTime);
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X",
+				RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[5], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[5]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 6;
+
+		break;
+
+	case 6:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[6], (char *)"歷程");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"歷程");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[6]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 7;
+
+		break;
+
+	case 7:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = System_GetTime() - g_Setting.tDRV_SET.ttDrvWorkStartTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[7], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[7]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 8;
+
+		break;
+
+	case 8:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[8], (char *)"累計行駛時間里程");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計行駛時間里程");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[8]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 9;
+
+		break;
+
+	case 9:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %09.1f km", (float)M_2_100M(g_Setting.tDrvInfo[0].dDriverDistance) / 10);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[9], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[9]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 10;
+
+		break;
+
+	case 10:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[10], (char *)"累計車停中時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計車停中時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[10]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 11;
+
+		break;
+
+	case 11:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = g_Setting.tDrvInfo[0].stDrvRecDay[13].u32PauseTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[11], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[11]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 12;
+
+		break;
+
+	case 12:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[12], (char *)"累計待班中時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計待班中時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[12]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 13;
+
+		break;
+
+	case 13:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = g_Setting.tDrvInfo[0].stDrvRecDay[13].u32StandByTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[13], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[13]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 14;
+
+		break;
+
+	case 14:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[14], (char *)"累計休息中時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計休息中時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[14]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 15;
+
+		break;
+
+	case 15:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = g_Setting.tDrvInfo[0].stDrvRecDay[13].u32RestTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[15], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[15]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 16;
+
+		break;
+
+	case 16:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[16], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[16]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 17;
+
+		break;
+
+	case 17:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %08X", g_Setting.tDrvInfo[1].u32DrvIdNum);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[17], (char *)"駕駛姓名");
+
+			strcpy(&(prtDataHandle.cDataBuf[17][9]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛姓名");
+
+			PRN_PrintASCII_8x16_String(4, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[17]);
+
+			PRN_PrintASCII_8x16_String(4, (uint8_t *)&(prtDataHandle.cDataBuf[17][9]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 18;
+
+		break;
+
+	case 18:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[18], (char *)"駕駛行為");
+
+			if (g_Setting.tDrvInfo[1].u8DrvStatus == 0)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[18][9]), (char *)"車停中");
+			}
+			else if (g_Setting.tDrvInfo[1].u8DrvStatus == 1)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[18][9]), (char *)"行駛中");
+			}
+			else if (g_Setting.tDrvInfo[1].u8DrvStatus == 2)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[18][9]), (char *)"待班中");
+			}
+			else if (g_Setting.tDrvInfo[1].u8DrvStatus == 3)
+			{
+				strcpy(&(prtDataHandle.cDataBuf[18][9]), (char *)"休息中");
+			}
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛行為");
+
+			if (g_Setting.tDrvInfo[1].u8DrvStatus == 0)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"車停中");
+			}
+			else if (g_Setting.tDrvInfo[1].u8DrvStatus == 1)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"行駛中");
+			}
+			else if (g_Setting.tDrvInfo[1].u8DrvStatus == 2)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"待班中");
+			}
+			else if (g_Setting.tDrvInfo[1].u8DrvStatus == 3)
+			{
+				PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)"休息中");
+			}
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[18]);
+
+			PRN_PrintBig5_16x16_String_FromTable(6, (uint8_t *)&(prtDataHandle.cDataBuf[18][9]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 19;
+
+		break;
+
+	case 19:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		ttCTime = g_Setting.tDRV_SET.ttDrvWorkStartTime;
+
+		SecToBCDTime(ttCTime, RTCTime);
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X",
+				RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[19], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[19]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 20;
+
+		break;
+
+	case 20:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[20], (char *)"歷程");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"歷程");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[20]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 21;
+
+		break;
+
+	case 21:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = System_GetTime() - g_Setting.tDRV_SET.ttDrvWorkStartTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[21], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[21]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 22;
+
+		break;
+
+	case 22:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[22], (char *)"累計行駛時間里程");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計行駛時間里程");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[22]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 23;
+
+		break;
+
+	case 23:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %09.1f km", (float)M_2_100M(g_Setting.tDrvInfo[1].dDriverDistance) / 10);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[23], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[23]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 24;
+
+		break;
+
+	case 24:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[24], (char *)"累計車停中時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計車停中時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[24]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 25;
+
+		break;
+
+	case 25:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = g_Setting.tDrvInfo[1].stDrvRecDay[13].u32PauseTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[25], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[25]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 26;
+
+		break;
+
+	case 26:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[26], (char *)"累計待班中時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計待班中時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[26]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 27;
+
+		break;
+
+	case 27:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = g_Setting.tDrvInfo[1].stDrvRecDay[13].u32StandByTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[27], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[27]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 28;
+
+		break;
+
+	case 28:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[28], (char *)"累計休息中時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計休息中時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[28]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 29;
+
+		break;
+
+	case 29:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		u32TimeBuf = g_Setting.tDrvInfo[1].stDrvRecDay[13].u32RestTime;
+
+		if ((u32TimeBuf < 60) && (u32TimeBuf > 0))
+		{
+			u32TimeBuf = 60;
+		}
+
+		sprintf(cBuf, "  %02d hr %02d min", (u32TimeBuf / 3600), ((u32TimeBuf % 3600) / 60));
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[29], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[29]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 30;
+
+		break;
+
+	case 30:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[30], (char *)"時間與距離之車速曲線圖");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"時間與距離之車速曲線圖");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[30]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 31;
+
+		break;
+
+	case 31:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[31], (char *)"如下顯示");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"如下顯示");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[31]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 32;
+
+		break;
+
+	case 32:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[32], (char *)"駕駛簽名");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛簽名");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[32]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 33;
+
+		break;
+
+	case 33:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[33], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[33]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 34;
+
+		break;
+
+	case 34:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[34], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[34]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 35;
+
+		break;
+
+	case 35:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[35], (char *)"______________________________________");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)"______________________________________");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[35]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 36;
+
+		break;
+
+	case 36:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[36], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[36]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 37;
+
+		break;
+
+	case 37:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[37], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[37]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 38;
+
+		break;
+
+	case 38:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[38], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[38]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 99;
+
+		break;
+
+	default:
+		bRESULT = FALSE;
+
+		break;
+	}
+
+	return bRESULT;
+}
+#endif
+
+#if 0
+//============================================================================//
+// @brief  Draw print table 2.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All data has been printed.
+//============================================================================//
+bool PRN_PrintTable2(void)
+{
+	bool bRESULT;
+	uint8_t RTCTime[7];
+	char Buf[20];
+	time_t ttCTime;
+
+
+	PRN_ClearPrintLine();
+
+	if(u8LStep == 0)
+	{
+		memset(&stPtrTechnical, 0x00, sizeof(TechnicalDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stPtrTechnical, sizeof(TechnicalDataTypeDef));
+
+		memset(&stPtrCalibration, 0x00, sizeof(CalibrationDataTypeDef));
+
+		if(TRUE == SD_CheckFileExist(FILENAME_CALIBRATION_TMP))
+		{
+			SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stPtrCalibration.u16BlockIndex, HEADLENS);
+
+			SD_ReadAddrToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stPtrCalibration.u8NameID,
+			                  CALIBRATIONLENS, HEADLENS + (CALIBRATIONLENS * (stPtrCalibration.u16BlockIndex - 1)));
+		}
+
+		memset(&stPtrEvent, 0x00, sizeof(EventDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_EVENT_TMP, (uint8_t *)&stPtrEvent.u8BlockIndex, SHORTHEAD);
+
+		memset(&stPtrBreakDown, 0x00, sizeof(BreakdownDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stPtrBreakDown.u8BlockIndex, SHORTHEAD);
+	}
+
+	if(u8LStep == 0)
+	{
+		memset(RTCTime, 0x00, sizeof(RTCTime));
+
+		memset(Buf, '\0', sizeof(Buf));
+
+		ttCTime = System_GetTime();
+
+		SecToBCDTime(ttCTime, RTCTime);
+
+		sprintf(Buf, ":%02X/%02X/%02X%02X %02X:%02X",
+		        RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"列印日期時間");
+
+		PRN_PrintASCII_8x16_String(6, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 1;
+	}
+	else if(u8LStep == 1)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"駕駛姓名");
+
+		bRESULT = TRUE;
+
+		u8LStep = 2;
+
+	}
+	else if(u8LStep == 2)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf, "  %08X", g_Setting.u32DrvIdNum);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 3;
+	}
+	else if(u8LStep == 3)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車牌號碼");
+
+		bRESULT = TRUE;
+
+		u8LStep = 4;
+	}
+	else if(u8LStep == 4)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		Buf[0] = 0x20;
+
+		Buf[1] = 0x20;
+
+		for(int i = 0; i < sizeof(stPtrTechnical.u8BusID); i++)
+		{
+			if(stPtrTechnical.u8BusID[i] != '\0')
+				Buf[i + 2] = stPtrTechnical.u8BusID[i];
+			else
+				break;
+		}
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8SStep = 0;
+
+		if(stPtrEvent.u8BlockIndex > 0)
+		{
+			u8LStep = 5;
+		}
+		else
+		{
+			u8LStep = 15;
+		}
+	}
+	else if(u8LStep == 5)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"事件類型");
+
+		SD_ReadAddrToBuff(FILENAME_EVENT_TMP, (uint8_t*)&stPtrEvent.u8Code,
+		                  EVENTLENS, SHORTHEAD + (u8SStep * EVENTLENS));
+
+		bRESULT = TRUE;
+
+		u8LStep = 6;
+	}
+	else if(u8LStep == 6)
+	{
+		//sprintf(Buf, "  %d", stPtrEvent.u8Code);
+
+		//PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		if (stPtrEvent.u8Code == 1)
+		{
+			sprintf(Buf, "%s", cEventString1);
+			PRN_PrintBig5_16x16_String(1, (uint8_t *)Buf);
+		}
+		else if (stPtrEvent.u8Code == 2)
+		{
+			sprintf(Buf, "%s", cEventString2);
+			PRN_PrintBig5_16x16_String(1, (uint8_t *)Buf);
+		}
+		else
+		{
+			sprintf(Buf, "  %d", stPtrEvent.u8Code);
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 7;
+	}
+	else if(u8LStep == 7)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"事件開始日期時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 8;
+	}
+	else if(u8LStep == 8)
+	{
+		sprintf(Buf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrEvent.u8DateStartBCD[3], stPtrEvent.u8DateStartBCD[2],
+		        stPtrEvent.u8DateStartBCD[0], stPtrEvent.u8DateStartBCD[1], stPtrEvent.u8DateStartBCD[4],
+		        stPtrEvent.u8DateStartBCD[5], stPtrEvent.u8DateStartBCD[6]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 9;
+	}
+	else if(u8LStep == 9)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"相同事件次數");
+
+		bRESULT = TRUE;
+
+		u8LStep = 10;
+	}
+	else if(u8LStep == 10)
+	{
+		sprintf(Buf, "  %d", stPtrEvent.u8EventCnt);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 11;
+	}
+	else if(u8LStep == 11)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"歷程");
+
+		bRESULT = TRUE;
+
+		u8LStep = 12;
+	}
+	else if(u8LStep == 12)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)"  00:01");
+
+		bRESULT = TRUE;
+
+		u8LStep = 13;
+	}
+	else if(u8LStep == 13)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"事件開始時或結束駕駛姓名");
+
+		bRESULT = TRUE;
+
+		u8LStep = 14;
+	}
+	else if(u8LStep == 14)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf, "  %08X", g_Setting.u32DrvIdNum);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		if(u8SStep < (stPtrEvent.u8BlockIndex-1))
+		{
+			u8SStep++;
+
+			u8LStep = 5;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 15;
+		}
+	}
+	else if(u8LStep == 15)
+	{
+		if(stPtrBreakDown.u8BlockIndex > 0)
+		{
+			PRN_PrintBig5_16x16_String(0, (uint8_t *)"故障類型");
+
+			SD_ReadAddrToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t*)&stPtrBreakDown.u8Code,
+			                  BREAKDOWNLENS, SHORTHEAD + (u8SStep * BREAKDOWNLENS));
+
+			u8LStep = 16;
+		}
+		else
+		{
+			u8LStep = 25;
+		}
+
+		bRESULT = TRUE;
+	}
+	else if(u8LStep == 16)
+	{
+		sprintf(Buf, "  %d", stPtrBreakDown.u8Code);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 17;
+	}
+	else if(u8LStep == 17)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"故障開始日期時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 18;
+	}
+	else if(u8LStep == 18)
+	{
+		sprintf(Buf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrBreakDown.u8DateStartBCD[3], stPtrBreakDown.u8DateStartBCD[2],
+		        stPtrBreakDown.u8DateStartBCD[0], stPtrBreakDown.u8DateStartBCD[1], stPtrBreakDown.u8DateStartBCD[4],
+		        stPtrBreakDown.u8DateStartBCD[5], stPtrBreakDown.u8DateStartBCD[6]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 19;
+	}
+	else if(u8LStep == 19)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"相同故障次數");
+
+		bRESULT = TRUE;
+
+		u8LStep = 20;
+	}
+	else if(u8LStep == 20)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)"  0");
+
+		bRESULT = TRUE;
+
+		u8LStep = 21;
+	}
+	else if(u8LStep == 21)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"歷程");
+
+		bRESULT = TRUE;
+
+		u8LStep = 22;
+	}
+	else if(u8LStep == 22)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)"  00:01");
+
+		bRESULT = TRUE;
+
+		u8LStep = 23;
+	}
+	else if(u8LStep == 23)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"故障開始時或結束駕駛姓名");
+
+		bRESULT = TRUE;
+
+		u8LStep = 24;
+	}
+	else if(u8LStep == 24)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf, "  %08X", g_Setting.u32DrvIdNum);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		if(u8SStep < (stPtrBreakDown.u8BlockIndex - 1))
+		{
+			u8SStep++;
+
+			u8LStep = 15;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 25;
+		}
+	}
+	else if(u8LStep == 25)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體製造商名稱");
+
+		bRESULT = TRUE;
+
+		u8LStep = 26;
+	}
+	else if(u8LStep == 26)
+	{
+		PRN_PrintASCII_8x16_String(1, (uint8_t *)"捷世林科技");
+
+		bRESULT = TRUE;
+
+		u8LStep = 27;
+	}
+	else if(u8LStep == 27)
+	{
+		PRN_PrintASCII_8x16_String(1, (uint8_t *)"股份有限公司");
+
+		bRESULT = TRUE;
+
+		u8LStep = 28;
+	}
+	else if(u8LStep == 28)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體製造商地址");
+
+		bRESULT = TRUE;
+
+		u8LStep = 29;
+	}
+	else if(u8LStep == 29)
+	{
+		PRN_PrintASCII_8x16_String(1, (uint8_t *)"新北市泰山區明志路");
+
+		bRESULT = TRUE;
+
+		u8LStep = 30;
+	}
+	else if(u8LStep == 30)
+	{
+		PRN_PrintASCII_8x16_String(1, (uint8_t *)"三段五一五號八樓");
+
+		bRESULT = TRUE;
+
+		u8LStep = 31;
+	}
+	else if(u8LStep == 31)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體序號或設備編號");
+
+		bRESULT = TRUE;
+
+		u8LStep = 32;
+	}
+	else if(u8LStep == 32)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		Buf[0] = 0x20;
+		Buf[1] = 0x20;
+
+		for(int i = 0; i < sizeof(stPtrTechnical.u8DeviceNum); i++)
+		{
+			if(stPtrTechnical.u8DeviceNum[i] != '\0')
+				Buf[i+2] = stPtrTechnical.u8DeviceNum[i];
+			else
+				break;
+		}
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 33;
+	}
+	else if(u8LStep == 33)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體軟體號碼");
+
+		bRESULT = TRUE;
+
+		u8LStep = 34;
+
+	}
+	else if(u8LStep == 34)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %c%c%c%c",
+		        stPtrTechnical.u8FwNum[0], stPtrTechnical.u8FwNum[1],
+		        stPtrTechnical.u8FwNum[2], stPtrTechnical.u8FwNum[3]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 35;
+	}
+	else if(u8LStep == 35)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體軟體版本安裝時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 36;
+	}
+	else if(u8LStep == 36)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf, "  %02X/%02X/%02X%02X %02X:%02X", stPtrTechnical.u8FwDateBCD[3], stPtrTechnical.u8FwDateBCD[2],
+		        stPtrTechnical.u8FwDateBCD[0], stPtrTechnical.u8FwDateBCD[1], stPtrTechnical.u8FwDateBCD[4],
+		        stPtrTechnical.u8FwDateBCD[5]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 37;
+	}
+	else if(u8LStep == 37)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體製造年份");
+
+		bRESULT = TRUE;
+
+		u8LStep = 38;
+	}
+	else if(u8LStep == 38)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %c%c%c%c", stPtrTechnical.u8MakeYear[0], stPtrTechnical.u8MakeYear[1],
+		        stPtrTechnical.u8MakeYear[2], stPtrTechnical.u8MakeYear[3]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 39;
+	}
+	else if(u8LStep == 39)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"車裝機體認證號碼");
+
+		bRESULT = TRUE;
+
+		u8LStep = 40;
+	}
+	else if(u8LStep == 40)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %c%c%c%c%c%c%c%c",
+		        stPtrTechnical.u8CertNum[0], stPtrTechnical.u8CertNum[1], stPtrTechnical.u8CertNum[2],
+		        stPtrTechnical.u8CertNum[3], stPtrTechnical.u8CertNum[4], stPtrTechnical.u8CertNum[5],
+		        stPtrTechnical.u8CertNum[6], stPtrTechnical.u8CertNum[7]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 41;
+	}
+	else if(u8LStep == 41)
+	{
+		if(stPtrCalibration.u16BlockIndex > 0)
+		{
+			PRN_PrintBig5_16x16_String(0, (uint8_t *)"調校者姓名");
+
+			u8LStep = 42;
+		}
+		else
+		{
+			u8LStep = 51;
+		}
+
+		bRESULT = TRUE;
+	}
+	else if(u8LStep == 42)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		for(int i=0; i<sizeof(stPtrCalibration.u8NameID); i++)
+		{
+			if(stPtrCalibration.u8NameID[i] != '\0')
+				Buf[i] = stPtrCalibration.u8NameID[i];
+			else
+				break;
+		}
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 43;
+
+	}
+	else if(u8LStep == 43)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"校正日期");
+
+		bRESULT = TRUE;
+
+		u8LStep = 44;
+	}
+	else if(u8LStep == 44)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %02X/%02X/%02X%02X", stPtrCalibration.u8AfterDateBCD[3], stPtrCalibration.u8AfterDateBCD[2],
+		        stPtrCalibration.u8AfterDateBCD[0], stPtrCalibration.u8AfterDateBCD[1]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 45;
+	}
+	else if(u8LStep == 45)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"校正前後里程數");
+
+		bRESULT = TRUE;
+
+		u8LStep = 46;
+	}
+	else if(u8LStep == 46)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %02X%02X%02X%02X", stPtrCalibration.u8BeforeDistBCD[0], stPtrCalibration.u8BeforeDistBCD[1],
+		        stPtrCalibration.u8BeforeDistBCD[2], stPtrCalibration.u8BeforeDistBCD[3]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 47;
+	}
+	else if(u8LStep == 47)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %02X%02X%02X%02X", stPtrCalibration.u8AfterDistBCD[0], stPtrCalibration.u8AfterDistBCD[1],
+		        stPtrCalibration.u8AfterDistBCD[2], stPtrCalibration.u8AfterDistBCD[3]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 48;
+	}
+	else if(u8LStep == 48)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"校正前後時間");
+
+		bRESULT = TRUE;
+
+		u8LStep = 49;
+	}
+	else if(u8LStep == 49)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %02X/%02X/%02X%02X %02X:%02X", stPtrCalibration.u8BeforeDateBCD[3], stPtrCalibration.u8BeforeDateBCD[2],
+		        stPtrCalibration.u8BeforeDateBCD[0], stPtrCalibration.u8BeforeDateBCD[1], stPtrCalibration.u8BeforeDateBCD[4],
+		        stPtrCalibration.u8BeforeDateBCD[5]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 50;
+	}
+	else if(u8LStep == 50)
+	{
+		memset(Buf, '\0', sizeof(Buf));
+
+		sprintf(Buf,"  %02X/%02X/%02X%02X %02X:%02X", stPtrCalibration.u8AfterDateBCD[3], stPtrCalibration.u8AfterDateBCD[2],
+		        stPtrCalibration.u8AfterDateBCD[0], stPtrCalibration.u8AfterDateBCD[1], stPtrCalibration.u8AfterDateBCD[4],
+		        stPtrCalibration.u8AfterDateBCD[5]);
+
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)Buf);
+
+		bRESULT = TRUE;
+
+		u8LStep = 51;
+	}
+	else if(u8LStep == 51)
+	{
+		PRN_PrintBig5_16x16_String(0, (uint8_t *)"駕駛簽名");
+
+		bRESULT = TRUE;
+
+		u8LStep = 52;
+	}
+	else if(u8LStep == 52)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 53;
+	}
+	else if(u8LStep == 53)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 54;
+	}
+	else if(u8LStep == 54)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+
+		bRESULT = TRUE;
+
+		u8LStep = 55;
+	}
+	else if(u8LStep == 55)
+	{
+		PRN_PrintASCII_8x16_String(0, (uint8_t *)"____________________________________________");
+
+		bRESULT = TRUE;
+
+		u8LStep = 99;
+	}
+	else
+		bRESULT = FALSE;
+
+	return bRESULT;
+}
+#endif
+#if 1
+//============================================================================//
+// @brief  Print table 2.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All data has been printed.
+//============================================================================//
+bool PRN_PrintTable2(void)
+{
+	static uint32_t u32LastSec = 0;
+	bool bRESULT;
+	char cBuf[40];
+	uint8_t NowTime[7], LastTime[7];
+	uint32_t u32NowSec = 0, u32GetTime = 0;
+
+	PRN_ClearPrintLine();
+
+	if (u8LStep == 0)
+	{
+		memset(&stPtrTechnical, 0x00, sizeof(TechnicalDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stPtrTechnical, sizeof(TechnicalDataTypeDef));
+
+		memset(&stPtrCalibration, 0x00, sizeof(CalibrationDataTypeDef));
+
+		if (TRUE == SD_CheckFileExist(FILENAME_CALIBRATION_TMP))
+		{
+			SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stPtrCalibration.u16BlockIndex, HEADLENS);
+
+			SD_ReadAddrToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stPtrCalibration.u8NameID,
+							  CALIBRATIONLENS, HEADLENS + (CALIBRATIONLENS * (stPtrCalibration.u16BlockIndex - 1)));
+		}
+
+		// memset(&stPtrEvent, 0x00, sizeof(EventDataTypeDef));
+		// SD_ReadFileToBuff(FILENAME_EVENT_TMP, (uint8_t *)&stPtrEvent.u8BlockIndex, SHORTHEAD);
+
+		// memset(&stPtrBreakDown, 0x00, sizeof(BreakdownDataTypeDef));
+		// SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stPtrBreakDown.u8BlockIndex, SHORTHEAD);
+
+		memset(NowTime, 0x00, sizeof(NowTime));
+
+		u32NowSec = System_GetTime();
+
+		SecToBCDTime(u32NowSec, NowTime);
+
+		EXTprintf("\r\n> Now: %02X%02X/%02X/%02X %02X:%02X:%02X (%d Sec)",
+				  NowTime[0], NowTime[1], NowTime[2], NowTime[3],
+				  NowTime[4], NowTime[5], NowTime[6], u32NowSec);
+
+		u32LastSec = u32NowSec - HOUR_2_SECOND(u8HourDataCnt);
+
+		SecToBCDTime(u32LastSec, LastTime);
+
+		EXTprintf("\r\n> Last: %02X%02X/%02X/%02X %02X:%02X:%02X (%d Sec)",
+				  LastTime[0], LastTime[1], LastTime[2], LastTime[3],
+				  LastTime[4], LastTime[5], LastTime[6], u32LastSec);
+	}
+
+	switch (u8LStep)
+	{
+	case 0:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, ":%02X/%02X/%02X%02X %02X:%02X",
+
+				NowTime[3], NowTime[2], NowTime[0], NowTime[1], NowTime[4], NowTime[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[0], (char *)"列印日期時間");
+
+			strcpy(&(prtDataHandle.cDataBuf[0][13]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"列印日期時間");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[0]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[0][13]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 1;
+
+		break;
+
+	case 1:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[1], (char *)"駕駛姓名");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛姓名");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[1]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 2;
+
+		break;
+
+	case 2:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %08X", g_Setting.tDrvInfo[0].u32DrvIdNum);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[2], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[2]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 3;
+
+		break;
+
+	case 3:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[3], (char *)"車牌號碼");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車牌號碼");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[3]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 4;
+
+		break;
+
+	case 4:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		cBuf[0] = 0x20;
+		cBuf[1] = 0x20;
+
+		for (int i = 0; i < sizeof(stPtrTechnical.u8BusID); i++)
+		{
+			if (stPtrTechnical.u8BusID[i] != '\0')
+				cBuf[i + 2] = stPtrTechnical.u8BusID[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[4], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[4]);
+		}
+
+		u8SStep = 0;
+
+		memset(&stPtrEvent, 0x00, sizeof(EventDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_EVENT_TMP, &u8SStep, SHORTHEAD);
+
+		bRESULT = TRUE;
+
+		if (u8SStep == 0)
+		{
+			u8LStep = 12;
+		}
+		else
+		{
+			u8SStep--;
+
+			if (u8SStep > 0)
+			{
+				u8LStep = 5;
+			}
+			else
+			{
+				u8LStep = 12;
+			}
+		}
+
+		break;
+
+	case 5:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[5], (char *)"事件資料");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"事件資料");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[5]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 6;
+
+		break;
+
+	case 6:
+		SD_ReadAddrToBuff(FILENAME_EVENT_TMP, (uint8_t *)&stPtrEvent.u8Code,
+						  EVENTLENS, SHORTHEAD + (u8SStep * EVENTLENS));
+
+		u32GetTime = BCDTimeToSec(stPtrEvent.u8DateStartBCD);
+
+		bRESULT = TRUE;
+
+		if (u32GetTime > u32LastSec)
+		{
+			u8LStep = 7;
+		}
+		else
+		{
+			u8LStep = 12;
+		}
+
+		break;
+
+	case 7:
+		if (stPtrEvent.u8Code == 1)
+		{
+			sprintf(cBuf, "%s", cEventString1);
+		}
+		else if (stPtrEvent.u8Code == 2)
+		{
+			sprintf(cBuf, "%s", cEventString2);
+		}
+		else if (stPtrEvent.u8Code == 3)
+		{
+			sprintf(cBuf, "%s", cEventString3);
+		}
+		else if (stPtrEvent.u8Code == 4)
+		{
+			sprintf(cBuf, "%s", cEventString4);
+		}
+		else if (stPtrEvent.u8Code == 5)
+		{
+			sprintf(cBuf, "%s", cEventString5);
+		}
+		else if (stPtrEvent.u8Code == 6)
+		{
+			sprintf(cBuf, "%s", cEventString6);
+		}
+		else if (stPtrEvent.u8Code == 7)
+		{
+			sprintf(cBuf, "%s", cEventString7);
+		}
+		else if (stPtrEvent.u8Code == 8)
+		{
+			sprintf(cBuf, "%s", cEventString8);
+		}
+		else if (stPtrEvent.u8Code == 9)
+		{
+			sprintf(cBuf, "%s", cEventString9);
+		}
+		else if (stPtrEvent.u8Code == 10)
+		{
+			sprintf(cBuf, "%s", cEventString10);
+		}
+		else if (stPtrEvent.u8Code == 11)
+		{
+			sprintf(cBuf, "%s", cEventString11);
+		}
+		else if (stPtrEvent.u8Code == 12)
+		{
+			sprintf(cBuf, "%s", cEventString12);
+		}
+		else
+		{
+			sprintf(cBuf, "  %d", stPtrEvent.u8Code);
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[7], cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[7]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 8;
+
+		break;
+
+	case 8:
+		sprintf(cBuf, ": %02X/%02X/%02X%02X %02X:%02X:%02X",
+				stPtrEvent.u8DateStartBCD[3], stPtrEvent.u8DateStartBCD[2], stPtrEvent.u8DateStartBCD[0],
+				stPtrEvent.u8DateStartBCD[1], stPtrEvent.u8DateStartBCD[4], stPtrEvent.u8DateStartBCD[5],
+				stPtrEvent.u8DateStartBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[8], (char *)"時間");
+
+			strcpy(&(prtDataHandle.cDataBuf[8][5]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"時間");
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[8]);
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)&(prtDataHandle.cDataBuf[8][5]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 9;
+
+		break;
+
+	case 9:
+		sprintf(cBuf, ": %d", stPtrEvent.u8EventCnt);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[9], (char *)"相同事件次數");
+
+			strcpy(&(prtDataHandle.cDataBuf[9][13]), cBuf);
+
+			strcpy(&(prtDataHandle.cDataBuf[9][21]), (char *)"歷程");
+
+			strcpy(&(prtDataHandle.cDataBuf[9][26]), (char *)": 00:01");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"相同事件次數");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(13, (uint8_t *)"歷程");
+
+			PRN_PrintASCII_8x16_String(15, (uint8_t *)": 00:01");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[9]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[9][13]));
+
+			PRN_PrintBig5_16x16_String_FromTable(13, (uint8_t *)&(prtDataHandle.cDataBuf[9][21]));
+
+			PRN_PrintASCII_8x16_String(15, (uint8_t *)&(prtDataHandle.cDataBuf[9][26]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 10;
+
+		break;
+
+	case 10:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, ": %08X", g_Setting.tDrvInfo[0].u32DrvIdNum);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[10], (char *)"事件駕駛姓名");
+
+			strcpy(&(prtDataHandle.cDataBuf[10][13]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"事件駕駛姓名");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[10]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[10][13]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 11;
+
+		break;
+
+	case 11:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[11], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[11]);
+		}
+
+		bRESULT = TRUE;
+
+		if (u8SStep > 0)
+		{
+			u8SStep--;
+
+			u8LStep = 6;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 12;
+		}
+
+		break;
+
+	case 12:
+		memset(&stPtrBreakDown, 0x00, sizeof(BreakdownDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, &u8SStep, SHORTHEAD);
+
+		EXTprintf("\r\n> All Break Cnt: %d", u8SStep);
+
+		bRESULT = TRUE;
+
+		if (u8SStep == 0)
+		{
+			u8LStep = 20;
+		}
+		else
+		{
+			u8SStep--;
+
+			if (u8SStep > 0)
+			{
+				u8LStep = 13;
+			}
+			else
+			{
+				u8LStep = 20;
+			}
+		}
+
+		break;
+
+	case 13:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[13], (char *)"故障資料");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"故障資料");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[13]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 14;
+
+		break;
+
+	case 14:
+		SD_ReadAddrToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stPtrBreakDown.u8Code,
+						  BREAKDOWNLENS, SHORTHEAD + (u8SStep * BREAKDOWNLENS));
+
+		u32GetTime = BCDTimeToSec(stPtrBreakDown.u8DateStartBCD);
+
+		bRESULT = TRUE;
+
+		if (u32GetTime > u32LastSec)
+		{
+			u8LStep = 15;
+		}
+		else
+		{
+			u8LStep = 20;
+		}
+
+		break;
+
+	case 15:
+		if (stPtrBreakDown.u8Code == 1)
+		{
+			sprintf(cBuf, "%s", cBreakString1);
+
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[15], cBuf);
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)cBuf);
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[15]);
+			}
+		}
+		else if (stPtrBreakDown.u8Code == 2)
+		{
+			sprintf(cBuf, "%s", cBreakString2);
+
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[15], cBuf);
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)cBuf);
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[15]);
+			}
+		}
+		else if (stPtrBreakDown.u8Code == 3)
+		{
+			sprintf(cBuf, "%s", cBreakString3);
+
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[15], cBuf);
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)cBuf);
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[15]);
+			}
+		}
+		else
+		{
+			sprintf(cBuf, "  %d", stPtrBreakDown.u8Code);
+
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[15], cBuf);
+
+				PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+			}
+			else
+			{
+				PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[15]);
+			}
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 16;
+
+		break;
+
+	case 16:
+		sprintf(cBuf, ": %02X/%02X/%02X%02X %02X:%02X:%02X",
+				stPtrBreakDown.u8DateStartBCD[3], stPtrBreakDown.u8DateStartBCD[2],
+				stPtrBreakDown.u8DateStartBCD[0], stPtrBreakDown.u8DateStartBCD[1],
+				stPtrBreakDown.u8DateStartBCD[4], stPtrBreakDown.u8DateStartBCD[5],
+				stPtrBreakDown.u8DateStartBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[16], (char *)"時間");
+
+			strcpy(&(prtDataHandle.cDataBuf[16][5]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"時間");
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[16]);
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)&(prtDataHandle.cDataBuf[16][5]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 17;
+
+		break;
+
+	case 17:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[17], (char *)"歷程");
+
+			strcpy(&(prtDataHandle.cDataBuf[17][5]), (char *)": 00:01");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"歷程");
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)": 00:01");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[17]);
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)&(prtDataHandle.cDataBuf[17][5]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 18;
+
+		break;
+
+	case 18:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, ": %08X", g_Setting.tDrvInfo[0].u32DrvIdNum);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[18], (char *)"故障駕駛姓名");
+
+			strcpy(&(prtDataHandle.cDataBuf[18][13]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"故障駕駛姓名");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[18]);
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)&(prtDataHandle.cDataBuf[18][13]));
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 19;
+
+		break;
+
+	case 19:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[19], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[19]);
+		}
+
+		bRESULT = TRUE;
+
+		if (u8SStep > 0)
+		{
+			u8SStep--;
+
+			u8LStep = 14;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 20;
+		}
+		break;
+
+	case 20:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[20], (char *)"車裝機體製造商名稱");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體製造商名稱");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[20]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 21;
+
+		break;
+
+	case 21:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[21], (char *)"捷世林科技股份有限公司");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"捷世林科技股份有限公司");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[21]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 22;
+
+		break;
+
+	case 22:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[22], (char *)"車裝機體製造商地址");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體製造商地址");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[22]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 23;
+
+		break;
+
+	case 23:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[23], (char *)"新北市泰山區新北大道六段四一一號十樓");
+
+			// PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"新北市泰山區新北大道六段四一一號十樓");
+			PRN_PrintBig5_16x16_String(0, (uint8_t *)"新北市泰山區新北大道六段四一一號十樓");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[23]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 24;
+
+		break;
+
+	case 24:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[24], (char *)"車裝機體序號或設備編號");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體序號或設備編號");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[24]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 25;
+
+		break;
+
+	case 25:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		cBuf[0] = 0x20;
+		cBuf[1] = 0x20;
+
+		for (int i = 0; i < sizeof(stPtrTechnical.u8DeviceNum); i++)
+		{
+			if (stPtrTechnical.u8DeviceNum[i] != '\0')
+				cBuf[i + 2] = stPtrTechnical.u8DeviceNum[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[25], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[25]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 26;
+
+		break;
+
+	case 26:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[26], (char *)"車裝機體軟體號碼");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體軟體號碼");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[26]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 27;
+
+		break;
+
+	case 27:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %c%c%c%c",
+				stPtrTechnical.u8FwNum[0], stPtrTechnical.u8FwNum[1],
+				stPtrTechnical.u8FwNum[2], stPtrTechnical.u8FwNum[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[27], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[27]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 28;
+
+		break;
+
+	case 28:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[28], (char *)"車裝機體軟體版本安裝時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體軟體版本安裝時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[28]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 29;
+
+		break;
+
+	case 29:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X",
+				stPtrTechnical.u8FwDateBCD[3], stPtrTechnical.u8FwDateBCD[2],
+				stPtrTechnical.u8FwDateBCD[0], stPtrTechnical.u8FwDateBCD[1],
+				stPtrTechnical.u8FwDateBCD[4], stPtrTechnical.u8FwDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[29], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[29]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 30;
+
+		break;
+
+	case 30:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[30], (char *)"車裝機體製造年份");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體製造年份");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[30]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 31;
+
+		break;
+
+	case 31:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %c%c%c%c",
+				stPtrTechnical.u8MakeYear[0], stPtrTechnical.u8MakeYear[1],
+				stPtrTechnical.u8MakeYear[2], stPtrTechnical.u8MakeYear[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[31], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[31]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 32;
+
+		break;
+
+	case 32:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[32], (char *)"車裝機體認證號碼");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體認證號碼");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[32]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 33;
+
+		break;
+
+	case 33:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %c%c%c%c%c%c%c%c",
+				stPtrTechnical.u8CertNum[0], stPtrTechnical.u8CertNum[1], stPtrTechnical.u8CertNum[2],
+				stPtrTechnical.u8CertNum[3], stPtrTechnical.u8CertNum[4], stPtrTechnical.u8CertNum[5],
+				stPtrTechnical.u8CertNum[6], stPtrTechnical.u8CertNum[7]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[33], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[33]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 34;
+
+		break;
+
+	case 34:
+		bRESULT = TRUE;
+
+		if (stPtrCalibration.u16BlockIndex > 0)
+		{
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[34], (char *)"調校者姓名");
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調校者姓名");
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[34]);
+			}
+
+			u8LStep = 35;
+		}
+		else
+		{
+			u8LStep = 44;
+		}
+		break;
+
+	case 35:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		for (int i = 0; i < sizeof(stPtrCalibration.u8NameID); i++)
+		{
+			if (stPtrCalibration.u8NameID[i] != '\0')
+				cBuf[i] = stPtrCalibration.u8NameID[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[35], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[35]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 36;
+
+		break;
+
+	case 36:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[36], (char *)"校正日期");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"校正日期");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[36]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 37;
+
+		break;
+
+	case 37:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X",
+				stPtrCalibration.u8AfterDateBCD[3], stPtrCalibration.u8AfterDateBCD[2],
+				stPtrCalibration.u8AfterDateBCD[0], stPtrCalibration.u8AfterDateBCD[1]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[37], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[37]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 38;
+
+		break;
+
+	case 38:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[38], (char *)"校正前後里程數");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"校正前後里程數");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[38]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 39;
+
+		break;
+
+	case 39:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X%02X%02X%02X",
+				stPtrCalibration.u8BeforeDistBCD[0], stPtrCalibration.u8BeforeDistBCD[1],
+				stPtrCalibration.u8BeforeDistBCD[2], stPtrCalibration.u8BeforeDistBCD[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[39], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[39]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 40;
+
+		break;
+
+	case 40:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X%02X%02X%02X",
+				stPtrCalibration.u8AfterDistBCD[0], stPtrCalibration.u8AfterDistBCD[1],
+				stPtrCalibration.u8AfterDistBCD[2], stPtrCalibration.u8AfterDistBCD[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[40], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[40]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 41;
+
+		break;
+
+	case 41:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[41], (char *)"校正前後時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"校正前後時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[41]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 42;
+
+		break;
+
+	case 42:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X",
+				stPtrCalibration.u8BeforeDateBCD[3], stPtrCalibration.u8BeforeDateBCD[2],
+				stPtrCalibration.u8BeforeDateBCD[0], stPtrCalibration.u8BeforeDateBCD[1],
+				stPtrCalibration.u8BeforeDateBCD[4], stPtrCalibration.u8BeforeDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[42], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[42]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 43;
+
+		break;
+
+	case 43:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X",
+				stPtrCalibration.u8AfterDateBCD[3], stPtrCalibration.u8AfterDateBCD[2],
+				stPtrCalibration.u8AfterDateBCD[0], stPtrCalibration.u8AfterDateBCD[1],
+				stPtrCalibration.u8AfterDateBCD[4], stPtrCalibration.u8AfterDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[43], (char *)cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[43]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 44;
+
+		break;
+
+	case 44:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[44], (char *)"駕駛簽名");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛簽名");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[44]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 45;
+
+		break;
+
+	case 45:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[45], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[45]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 46;
+
+		break;
+
+	case 46:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[46], (char *)"______________________________________");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)"______________________________________");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[46]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 47;
+
+		break;
+
+	case 47:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[47], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[47]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 48;
+
+		break;
+
+	case 48:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[48], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[48]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 49;
+
+		break;
+
+	case 49:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[49], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[49]);
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 50;
+
+		break;
+
+	case 50:
+		bRESULT = FALSE;
+
+		break;
+
+	default:
+		bRESULT = FALSE;
+
+		break;
+	}
+
+	return bRESULT;
+}
+#endif
+//============================================================================//
+// @brief  Print table 3.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All data has been printed.
+//============================================================================//
+bool PRN_PrintTable3(void)
+{
+	bool RESULT;
+	uint8_t RTCTime[7], i;
+	char cBuf[40];
+	time_t ttCTime;
+
+	PRN_ClearPrintLine();
+
+	if (u8LStep == 0)
+	{
+		memset(&stPtrTechnical, 0x00, sizeof(TechnicalDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stPtrTechnical, sizeof(TechnicalDataTypeDef));
+
+		memset(&stPtrCalibration, 0x00, sizeof(CalibrationDataTypeDef));
+
+		if (TRUE == SD_CheckFileExist(FILENAME_CALIBRATION_TMP))
+		{
+			SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stPtrCalibration.u16BlockIndex, HEADLENS);
+		}
+
+		memset(&stPtrAdjust, 0x00, sizeof(AdjustDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_ADJUST_TMP, (uint8_t *)&stPtrAdjust.u8BlockIndex, SHORTHEAD);
+
+		// EXTprintf("\r\n> ### stPtrAdjust.u8BlockIndex: %d ###", stPtrAdjust.u8BlockIndex);
+
+		memset(&stPtrDrivingTime, 0x00, sizeof(DrivingTimeTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_DRIVING_TMP, (uint8_t *)&stPtrDrivingTime.u8BlockIndex, SHORTHEAD);
+
+		// EXTprintf("\r\n> ### stPtrDrivingTime.u8BlockIndex: %d ###", stPtrDrivingTime.u8BlockIndex);
+
+		memset(&stPtrRestTime, 0x00, sizeof(RestDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_REST_TMP, (uint8_t *)&stPtrRestTime.u8BlockIndex, SHORTHEAD);
+
+		// EXTprintf("\r\n> ### stPtrRestTime.u8BlockIndex: %d ###", stPtrRestTime.u8BlockIndex);
+
+		memset(&stPtrEvent, 0x00, sizeof(EventDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_EVENT_TMP, (uint8_t *)&stPtrEvent.u8BlockIndex, SHORTHEAD);
+
+		memset(&stPtrBreakDown, 0x00, sizeof(BreakdownDataTypeDef));
+
+		SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stPtrBreakDown.u8BlockIndex, SHORTHEAD);
+	}
+
+	switch (u8LStep)
+	{
+	case 0:
+		memset(RTCTime, 0x00, sizeof(RTCTime));
+
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		ttCTime = System_GetTime();
+
+		SecToBCDTime(ttCTime, RTCTime);
+
+		sprintf(cBuf, ":%02X/%02X/%02X%02X %02X:%02X",
+				RTCTime[3], RTCTime[2], RTCTime[0], RTCTime[1], RTCTime[4], RTCTime[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[0], (char *)"列印日期時間");
+
+			strcpy(&(prtDataHandle.cDataBuf[0][13]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"列印日期時間");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[0]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[0][13]));
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 1;
+
+		break;
+
+	case 1:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "%08X", g_Setting.tDrvInfo[0].u32DrvIdNum);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[1], (char *)"駕駛姓名");
+
+			strcpy(&(prtDataHandle.cDataBuf[1][9]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"駕駛姓名");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[1]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[1][9]));
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 2;
+
+		break;
+
+	case 2:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		for (i = 0; i < sizeof(stPtrTechnical.u8BusID); i++)
+		{
+			if (stPtrTechnical.u8BusID[i] != '\0')
+				cBuf[i] = stPtrTechnical.u8BusID[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[2], (char *)"車牌號碼");
+
+			strcpy(&(prtDataHandle.cDataBuf[2][9]), cBuf);
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車牌號碼");
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[2]);
+
+			PRN_PrintASCII_8x16_String(6, (uint8_t *)&(prtDataHandle.cDataBuf[2][9]));
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 4;
+
+		break;
+
+	case 4:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[4], (char *)"車裝機體製造商名稱");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體製造商名稱");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[4]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 5;
+
+		break;
+
+	case 5:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[5], (char *)"捷世林科技股份有限公司");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"捷世林科技股份有限公司");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[5]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 7;
+
+		break;
+
+	case 7:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[7], (char *)"車裝機體製造商地址");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體製造商地址");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[7]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 8;
+
+		break;
+
+	case 8:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[8], (char *)"新北市泰山區新北大道六段四一一號十樓");
+
+			// PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"新北市泰山區新北大道六段四一一號十樓");
+			PRN_PrintBig5_16x16_String(0, (uint8_t *)"新北市泰山區新北大道六段四一一號十樓");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[8]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 10;
+
+		break;
+
+	case 10:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[10], (char *)"車裝機體序號或設備編號");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體序號或設備編號");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[10]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 11;
+
+		break;
+
+	case 11:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		for (i = 0; i < sizeof(stPtrTechnical.u8DeviceNum); i++)
+		{
+			if (stPtrTechnical.u8DeviceNum[i] != '\0')
+				cBuf[i] = stPtrTechnical.u8DeviceNum[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[11], cBuf);
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)prtDataHandle.cDataBuf[11]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 12;
+
+		break;
+
+	case 12:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[12], (char *)"車裝機體軟體號碼");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體軟體號碼");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[12]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 13;
+
+		break;
+
+	case 13:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %c%c%c%c", stPtrTechnical.u8FwNum[0], stPtrTechnical.u8FwNum[1],
+				stPtrTechnical.u8FwNum[2], stPtrTechnical.u8FwNum[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[13], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[13]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 14;
+
+		break;
+
+	case 14:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[14], (char *)"車裝機體軟體版本安裝時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體軟體版本安裝時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[14]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 15;
+
+		break;
+
+	case 15:
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X", stPtrTechnical.u8FwDateBCD[3], stPtrTechnical.u8FwDateBCD[2],
+				stPtrTechnical.u8FwDateBCD[0], stPtrTechnical.u8FwDateBCD[1], stPtrTechnical.u8FwDateBCD[4],
+				stPtrTechnical.u8FwDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[15], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[15]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 16;
+
+		break;
+
+	case 16:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[16], (char *)"車裝機體製造年份");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體製造年份");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[16]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 17;
+
+		break;
+
+	case 17:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %c%c%c%c", stPtrTechnical.u8MakeYear[0], stPtrTechnical.u8MakeYear[1],
+				stPtrTechnical.u8MakeYear[2], stPtrTechnical.u8MakeYear[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[17], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[17]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 18;
+
+		break;
+
+	case 18:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[18], (char *)"車裝機體認證號碼");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"車裝機體認證號碼");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[18]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 19;
+
+		break;
+
+	case 19:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %c%c%c%c%c%c%c%c", stPtrTechnical.u8CertNum[0], stPtrTechnical.u8CertNum[1],
+				stPtrTechnical.u8CertNum[2], stPtrTechnical.u8CertNum[3], stPtrTechnical.u8CertNum[4],
+				stPtrTechnical.u8CertNum[5], stPtrTechnical.u8CertNum[6], stPtrTechnical.u8CertNum[7]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[19], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[19]);
+		}
+
+		RESULT = TRUE;
+
+		u8SStep = 0;
+
+		if (stPtrCalibration.u16BlockIndex > 0)
+			u8LStep = 20;
+		else
+			u8LStep = 30;
+
+		break;
+
+	case 20:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[20], (char *)"調校者姓名");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調校者姓名");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[20]);
+		}
+
+		SD_ReadAddrToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stPtrCalibration.u8NameID,
+						  CALIBRATIONLENS, HEADLENS + (CALIBRATIONLENS * u8SStep));
+
+		RESULT = TRUE;
+
+		u8LStep = 21;
+
+		break;
+
+	case 21:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		for (i = 0; i < sizeof(stPtrCalibration.u8NameID); i++)
+		{
+			if (stPtrCalibration.u8NameID[i] != '\0')
+				cBuf[i] = stPtrCalibration.u8NameID[i];
+			else
+				break;
+		}
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[21], cBuf);
+
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(2, (uint8_t *)prtDataHandle.cDataBuf[21]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 22;
+
+		break;
+
+	case 22:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[22], (char *)"校正日期");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"校正日期");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[22]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 23;
+
+		break;
+
+	case 23:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X", stPtrCalibration.u8AfterDateBCD[3], stPtrCalibration.u8AfterDateBCD[2],
+				stPtrCalibration.u8AfterDateBCD[0], stPtrCalibration.u8AfterDateBCD[1]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[23], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[23]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 24;
+
+		break;
+
+	case 24:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[24], (char *)"校正前後里程數");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"校正前後里程數");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[24]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 25;
+
+		break;
+
+	case 25:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X%02X%02X%02X", stPtrCalibration.u8BeforeDistBCD[0], stPtrCalibration.u8BeforeDistBCD[1],
+				stPtrCalibration.u8BeforeDistBCD[2], stPtrCalibration.u8BeforeDistBCD[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[25], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[25]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 26;
+
+		break;
+
+	case 26:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X%02X%02X%02X", stPtrCalibration.u8AfterDistBCD[0], stPtrCalibration.u8AfterDistBCD[1],
+				stPtrCalibration.u8AfterDistBCD[2], stPtrCalibration.u8AfterDistBCD[3]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[26], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[26]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 27;
+
+		break;
+
+	case 27:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[27], (char *)"校正前後時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"校正前後時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[27]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 28;
+
+		break;
+
+	case 28:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X", stPtrCalibration.u8BeforeDateBCD[3], stPtrCalibration.u8BeforeDateBCD[2],
+				stPtrCalibration.u8BeforeDateBCD[0], stPtrCalibration.u8BeforeDateBCD[1], stPtrCalibration.u8BeforeDateBCD[4],
+				stPtrCalibration.u8BeforeDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[28], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[28]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 29;
+
+		break;
+
+	case 29:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X", stPtrCalibration.u8AfterDateBCD[3], stPtrCalibration.u8AfterDateBCD[2],
+				stPtrCalibration.u8AfterDateBCD[0], stPtrCalibration.u8AfterDateBCD[1], stPtrCalibration.u8AfterDateBCD[4],
+				stPtrCalibration.u8AfterDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[29], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[29]);
+		}
+
+		RESULT = TRUE;
+
+		if (u8SStep < (stPtrCalibration.u16BlockIndex - 1))
+		{
+			u8SStep++;
+
+			u8LStep = 20;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 30;
+		}
+
+		break;
+
+	case 30:
+		if (stPtrAdjust.u8BlockIndex > 0)
+		{
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[30], (char *)"調校者姓名");
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調校者姓名");
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[30]);
+			}
+
+			SD_ReadAddrToBuff(FILENAME_ADJUST_TMP, (uint8_t *)&stPtrAdjust.u8BeforeDateBCD,
+							  ADJUSTLENS, SHORTHEAD + (ADJUSTLENS * u8SStep));
+
+			u8LStep = 31;
+		}
+		else
+		{
+			u8LStep = 36;
+		}
+
+		RESULT = TRUE;
+
+		break;
+
+	case 31:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[31], (char *)"  ADMIN");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)"  ADMIN");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[31]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 32;
+
+		break;
+
+	case 32:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[32], (char *)"調整前日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整前日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[32]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 33;
+
+		break;
+
+	case 33:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrAdjust.u8BeforeDateBCD[3], stPtrAdjust.u8BeforeDateBCD[2],
+				stPtrAdjust.u8BeforeDateBCD[0], stPtrAdjust.u8BeforeDateBCD[1], stPtrAdjust.u8BeforeDateBCD[4],
+				stPtrAdjust.u8BeforeDateBCD[5], stPtrAdjust.u8BeforeDateBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[33], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[33]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 34;
+
+		break;
+
+	case 34:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[34], (char *)"調整後日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整後日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[34]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 35;
+
+		break;
+
+	case 35:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X %02X:%02X:%02X", stPtrAdjust.u8AfterDateBCD[3], stPtrAdjust.u8AfterDateBCD[2],
+				stPtrAdjust.u8AfterDateBCD[0], stPtrAdjust.u8AfterDateBCD[1], stPtrAdjust.u8AfterDateBCD[4],
+				stPtrAdjust.u8AfterDateBCD[5]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[35], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[35]);
+		}
+
+		RESULT = TRUE;
+
+		// EXTprintf("\r\n> ### u8SStep: %d, stPtrAdjust.u8BlockIndex: %d ###", u8SStep, stPtrAdjust.u8BlockIndex);
+
+		if (u8SStep < (stPtrAdjust.u8BlockIndex - 1))
+		{
+			u8SStep++;
+
+			u8LStep = 30;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 36;
+		}
+
+		break;
+
+	case 36:
+		if (stPtrDrivingTime.u8BlockIndex > 0)
+		{
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[36], (char *)"調校者姓名");
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調校者姓名");
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[36]);
+			}
+
+			SD_ReadAddrToBuff(FILENAME_DRIVING_TMP, (uint8_t *)&stPtrDrivingTime.u8BeforeDateBCD,
+							  DRIVERTIMELENS, SHORTHEAD + (DRIVERTIMELENS * u8SStep));
+
+			u8LStep = 37;
+		}
+		else
+		{
+			u8LStep = 48;
+		}
+
+		RESULT = TRUE;
+
+		break;
+
+	case 37:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[37], (char *)"  ADMIN");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)"  ADMIN");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[37]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 38;
+
+		break;
+
+	case 38:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[38], (char *)"調整類型");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整類型");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[38]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 39;
+
+		break;
+
+	case 39:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[39], (char *)"連續行駛時間門檻值");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"連續行駛時間門檻值");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[39]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 40;
+
+		break;
+
+	case 40:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[40], (char *)"調整前日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整前日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[40]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 41;
+
+		break;
+
+	case 41:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrDrivingTime.u8BeforeDateBCD[3], stPtrDrivingTime.u8BeforeDateBCD[2],
+				stPtrDrivingTime.u8BeforeDateBCD[0], stPtrDrivingTime.u8BeforeDateBCD[1], stPtrDrivingTime.u8BeforeDateBCD[4],
+				stPtrDrivingTime.u8BeforeDateBCD[5], stPtrDrivingTime.u8BeforeDateBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[41], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[41]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 42;
+
+		break;
+
+	case 42:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[42], (char *)"調整前門檻值");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整前門檻值");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[42]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 43;
+
+		break;
+
+	case 43:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X:%02X", stPtrDrivingTime.u8BeforeAdjustBCD[0], stPtrDrivingTime.u8BeforeAdjustBCD[1]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[43], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[43]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 44;
+
+		break;
+
+	case 44:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[44], (char *)"調整後日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整後日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[44]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 45;
+
+		break;
+
+	case 45:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrDrivingTime.u8AfterDateBCD[3], stPtrDrivingTime.u8AfterDateBCD[2],
+				stPtrDrivingTime.u8AfterDateBCD[0], stPtrDrivingTime.u8AfterDateBCD[1], stPtrDrivingTime.u8AfterDateBCD[4],
+				stPtrDrivingTime.u8AfterDateBCD[5], stPtrDrivingTime.u8AfterDateBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[45], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[45]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 46;
+
+		break;
+
+	case 46:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[46], (char *)"調整後門檻值");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整後門檻值");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[46]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 47;
+
+		break;
+
+	case 47:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X:%02X", stPtrDrivingTime.u8AfterAdjustBCD[0], stPtrDrivingTime.u8AfterAdjustBCD[1]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[47], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[47]);
+		}
+
+		RESULT = TRUE;
+
+		if (u8SStep < (stPtrDrivingTime.u8BlockIndex - 1))
+		{
+			u8SStep++;
+
+			u8LStep = 36;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 48;
+		}
+
+		break;
+
+	case 48:
+		if (stPtrRestTime.u8BlockIndex > 0)
+		{
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[48], (char *)"調校者姓名");
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調校者姓名");
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[48]);
+			}
+
+			SD_ReadAddrToBuff(FILENAME_REST_TMP, (uint8_t *)&stPtrRestTime.u8BeforeDateBCD,
+							  RESTLENS, SHORTHEAD + (RESTLENS * u8SStep));
+
+			u8LStep = 49;
+		}
+		else
+		{
+			u8LStep = 60;
+		}
+
+		RESULT = TRUE;
+
+		break;
+
+	case 49:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[49], (char *)"  ADMIN");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)"  ADMIN");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[49]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 50;
+
+		break;
+
+	case 50:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[50], (char *)"調整類型");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整類型");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[50]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 51;
+
+		break;
+
+	case 51:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[51], (char *)"累計休息時間門檻值");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"累計休息時間門檻值");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[51]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 52;
+
+		break;
+
+	case 52:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[52], (char *)"調整前日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整前日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[52]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 53;
+
+		break;
+
+	case 53:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrRestTime.u8BeforeDateBCD[3], stPtrRestTime.u8BeforeDateBCD[2],
+				stPtrRestTime.u8BeforeDateBCD[0], stPtrRestTime.u8BeforeDateBCD[1], stPtrRestTime.u8BeforeDateBCD[4],
+				stPtrRestTime.u8BeforeDateBCD[5], stPtrRestTime.u8BeforeDateBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[53], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[53]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 54;
+
+		break;
+
+	case 54:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[52], (char *)"調整前門檻值");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整前門檻值");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[52]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 55;
+
+		break;
+
+	case 55:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X:%02X", stPtrRestTime.u8BeforeRestBCD[0], stPtrRestTime.u8BeforeRestBCD[1]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[55], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[55]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 56;
+
+		break;
+
+	case 56:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[56], (char *)"調整後日期時間");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整後日期時間");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[56]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 57;
+
+		break;
+
+	case 57:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrRestTime.u8AfterDateBCD[3], stPtrRestTime.u8AfterDateBCD[2],
+				stPtrRestTime.u8AfterDateBCD[0], stPtrRestTime.u8AfterDateBCD[1], stPtrRestTime.u8AfterDateBCD[4],
+				stPtrRestTime.u8AfterDateBCD[5], stPtrRestTime.u8AfterDateBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[57], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[57]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 58;
+
+		break;
+
+	case 58:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[58], (char *)"調整後門檻值");
+
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"調整後門檻值");
+		}
+		else
+		{
+			PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[58]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 59;
+
+		break;
+
+	case 59:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X:%02X", stPtrRestTime.u8AfterRestBCD[0], stPtrRestTime.u8AfterRestBCD[1]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[59], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[59]);
+		}
+
+		RESULT = TRUE;
+
+		if (u8SStep < (stPtrRestTime.u8BlockIndex - 1))
+		{
+			u8SStep++;
+
+			u8LStep = 48;
+		}
+		else
+		{
+			u8SStep = 0;
+
+			u8LStep = 60;
+		}
+
+		break;
+
+	case 60:
+		if (stPtrEvent.u8BlockIndex > 0)
+		{
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[60], (char *)"事件發生日期時間");
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"事件發生日期時間");
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[60]);
+			}
+
+			SD_ReadAddrToBuff(FILENAME_EVENT_TMP, (uint8_t *)&stPtrEvent.u8Code,
+							  EVENTLENS, SHORTHEAD + ((stPtrEvent.u8BlockIndex - 1) * EVENTLENS));
+			u8LStep = 61;
+		}
+		else
+		{
+			u8LStep = 62;
+		}
+
+		RESULT = TRUE;
+
+		break;
+
+	case 61:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrEvent.u8DateStartBCD[3], stPtrEvent.u8DateStartBCD[2],
+				stPtrEvent.u8DateStartBCD[0], stPtrEvent.u8DateStartBCD[1], stPtrEvent.u8DateStartBCD[4],
+				stPtrEvent.u8DateStartBCD[5], stPtrEvent.u8DateStartBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[61], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[61]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 62;
+
+		break;
+
+	case 62:
+		if (stPtrBreakDown.u8BlockIndex > 0)
+		{
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				strcpy(prtDataHandle.cDataBuf[62], (char *)"故障發生日期時間");
+
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)"故障發生日期時間");
+			}
+			else
+			{
+				PRN_PrintBig5_16x16_String_FromTable(0, (uint8_t *)prtDataHandle.cDataBuf[62]);
+			}
+
+			SD_ReadAddrToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stPtrBreakDown.u8Code,
+							  BREAKDOWNLENS, SHORTHEAD + ((stPtrBreakDown.u8BlockIndex - 1) * BREAKDOWNLENS));
+
+			u8LStep = 63;
+		}
+		else
+		{
+			u8LStep = 64;
+		}
+
+		RESULT = TRUE;
+
+		break;
+
+	case 63:
+		memset(cBuf, '\0', sizeof(cBuf));
+
+		sprintf(cBuf, "  %02X/%02X/%02X%02X %02X:%02X:%02X", stPtrBreakDown.u8DateStartBCD[3], stPtrBreakDown.u8DateStartBCD[2],
+				stPtrBreakDown.u8DateStartBCD[0], stPtrBreakDown.u8DateStartBCD[1], stPtrBreakDown.u8DateStartBCD[4],
+				stPtrBreakDown.u8DateStartBCD[5], stPtrBreakDown.u8DateStartBCD[6]);
+
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[63], cBuf);
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)cBuf);
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[63]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 64;
+
+		break;
+
+	case 64:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[64], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[64]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 65;
+
+		break;
+
+	case 65:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[65], (char *)"______________________________________");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)"______________________________________");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[65]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 66;
+
+		break;
+
+	case 66:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[66], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[66]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 67;
+
+		break;
+
+	case 67:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[67], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[67]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 68;
+
+		break;
+
+	case 68:
+		if (prtDataHandle.bRePrint == FALSE)
+		{
+			strcpy(prtDataHandle.cDataBuf[68], (char *)" ");
+
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)" ");
+		}
+		else
+		{
+			PRN_PrintASCII_8x16_String(0, (uint8_t *)prtDataHandle.cDataBuf[68]);
+		}
+
+		RESULT = TRUE;
+
+		u8LStep = 69;
+
+		break;
+
+	case 69:
+		RESULT = FALSE;
+
+		break;
+
+	default:
+		RESULT = FALSE;
+
+		break;
+	}
+
+	return RESULT;
+}
+
+//============================================================================//
+// @brief  Print table 4.
+// @param  None.
+// @retval TRUE: There is still data left to be printed.
+//         FALSE: All data has been printed.
+//============================================================================//
+bool PRN_PrintTable4(void)
+{
+	bool bRESULT;
+	uint8_t i, j;
+
+	PRN_ClearPrintLine();
+
+	switch (u8LStep)
+	{
+	case 0:
+		for (i = 0; i < 16; i++)
+		{
+			for (j = 0; j < 48; j++)
+			{
+				Prinu8TWord[i][j] = 0xFF;
+			}
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 1;
+
+		break;
+
+	case 1:
+		for (i = 0; i < 16; i++)
+		{
+			for (j = 0; j < 48; j++)
+			{
+				Prinu8TWord[i][j] = 0xFF;
+			}
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 2;
+
+		break;
+
+	case 2:
+		for (i = 0; i < 16; i++)
+		{
+			for (j = 0; j < 48; j++)
+			{
+				Prinu8TWord[i][j] = 0xFF;
+			}
+		}
+
+		bRESULT = TRUE;
+
+		u8LStep = 3;
+
+		break;
+
+	case 3:
+		for (i = 0; i < 16; i++)
+		{
+			for (j = 0; j < 48; j++)
+			{
+				Prinu8TWord[i][j] = 0xFF;
+			}
+		}
+
+		bRESULT = FALSE;
+
+		u8LStep = 99;
+
+		break;
+
+	default:
+		for (i = 0; i < 16; i++)
+		{
+			for (j = 0; j < 48; j++)
+			{
+				Prinu8TWord[i][j] = 0xFF;
+			}
+		}
+
+		bRESULT = FALSE;
+
+		break;
+	}
+
+	return bRESULT;
+}
+
+//============================================================================//
+// @brief  Send a row created by XY print functions to the printer.
+// @param  u8Row: The row for sending.
+// @retval None.
+//============================================================================//
+void PRN_SendFontXY(uint16_t u16Row)
+{
+	uint8_t u8Dat;
+	uint16_t u16DotCount = 0;
+
+	for (int i = 0; i < 48; i++)
+	{
+		u8Dat = u8Prinu8TWordXY[u16Row][i];
+
+		for (int j = 0; j < 8; j++)
+		{
+			HW_PBClr(P_CLK);
+
+			if (1 == (u8Dat & 0x01))
+			{
+				HW_PBSet(P_DI);
+
+				u16DotCount++;
+			}
+			else
+				HW_PBClr(P_DI);
+
+			u8Dat >>= 1;
+
+			DWT_Delay(1);
+
+			HW_PBSet(P_CLK);
+		}
+	}
+
+	HW_PBClr(P_LAT);
+
+	DWT_Delay(1);
+
+	HW_PBSet(P_LAT);
+
+	u16CurrRowMaxDots = u16DotCount;
+}
+
+//============================================================================//
+// @brief  Send a row created by normal print functions to the printer.
+// @param  u8Row: The row for sending.
+// @retval None.
+//============================================================================//
+void PRN_SendFont(uint8_t Row)
+{
+	uint8_t data;
+	uint16_t u16DotCount = 0;
+
+	for (int j = 0; j < 48; j++)
+	{
+		if (Row < 16)
+			data = Prinu8TWord[Row][j];
+		else
+			data = 0;
+
+		for (int i = 0; i < 8; i++)
+		{
+			HW_PBClr(P_CLK);
+
+			if (1 == (data & 0x01))
+			{
+				HW_PBSet(P_DI);
+
+				u16DotCount++;
+			}
+			else
+				HW_PBClr(P_DI);
+
+			data >>= 1;
+
+			DWT_Delay(1);
+
+			HW_PBSet(P_CLK);
+		}
+	}
+
+	HW_PBClr(P_LAT);
+
+	DWT_Delay(1);
+
+	HW_PBSet(P_LAT);
+
+	u16CurrRowMaxDots = u16DotCount;
+}
+
+//============================================================================//
+// @brief  Set initial parameters for the printer.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_ParameterInit(void)
+{
+	PSetting.prt_clk_set = PRN_CLK_Set;
+	PSetting.prt_di_set = PRN_DI_Set;
+	PSetting.prt_lat_set = PRN_LAT_Set;
+	PSetting.prt_ma_set = PRN_MA_Set;
+	PSetting.prt_mna_set = PRN_MNA_Set;
+	PSetting.prt_mb_set = PRN_MB_Set;
+	PSetting.prt_mnb_set = PRN_MNB_Set;
+	PSetting.prt_heat_set = PRN_Heat_Set;
+	// PSetting.prt_font = Prt_Font;
+	// print_data_init(&PSetting);
+	print_data_init(PSetting); // [Nancy add]
+}
+
+//============================================================================//
+// @brief  Initialize the printer.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_Init(void)
+{
+	/*
+	uint32_t u32SpeedRecAddr = EXFLASH_SPEED_RECORD_START_ADDR;
+	struct tm tmRTCTimeInfo;
+	RTC_TimeTypeDef rtcTime;
+	RTC_DateTypeDef rtcDate;
+	time_t ttStartTime;
+	//MX25L_StatusTypeDef mxlRes;
+
+
+	//EXTprintf("\r\n> Printer Init.");
+
+	// If using IC PCF as time source
+	if(g_bPCF_EN)
+	{
+		// Get current time in Binary format
+		PCF_GetTime(&rtcTime, 1);
+
+		// Get current date in Binary format
+		PCF_GetDate(&rtcDate, 1);
+	}
+	// If using RTC as time source
+	else
+	{
+		// Get current time in Binary format
+		HAL_RTC_GetTime(&hrtc, &rtcTime, RTC_FORMAT_BIN);
+
+		// Get current date in Binary format
+		HAL_RTC_GetDate(&hrtc, &rtcDate, RTC_FORMAT_BIN);
+	}
+
+	// Year in tm struct is counted from 1900
+	tmRTCTimeInfo.tm_year	= rtcDate.Year + 2000 - 1900U;
+	// Month in tm struct is counted from 0 corresponding to Jan
+	tmRTCTimeInfo.tm_mon	= rtcDate.Month - 1U;
+	tmRTCTimeInfo.tm_mday	= rtcDate.Date;
+	tmRTCTimeInfo.tm_hour	= rtcTime.Hours;
+	tmRTCTimeInfo.tm_min	= rtcTime.Minutes;
+	tmRTCTimeInfo.tm_sec	= rtcTime.Seconds;
+	tmRTCTimeInfo.tm_isdst = -1;
+
+	ttStartTime = mktime(&tmRTCTimeInfo) + g_Setting.i32TimeZoneOffset - 3600 * 0 - 60 * 0;
+
+	for(int i = 0; i < 1440; i++)
+		u8SpeedRecord[i] = (rand() % (140 - 0 + 1)) + 0;
+
+	u8SpeedRecord[1440] = (uint8_t)(ttStartTime & 0x000000FF);
+	u8SpeedRecord[1441] = (uint8_t)((ttStartTime >> 8) & 0x000000FF);
+	u8SpeedRecord[1442] = (uint8_t)((ttStartTime >> 16) & 0x000000FF);
+	u8SpeedRecord[1443] = (uint8_t)((ttStartTime >> 24) & 0x000000FF);
+
+	MX25L_MultiSectorsErase(u32SpeedRecAddr / MX25L_SECTOR_SIZE, 1);
+
+	MX25L_MultiPagesProgram(u32SpeedRecAddr / MX25L_PAGE_SIZE,
+							u8SpeedRecord, sizeof(u8SpeedRecord));
+	*/
+
+	HW_PBSet(PRN_PWR_EN);
+
+	PRN_ParameterInit();
+
+	print_driver_init(PRINTSPEED);
+}
+
+//============================================================================//
+// @brief  Increase the index of pending printing request number by 1 then write
+//         the index to the request list.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_IncRequestIdx(void)
+{
+	bool bRes;
+	char cFileName[64] = {0};
+
+	sprintf(cFileName, "%s/%s", DIRNAME_TEMP, PRINT_DATA_TEMP_FILE);
+
+	u16PrintRequestNum++;
+
+	for (int i = 0; i < 3; i++)
+	{
+		bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+
+		if (bRes)
+			break;
+	}
+}
+
+//============================================================================//
+// @brief  Decrease the index of the pending printing request number by 1 then
+//         write the index to the request list.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_DecRequestIdx(void)
+{
+	bool bRes;
+	char cFileName[64] = {0};
+
+	if (u16PrintRequestNum == 0)
+		return;
+
+	sprintf(cFileName, "%s/%s", DIRNAME_TEMP, PRINT_DATA_TEMP_FILE);
+
+	u16PrintRequestNum--;
+
+	for (int i = 0; i < 3; i++)
+	{
+		bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+
+		if (bRes)
+			break;
+	}
+}
+
+//============================================================================//
+// @brief  Add a new printing request to the pending list.
+// @param  u8PrintID: Print item ID.
+//         bReprint: TRUE: This item is for reprint.
+//                   FALSE: This item is for new print.
+// @retval TRUE: The request is done successfully.
+//         FALSE: The request is not fulfilled.
+//============================================================================//
+bool PRN_AddPendingRequest(uint8_t u8PrintID, bool bReprint)
+{
+	bool bRes;
+	osStatus osRes;
+	char cFilePath[64] = {0};
+
+	if (u8PrintID > MAX_PRINTING_ITEM)
+		return FALSE;
+
+	if (bRTOS_En)
+	{
+		// Acquire Printer mutex
+		osRes = osMutexWait(mutex_prn_user, S_2_mS(5));
+
+		if (osRes != osOK)
+		{
+			// EXTprintf("\r\n> Can't acquire PRN mutex. osRes:%d", osRes);
+			RTOSprintf("\r\n> Printing can't acquire PRN mutex. osRes:%d", osRes);
+
+			return FALSE;
+		}
+	}
+
+#ifndef DIRNAME_TEMP
+	sprintf(cFilePath, "%s", PRINT_DATA_TEMP_FILE);
+#else
+	sprintf(cFilePath, "%s/%s", DIRNAME_TEMP, PRINT_DATA_TEMP_FILE);
+#endif
+
+	prtDataHandle.u8PrintID = u8PrintID;
+
+	prtDataHandle.bRePrint = bReprint;
+
+	// If the request is for a new print
+	if (bReprint == FALSE)
+	{
+		prtDataHandle.u8ReprintCnt = 0;
+
+		memset(prtDataHandle.cDataBuf, 0x00, sizeof(prtDataHandle.cDataBuf));
+	}
+
+	bRes = SD_WriteBuffToAddr(cFilePath,
+							  (uint8_t *)&prtDataHandle,
+							  sizeof(prtDataHandle),
+							  2 + sizeof(prtDataHandle) * (uint32_t)u16PrintRequestNum);
+
+	if (bRes)
+	{
+		EXTprintf("\r\n> Add printing request %d OK.", u16PrintRequestNum + 1);
+
+		PRN_IncRequestIdx();
+	}
+	else
+	{
+		// EXTprintf("\r\n> Add printing request %d ERROR.", u16PrintRequestNum + 1);
+		RTOSprintf("\r\n> Printing add request %d ERROR.", u16PrintRequestNum + 1);
+	}
+
+	if (bRTOS_En)
+		// Release Printer mutex
+		osMutexRelease(mutex_prn_user);
+
+	return bRes;
+}
+
+//============================================================================//
+// @brief  Get a printing request from the pending list.
+// @param  None.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+bool PRN_GetPendingRequest(void)
+{
+	bool bRes;
+	osStatus osRes;
+	char cFilePath[64] = {0};
+
+	if (u16PrintRequestNum == 0)
+		return FALSE;
+
+	if (u8PStep != PRT_IDLE)
+		return FALSE;
+
+	if (bRTOS_En)
+	{
+		// Acquire Printer mutex
+		osRes = osMutexWait(mutex_prn_user, S_2_mS(5));
+
+		if (osRes != osOK)
+		{
+			// EXTprintf("\r\n> Can't acquire PRN mutex. osRes:%d", osRes);
+			RTOSprintf("\r\n> Printing can't acquire PRN mutex. osRes:%d", osRes);
+
+			return FALSE;
+		}
+	}
+
+#ifndef DIRNAME_TEMP
+	sprintf(cFilePath, "%s", PRINT_DATA_TEMP_FILE);
+#else
+	sprintf(cFilePath, "%s/%s", DIRNAME_TEMP, PRINT_DATA_TEMP_FILE);
+#endif
+
+	memset(&(prtDataHandle.u8PrintID), 0x00, sizeof(prtDataHandle));
+
+	bRes = SD_ReadAddrToBuff(cFilePath,
+							 (uint8_t *)&prtDataHandle,
+							 sizeof(prtDataHandle),
+							 2 + sizeof(prtDataHandle) * ((uint32_t)u16PrintRequestNum - 1));
+
+	if (bRes)
+	{
+		EXTprintf("\r\n> Get printing request %d OK.", u16PrintRequestNum);
+
+		PRN_DecRequestIdx();
+	}
+	else
+	{
+		// EXTprintf("\r\n> Get printing request %d ERROR.", u16PrintRequestNum);
+		RTOSprintf("\r\n> Printing get request %d ERROR.", u16PrintRequestNum);
+	}
+
+	if (bRTOS_En)
+		// Release Printer mutex
+		osMutexRelease(mutex_prn_user);
+
+	return bRes;
+}
+
+//============================================================================//
+// @brief  Print an item.
+// @param  u8Item: The ID of the item to print.
+// @retval None.
+//============================================================================//
+void PRN_Printing(uint8_t u8Item)
+{
+	if (u8PStep != PRT_IDLE)
+		return;
+
+	// EXTprintf("\r\n> ### PRN_Printing ###");
+
+	u8PrintItem = u8Item;
+
+	if ((u8PrintItem > 0) && (u8PrintItem <= MAX_PRINTING_ITEM))
+	{
+		// u8PStep = PRT_INIT;
+
+		// bPRN_Run = TRUE;
+
+		// while(bPRN_Stop == FALSE)
+		//{
+		//	PRN_PrintProcess();
+		// }
+
+		if (PRN_PaperStatus() == TRUE)
+			PRN_AddPendingRequest(u8Item, FALSE);
+		else
+		{
+			EXTprintf("\r\n> Out of paper. Unable to print.");
+
+			LCD_SetShowAutoTestPage(36);
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Set hour range for the chart.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_SetHourRange(uint8_t u8Hours)
+{
+	if (u8Hours > 24)
+		return;
+
+	u8HoursNum = u8Hours;
+}
+
+//============================================================================//
+// @brief  Processing the printing request.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_PrintProcess(void)
+{
+	struct tm tmLocalTimeInfo = {0}, tmPreTimeInfo = {0};
+	time_t ttStartTime = 0, ttPreTime;
+	// uint32_t u32SpeedRecAddr = EXFLASH_SPEED_RECORD_START_ADDR;
+
+	// EXTprintf("\r\n> Printer Step: %d", u8PStep);
+
+	if (u8PStep == PRT_IDLE)
+		return;
+
+	if ((u8PStep != PRT_IDLE) && (PRN_PaperStatus() == FALSE) && (bRequireReprint == FALSE))
+	{
+		// bRequireReprint = FALSE;
+
+		HAL_Delay(2000);
+
+		// If all the important parts of the item have been printed then
+		// no need to reprint
+		switch (u8PrintItem)
+		{
+		case 1:
+			if ((int)u8LStep < 33)
+				bRequireReprint = TRUE;
+
+			break;
+
+		case 2:
+			if ((int)u8LStep < 45)
+				bRequireReprint = TRUE;
+			;
+
+			break;
+
+		case 3:
+			bRequireReprint = TRUE;
+
+			break;
+
+		case 4:
+			bRequireReprint = TRUE;
+
+			break;
+
+		case 5:
+			if (u16yOffset < (u16TemplateWidth - 80))
+				bRequireReprint = TRUE;
+
+			break;
+
+		default:
+			break;
+		}
+
+		if (u8PrintItem == 5)
+		{
+			if (prtDataHandle.bRePrint == TRUE)
+				u8PStep = PRT_STOP;
+			else
+			{
+				if (u8PStep != PRT_INIT)
+					u8PStep = PRT_STOP;
+			}
+		}
+		else
+		{
+			if (prtDataHandle.bRePrint == TRUE)
+				u8PStep = PRT_STOP;
+		}
+	}
+
+	switch (u8PStep)
+	{
+	case PRT_INIT:
+		if (bRequireReprint == FALSE)
+			LCD_SetShowAutoTestPage(29);
+
+		u8LStep = 0;
+
+		// bRequireReprint = FALSE;
+
+		if (prtDataHandle.bRePrint == FALSE)
+			memset(&(prtDataHandle.u8PrintID), 0x00, sizeof(prtDataHandle));
+
+		if (u8PrintItem == 5)
+		{
+			uint8_t *pu8PrnPtr;
+
+			EXTprintf("\r\n> ### Printer 5 Init ###");
+
+			if (prtDataHandle.bRePrint == FALSE)
+			{
+				// if(u8HourDataCnt < 2)
+				//	u8HoursNum = 2;
+				// else
+				u8HoursNum = u8HourDataCnt;
+
+				u16TemplateWidth = (38 + 120 * u8HoursNum + 100);
+
+				u16yOffset = 0;
+
+				// MX25L_MultiBytesRead(u32SpeedRecAddr, u8SpeedRecord, sizeof(u8SpeedRecord));
+
+				ttStartTime |= (((uint32_t)u8SpeedRecord[1443] << 24) & 0xFF000000);
+				ttStartTime |= (((uint32_t)u8SpeedRecord[1442] << 16) & 0x00FF0000);
+				ttStartTime |= (((uint32_t)u8SpeedRecord[1441] << 8) & 0x0000FF00);
+				ttStartTime |= ((uint32_t)u8SpeedRecord[1440] & 0x000000FF);
+
+				ttPreTime = ttStartTime - 3600 * u8HoursNum + 60;
+
+				// localtime_r(&ttStartTime, &tmLocalTimeInfo);
+				localtime_r(&g_SysInfo.ttNow, &tmLocalTimeInfo);
+
+				u16StartMin = (tmLocalTimeInfo.tm_hour * 60 +
+							   tmLocalTimeInfo.tm_min + 1) %
+							  1440;
+
+				// sprintf(cCurrDate, "%02d-%02d-%04d", tmLocalTimeInfo->tm_mon + 1U, tmLocalTimeInfo->tm_mday,
+				//                                      tmLocalTimeInfo->tm_year + 1900U);
+				sprintf(cCurrDate, "%04d-%02d-%02d", tmLocalTimeInfo.tm_year + 1900U,
+						tmLocalTimeInfo.tm_mon + 1U,
+						tmLocalTimeInfo.tm_mday);
+
+				localtime_r(&ttPreTime, &tmPreTimeInfo);
+
+				// sprintf(cPreDate, "%02d-%02d-%04d", tmPreTimeInfo->tm_mon + 1U, tmPreTimeInfo->tm_mday,
+				//                                     tmPreTimeInfo->tm_year + 1900U);
+				sprintf(cPreDate, "%04d-%02d-%02d", tmPreTimeInfo.tm_year + 1900U,
+						tmPreTimeInfo.tm_mon + 1U,
+						tmPreTimeInfo.tm_mday);
+
+				memcpy(u8SpeedRecordTemp, u8SpeedRecord, sizeof(u8SpeedRecord));
+
+				pu8PrnPtr = &(prtDataHandle.u8PrintID);
+
+				pu8PrnPtr += 2;
+
+				memcpy(pu8PrnPtr, &u8HoursNum, sizeof(u8HoursNum));
+
+				pu8PrnPtr += sizeof(u8HoursNum);
+
+				memcpy(pu8PrnPtr, &u16StartMin, sizeof(u16StartMin));
+
+				pu8PrnPtr += sizeof(u16StartMin);
+
+				memcpy(pu8PrnPtr, cCurrDate, sizeof(cCurrDate));
+
+				pu8PrnPtr += sizeof(cCurrDate);
+
+				memcpy(pu8PrnPtr, cPreDate, sizeof(cPreDate));
+
+				pu8PrnPtr += sizeof(cPreDate);
+
+				memcpy(pu8PrnPtr, u8SpeedRecordTemp, sizeof(u8SpeedRecordTemp));
+			}
+			else
+			{
+				pu8PrnPtr = &(prtDataHandle.u8PrintID);
+
+				pu8PrnPtr += 2;
+
+				memcpy(&u8HoursNum, pu8PrnPtr, sizeof(u8HoursNum));
+
+				pu8PrnPtr += sizeof(u8HoursNum);
+
+				memcpy(&u16StartMin, pu8PrnPtr, sizeof(u16StartMin));
+
+				pu8PrnPtr += sizeof(u16StartMin);
+
+				memcpy(cCurrDate, pu8PrnPtr, sizeof(cCurrDate));
+
+				pu8PrnPtr += sizeof(cCurrDate);
+
+				memcpy(cPreDate, pu8PrnPtr, sizeof(cPreDate));
+
+				pu8PrnPtr += sizeof(cPreDate);
+
+				memcpy(u8SpeedRecordTemp, pu8PrnPtr, sizeof(u8SpeedRecordTemp));
+
+				u16TemplateWidth = (38 + 120 * u8HoursNum + 100);
+
+				u16yOffset = 0;
+
+				// EXTprintf("\r\n> Print item 5 hours number: %d", u8HoursNum);
+
+				// EXTprintf("\r\n> Print item 5 predate: %s", cPreDate);
+
+				// EXTprintf("\r\n> Print item 5 currdate: %s", cCurrDate);
+			}
+		}
+
+		bPRN_Run = TRUE;
+
+		if (bRequireReprint == FALSE)
+		{
+			EXTprintf("\r\n> ### PRN_Printing ###");
+
+			u8PStep = PRT_GETDATA;
+		}
+		else
+		{
+			if (u8PrintItem == 5)
+				u8PStep = PRT_STOP;
+			else
+			{
+				EXTprintf("\r\n> ### Get print data for reprint ###");
+
+				u8PStep = PRT_GETDATA;
+			}
+		}
+
+		// osTimerStart(timerRTOS_PRNHandle, 1);
+
+		break;
+
+	case PRT_GETDATA:
+		u16LineCnt = 0;
+
+		if (u8PrintItem == 1)
+			res = PRN_PrintTable1();
+		else if (u8PrintItem == 2)
+			res = PRN_PrintTable2();
+		else if (u8PrintItem == 3)
+			res = PRN_PrintTable3();
+		else if (u8PrintItem == 4)
+			res = PRN_PrintTable4();
+		else if (u8PrintItem == 5)
+		{
+			u16DrawColumnSize = u16TemplateWidth - u16yOffset;
+
+			if (u16DrawColumnSize > DRAW_COLUMN_SIZE_MAX)
+				u16DrawColumnSize = DRAW_COLUMN_SIZE_MAX;
+
+			res = PRN_GetPrintChartXY();
+
+			u16yOffset += u16DrawColumnSize;
+		}
+		else
+			res = FALSE;
+
+		if (res == TRUE)
+		{
+			if (bRequireReprint == TRUE)
+				u8PStep = PRT_GETDATA;
+			else
+				u8PStep = PRT_SENDDATA;
+		}
+		else
+			u8PStep = PRT_STOP;
+
+		// osTimerStart(timerRTOS_PRNHandle, 1);
+
+		break;
+
+	case PRT_SENDDATA:
+		// EXTprintf("\r\n> u8Cnt: %d", u16LineCnt);
+
+		if (u8PrintItem == 5)
+			PRN_SendFontXY(u16LineCnt);
+		else
+			PRN_SendFont(u16LineCnt);
+
+		u8PStep = PRT_HEAT;
+
+		break;
+
+	case PRT_HEAT:
+
+		HW_PBSet(P_STB1);
+		HW_PBSet(P_STB6);
+
+		HAL_Delay(12);
+
+		HW_PBClr(P_STB1);
+		HW_PBClr(P_STB6);
+
+		u8PStep = PRT_MOTOR_SET;
+
+		break;
+
+	case PRT_MOTOR_SET:
+
+		HW_PBSet(P_MTA1);
+		HW_PBClr(P_MTA2);
+		HW_PBClr(P_MTB2);
+		HW_PBSet(P_MTB1);
+
+		PRN_Delay(MOTOR_DLY);
+
+		HW_PBSet(P_MTA1);
+		HW_PBClr(P_MTA2);
+		HW_PBSet(P_MTB2);
+		HW_PBClr(P_MTB1);
+
+		PRN_Delay(MOTOR_DLY);
+
+		HW_PBClr(P_MTA1);
+		HW_PBSet(P_MTA2);
+		HW_PBSet(P_MTB2);
+		HW_PBClr(P_MTB1);
+
+		PRN_Delay(MOTOR_DLY);
+
+		HW_PBClr(P_MTA1);
+		HW_PBSet(P_MTA2);
+		HW_PBClr(P_MTB2);
+		HW_PBSet(P_MTB1);
+
+		u8PStep = PRN_PRINT_ONE_LINE;
+
+		break;
+
+	case PRN_PRINT_ONE_LINE:
+
+		u16LineCnt++;
+
+		if (u8PrintItem == 5)
+		{
+			if (u16LineCnt < u16DrawColumnSize)
+				u8PStep = PRT_SENDDATA;
+			else
+				u8PStep = PRT_GETDATA;
+		}
+		else
+		{
+			// if(u16LineCnt < 16)
+			if (u16LineCnt < 24)
+				u8PStep = PRT_SENDDATA;
+			else
+				u8PStep = PRT_GETDATA;
+		}
+
+		// osTimerStart(timerRTOS_PRNHandle, 1);
+
+		break;
+
+	case PRT_STOP:
+		HW_PBClr(P_MTA1);
+		HW_PBClr(P_MTA2);
+		HW_PBClr(P_MTB2);
+		HW_PBClr(P_MTB1);
+
+		bPRN_Run = FALSE;
+
+		if (bRequireReprint == TRUE)
+		{
+			// EXTprintf("\r\n> Request to reprint.");
+
+			EXTprintf("\r\n> Out of paper. Finish printing.");
+
+			// prtDataHandle.u8ReprintCnt++;
+
+			// PRN_AddPendingRequest(u8PrintItem, TRUE);
+
+			bRequireReprint = FALSE;
+
+			LCD_SetShowAutoTestPage(36);
+		}
+		else
+		{
+			EXTprintf("\r\n> Finish printing.");
+
+			if (u8PrintItem != 1)
+			{
+				LCD_SetShowAutoTestPage(41);
+			}
+		}
+
+		u8PStep = PRT_IDLE;
+
+		if (u8PrintItem == 1)
+		{
+			u8HourDataCnt = 4;
+
+			bGetSpeedRecord = TRUE;
+
+			while (bGetSpeedRecord)
+			{
+				PRN_GetSpeedRecord();
+			}
+
+			LCD_SetShowAutoTestPage(41);
+
+			// u8PrintItem = 0;
+		}
+		else
+		{
+			// SetShowMenuPage(0);
+
+			// u8PrintItem = 0;
+		}
+
+		break;
+
+	default:
+		break;
+	}
+}
+
+//============================================================================//
+// @brief  Process printing function.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PRN_Proc(void)
+{
+	bool bRes;
+
+	if ((u16PrintRequestNum > 0) && (u8PStep == PRT_IDLE) && (PRN_PaperStatus() == TRUE))
+	{
+		bRes = PRN_GetPendingRequest();
+
+		if (bRes)
+		{
+			if (prtDataHandle.u8ReprintCnt > MAX_PRINT_RETRY)
+			{
+				memset(&prtDataHandle, 0x00, sizeof(PrintDataTypeDef));
+
+				// EXTprintf("\r\n> Print reached maximum number of retries! Terminate current print request!");
+				RTOSprintf("\r\n> Print reached maximum number of retries! Terminate current print request!");
+			}
+			else
+			{
+				u8PrintItem = prtDataHandle.u8PrintID;
+
+				if ((u8PrintItem > 0) && (u8PrintItem <= MAX_PRINTING_ITEM))
+				{
+					if (prtDataHandle.bRePrint == TRUE)
+						EXTprintf("\r\n> Reprint item %d.", u8PrintItem);
+					else
+						EXTprintf("\r\n> Print item %d", u8PrintItem);
+
+					u8PStep = PRT_INIT;
+				}
+				else
+				{
+					// EXTprintf("\r\n> Incorrect printing item: %d", u8PrintItem);
+					RTOSprintf("\r\n> Incorrect printing item: %d", u8PrintItem);
+				}
+			}
+		}
+	}
+
+	if (u8PStep != PRT_IDLE)
+	{
+		PRN_PrintProcess();
+	}
+}
+
+//============================================================================//
+// @brief  Load the speed record at the beginning of the program
+// @param  None.
+// @retval TRUE/ FALSE.
+//============================================================================//
+bool PRN_LoadSpeedRecord(void)
+{
+	MX25L_StatusTypeDef MXL_Res;
+	struct tm tmPreLocalTimeInfo = {0}, tmCurrLocalTimeInfo = {0};
+	struct tm tmRTCTimeInfo;
+	RTC_TimeTypeDef rtcTime;
+	RTC_DateTypeDef rtcDate;
+	time_t ttCurrTime, ttPreTime = 0, ttTimeDiff;
+	uint32_t u32SpeedRecAddr = EXFLASH_SPEED_RECORD_START_ADDR;
+	uint32_t u32Days, u32Mins;
+	uint16_t u16PreMin, u16CurrMin;
+
+	// for(int i = 0; i < sizeof(u8SpeedRecord); i++)
+	//   u8SpeedRecord[i] = 0;
+
+	MXL_Res = MX25L_MultiBytesRead(u32SpeedRecAddr, u8SpeedRecord, sizeof(u8SpeedRecord));
+
+	if (MXL_Res != MX25L_OK)
+		return FALSE;
+
+	ttPreTime |= (((uint32_t)u8SpeedRecord[1443] << 24) & 0xFF000000);
+	ttPreTime |= (((uint32_t)u8SpeedRecord[1442] << 16) & 0x00FF0000);
+	ttPreTime |= (((uint32_t)u8SpeedRecord[1441] << 8) & 0x0000FF00);
+	ttPreTime |= ((uint32_t)u8SpeedRecord[1440] & 0x000000FF);
+
+	// If using IC PCF as time source
+	if (g_bPCF_EN)
+	{
+		// Get current time in Binary format
+		PCF_GetTime(&rtcTime, 1);
+
+		// Get current date in Binary format
+		PCF_GetDate(&rtcDate, 1);
+	}
+	// If using RTC as time source
+	else
+	{
+		// Get current time in Binary format
+		HAL_RTC_GetTime(&hrtc, &rtcTime, RTC_FORMAT_BIN);
+
+		// Get current date in Binary format
+		HAL_RTC_GetDate(&hrtc, &rtcDate, RTC_FORMAT_BIN);
+	}
+
+	// Year in tm struct is counted from 1900
+	tmRTCTimeInfo.tm_year = rtcDate.Year + 2000 - 1900U;
+	// Month in tm struct is counted from 0 corresponding to Jan
+	tmRTCTimeInfo.tm_mon = rtcDate.Month - 1U;
+	tmRTCTimeInfo.tm_mday = rtcDate.Date;
+	tmRTCTimeInfo.tm_hour = rtcTime.Hours;
+	tmRTCTimeInfo.tm_min = rtcTime.Minutes;
+	tmRTCTimeInfo.tm_sec = rtcTime.Seconds;
+	tmRTCTimeInfo.tm_isdst = -1;
+
+	ttCurrTime = mktime(&tmRTCTimeInfo) + g_Setting.i32TimeZoneOffset;
+
+	ttTimeDiff = ttCurrTime - ttPreTime;
+
+	u32Days = ttTimeDiff / 86400;
+
+	u32Mins = (ttTimeDiff % 86400) / 60;
+
+	if (u32Days > 0)
+	{
+		for (int i = 0; i < 1440; i++)
+			u8SpeedRecord[i] = 0;
+	}
+	else if (u32Mins > 0)
+	{
+		localtime_r(&ttPreTime, &tmPreLocalTimeInfo);
+
+		u16PreMin = (tmPreLocalTimeInfo.tm_hour) * 60 +
+					tmPreLocalTimeInfo.tm_min;
+
+		localtime_r(&ttCurrTime, &tmCurrLocalTimeInfo);
+
+		u16CurrMin = (tmCurrLocalTimeInfo.tm_hour) * 60 +
+					 tmCurrLocalTimeInfo.tm_min;
+
+		if (u16PreMin < u16CurrMin)
+			for (int i = (u16PreMin + 1); i <= u16CurrMin; i++)
+				u8SpeedRecord[i] = 0;
+		else if (u16PreMin > u16CurrMin)
+		{
+			for (int i = (u16PreMin + 1); i < 1440; i++)
+				u8SpeedRecord[i] = 0;
+			for (int i = 0; i <= u16CurrMin; i++)
+				u8SpeedRecord[i] = 0;
+		}
+	}
+
+	u8SpeedRecord[1440] = (uint8_t)(ttCurrTime & 0x000000FF);
+	u8SpeedRecord[1441] = (uint8_t)((ttCurrTime >> 8) & 0x000000FF);
+	u8SpeedRecord[1442] = (uint8_t)((ttCurrTime >> 16) & 0x000000FF);
+	u8SpeedRecord[1443] = (uint8_t)((ttCurrTime >> 24) & 0x000000FF);
+
+	MX25L_MultiSectorsErase(u32SpeedRecAddr / MX25L_SECTOR_SIZE, 1);
+
+	MXL_Res = MX25L_MultiPagesProgram(u32SpeedRecAddr / MX25L_PAGE_SIZE,
+									  u8SpeedRecord, sizeof(u8SpeedRecord));
+
+	if (MXL_Res == MX25L_OK)
+		return TRUE;
+	else
+		return FALSE;
+}
+
+//============================================================================//
+// @brief  Update the current speed record
+// @param  u8SpeedVal: Speed value.
+// @retval TRUE/ FALSE.
+//============================================================================//
+bool PRN_UpdateSpeedRecord(uint8_t u8SpeedVal)
+{
+	MX25L_StatusTypeDef MXL_Res;
+	struct tm tmLocalTimeInfo = {0};
+	time_t ttCurrTime;
+	uint16_t u16CurrMin;
+	uint32_t u32SpeedRecAddr = EXFLASH_SPEED_RECORD_START_ADDR;
+
+	// MXL_Res = MX25L_MultiBytesRead(u32SpeedRecAddr, u8SpeedRecord, sizeof(u8SpeedRecord));
+
+	// if(MXL_Res != MX25L_OK)
+	//	return FALSE;
+
+	ttCurrTime = System_GetTime();
+
+	localtime_r(&ttCurrTime, &tmLocalTimeInfo);
+
+	u16CurrMin = (tmLocalTimeInfo.tm_hour) * 60 +
+				 tmLocalTimeInfo.tm_min;
+
+	u8SpeedRecord[u16CurrMin] = u8SpeedVal;
+
+	u8SpeedRecord[1440] = (uint8_t)(ttCurrTime & 0x000000FF);
+	u8SpeedRecord[1441] = (uint8_t)((ttCurrTime >> 8) & 0x000000FF);
+	u8SpeedRecord[1442] = (uint8_t)((ttCurrTime >> 16) & 0x000000FF);
+	u8SpeedRecord[1443] = (uint8_t)((ttCurrTime >> 24) & 0x000000FF);
+
+	MX25L_MultiSectorsErase(u32SpeedRecAddr / MX25L_SECTOR_SIZE, 1);
+
+	MXL_Res = MX25L_MultiPagesProgram(u32SpeedRecAddr / MX25L_PAGE_SIZE,
+									  u8SpeedRecord, sizeof(u8SpeedRecord));
+
+	if (MXL_Res == MX25L_OK)
+		return TRUE;
+	else
+		return FALSE;
+}
+
+//============================================================================//
+// @brief  Get the current speed record
+// @param  u8SpeedRecord: speed data
+// @retval
+//============================================================================//
+void PRN_GetSpeedRecord(void)
+{
+	time_t ttCurrTime;
+	struct tm tmLocalTimeInfo = {0};
+	uint16_t u16Idx;
+	uint32_t u32Sec, u32Sec2, u32Buf;
+	DetailSpeedTypeDef stDeSpeed;
+	uint16_t u16CurrMin;
+	uint32_t u32SpeedVal; //, u32SpeedRecAddr = EXFLASH_SPEED_RECORD_START_ADDR;
+	// Gary Debug Msg used.
+	uint8_t u8BCDTime[7] = {0};
+
+	EXTprintf("\r\n> ### PRN_GetSpeedRecord ###");
+
+	ttCurrTime = System_GetTime();
+
+	u8SpeedRecord[1440] = (uint8_t)(ttCurrTime & 0x000000FF);
+	u8SpeedRecord[1441] = (uint8_t)((ttCurrTime >> 8) & 0x000000FF);
+	u8SpeedRecord[1442] = (uint8_t)((ttCurrTime >> 16) & 0x000000FF);
+	u8SpeedRecord[1443] = (uint8_t)((ttCurrTime >> 24) & 0x000000FF);
+
+	// ttCurrTime -= g_Setting.i32TimeZoneOffset;
+
+	u32Sec2 = (ttCurrTime - HOUR_2_SECOND(u8HourDataCnt)) + 1;
+
+	// Debug
+	SecToBCDTime(ttCurrTime, u8BCDTime);
+	EXTprintf("\r\n> ### Now: %02X%02X/%02X/%02X %02X:%02X:%02X ###",
+			  u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3],
+			  u8BCDTime[4], u8BCDTime[5], u8BCDTime[6]);
+
+	SecToBCDTime(u32Sec2, u8BCDTime);
+	EXTprintf("\r\n> ### End: %02X%02X/%02X/%02X %02X:%02X:%02X ###",
+			  u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3],
+			  u8BCDTime[4], u8BCDTime[5], u8BCDTime[6]);
+
+	SD_ReadFileToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&u16Idx, HEADLENS);
+
+	u16Idx--;
+
+	do
+	{
+		SD_ReadAddrToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&stDeSpeed.u8DateBCD, DATELENS, HEADLENS + (u16Idx * DATELENS));
+
+		u32Sec = BCDTimeToSec(stDeSpeed.u8DateBCD);
+
+		if (u32Sec < u32Sec2)
+			break;
+
+		// u32Buf = u32Sec + g_Setting.i32TimeZoneOffset;
+		u32Buf = u32Sec;
+
+		localtime_r(&u32Buf, &tmLocalTimeInfo);
+
+		u16CurrMin = (tmLocalTimeInfo.tm_hour) * 60 + tmLocalTimeInfo.tm_min;
+
+		u32SpeedVal = 0;
+
+		for (int j = 0; j < 120; j++)
+		{
+			u32SpeedVal += stDeSpeed.u8SpeedData[j];
+		}
+
+		u8SpeedRecord[u16CurrMin] = u32SpeedVal / 120;
+
+		// EXTprintf("\r\n> ### %02X%02X/%02X/%02X %02X:%02X:%02X Cnt: %d, Speed: %d, u16Idx: %d ###",
+		//		      stDeSpeed.u8DateBCD[0], stDeSpeed.u8DateBCD[1], stDeSpeed.u8DateBCD[2],
+		//		      stDeSpeed.u8DateBCD[3],	stDeSpeed.u8DateBCD[4], stDeSpeed.u8DateBCD[5],
+		//		      stDeSpeed.u8DateBCD[6], u16CurrMin, u8SpeedRecord[u16CurrMin], u16Idx);
+
+		if (u16Idx == 0)
+			break;
+
+		u16Idx--;
+
+		// EXTprintf("\r\n> ### 3 u16Idx: %d ###", u16Idx);
+
+		if (u16Idx > 0xFFF0)
+		{
+			break;
+		}
+
+	} while (u32Sec > u32Sec2);
+
+	bGetSpeedRecord = FALSE;
+
+	PRN_Printing(5);
+}
+
+//============================================================================//
+// @brief  Delay for printer, unit: Machine cycle
+// @param  cnt: Number of machine cycles to delay
+// @retval
+//============================================================================//
+void PRN_Delay(short cnt)
+{
+	while (cnt)
+		cnt--;
+}

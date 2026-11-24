@@ -1,0 +1,13 @@
+USER_Ring_Buffer.c:9:6:RingBuf_Init	16	static
+USER_Ring_Buffer.c:30:6:RingBuf_DeInit	16	static
+USER_Ring_Buffer.c:46:6:RingBuf_Reset	16	static
+USER_Ring_Buffer.c:58:10:RingBuf_GetFreeSpace	16	static
+USER_Ring_Buffer.c:71:10:RingBuf_GetDataLength	16	static
+USER_Ring_Buffer.c:84:10:RingBuf_GetDataLenPos	24	static
+USER_Ring_Buffer.c:105:6:RingBuf_DataShift	40	static
+USER_Ring_Buffer.c:139:10:RingBuf_ReadPos	32	static
+USER_Ring_Buffer.c:171:10:RingBuf_Read	32	static
+USER_Ring_Buffer.c:191:10:RingBuf_Write	32	static
+USER_Ring_Buffer.c:222:10:RingBuf_Peek	32	static
+USER_Ring_Buffer.c:239:6:RingBuf_Find	32	static
+USER_Ring_Buffer.c:285:6:RingBuf_FindPos	32	static

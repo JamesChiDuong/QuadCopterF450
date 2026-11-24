@@ -1,0 +1,306 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "Buzzer.h"
+
+#include <string.h>
+
+#include "Default.h"
+
+//============================================================================//
+// User Variables
+//============================================================================//
+BuzzerItem_t g_BuzzerItem[BUZZER_ITEM_MAX] = {0};
+
+FlagStatus FlagBuzzerMute = RESET;
+
+bool bBzEnable = FALSE;
+
+uint8_t u8BzItem = 0;
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Set buzzer mute.
+// @param  FlagMute: Mute status.
+// @retval None.
+//============================================================================//
+void Buzzer_SetMute(FlagStatus FlagMute)
+{
+    FlagBuzzerMute = FlagMute;
+}
+
+//============================================================================//
+// @brief  Get a free buzzer slot.
+// @param  None.
+// @retval Buzzer slot id in uint8_t format.
+//============================================================================//
+static uint8_t Buzzer_GetFreeItem(void)
+{
+    uint8_t u8ITEM;
+
+    for (u8ITEM = 0; u8ITEM < BUZZER_ITEM_MAX; u8ITEM++)
+    {
+        if (g_BuzzerItem[u8ITEM].Enable == FALSE)
+            return u8ITEM;
+    }
+
+    return BUZZER_INVALID_ID;
+}
+
+//============================================================================//
+// @brief  Set buzzer ring on.
+// @param  pu8ITEM: Pointer to buzzer slot ID.
+//         tINTERVAL: Buzzer interval.
+//         u8COUNT: Number of ring.
+// @retval TRUE: Buzzer set ring OK.
+//         FALSE: Buzzer set ring failed.
+//============================================================================//
+bool Buzzer_SetRing(uint8_t *pu8ITEM, BUZZER_INTERVAL_t tINTERVAL, uint8_t u8COUNT)
+{
+    if (*pu8ITEM != BUZZER_INVALID_ID && g_BuzzerItem[*pu8ITEM].Enable == TRUE)
+        return TRUE;
+
+    *pu8ITEM = Buzzer_GetFreeItem();
+
+    if (*pu8ITEM == BUZZER_INVALID_ID)
+        return FALSE;
+
+    switch (tINTERVAL)
+    {
+    case BEEP_SHORT:
+        g_BuzzerItem[*pu8ITEM].u8Interval = BUZZER_INTERVAL_SHORT;
+
+        break;
+
+    case BEEP_LONG:
+        g_BuzzerItem[*pu8ITEM].u8Interval = BUZZER_INTERVAL_LONG;
+
+        break;
+
+    default:
+        *pu8ITEM = BUZZER_INVALID_ID;
+
+        return FALSE;
+    }
+
+    g_BuzzerItem[*pu8ITEM].Enable = TRUE;
+
+    g_BuzzerItem[*pu8ITEM].u8CountIntv = g_BuzzerItem[*pu8ITEM].u8Interval;
+
+    g_BuzzerItem[*pu8ITEM].u8CountBeep = u8COUNT;
+
+    return TRUE;
+}
+
+//============================================================================//
+// @brief  Stop buzzer ring.
+// @param  pu8ITEM: Pointer to buzzer slot ID.
+// @retval TRUE: Buzzer stop ring OK.
+//         FALSE: Buzzer stop ring failed.
+//============================================================================//
+bool Buzzer_ClrRing(uint8_t *pu8ITEM)
+{
+    if (*pu8ITEM == BUZZER_INVALID_ID)
+        return TRUE;
+
+    if (*pu8ITEM >= BUZZER_ITEM_MAX)
+        return FALSE;
+
+    memset(&g_BuzzerItem[*pu8ITEM], 0x00, sizeof(BuzzerItem_t));
+
+    *pu8ITEM = BUZZER_INVALID_ID;
+
+    return TRUE;
+}
+
+//============================================================================//
+// @brief  Start buzzer ring.
+// @param  u8ITEM: Buzzer ring type ID.
+// @retval None.
+//============================================================================//
+void Buzzer_SetRing2(uint8_t u8Item)
+{
+    u8BzItem = u8Item;
+
+    bBzEnable = TRUE;
+}
+
+//============================================================================//
+// @brief  Stop buzzer ring.
+// @param  None.
+//         None.
+//============================================================================//
+void Buzzer_ClrRing2(void)
+{
+    bBzEnable = FALSE;
+}
+
+//============================================================================//
+// @brief  Get buzzer state.
+// @param  pu8BzState: Pointer to a uint8_t variable to store buzzer state.
+// @retval TRUE: Buzzer is enabled.
+//         FALSE: Buzzer is disabled.
+//============================================================================//
+bool Buzzer_GetState(uint8_t *pu8BzState)
+{
+    *pu8BzState = u8BzItem;
+
+    if (bBzEnable == TRUE)
+        return TRUE;
+    else
+        return FALSE;
+}
+
+//============================================================================//
+// @brief  Play the buzzer.
+// @param  tINTERVAL: Buzzer interval.
+//         u8COUNT: Number of ring.
+// @retval None.
+//============================================================================//
+void Buzzer_Beep(BUZZER_INTERVAL_t tINTERVAL, uint8_t u8COUNT)
+{
+    uint8_t i;
+
+    if (FlagBuzzerMute == SET)
+        return;
+
+    HW_PBClr(BUZZER);
+
+    for (i = 0; i < u8COUNT; i++)
+    {
+        HW_PBSet(BUZZER);
+
+        if (tINTERVAL == BEEP_SHORT)
+        {
+            HAL_Delay(200);
+        }
+
+        if (tINTERVAL == BEEP_LONG)
+            HAL_Delay(500);
+
+        HW_PBClr(BUZZER);
+
+        HAL_Delay(100);
+    }
+}
+
+//============================================================================//
+// @brief  Handle buzzer process.
+// @param  None.
+// @retval TRUE: Buzzer is playing.
+//         FALSE: Buzzer is stopped.
+//============================================================================//
+bool Buzzer_Handle_Proc(void)
+{
+    uint8_t ITEM;
+    bool IsRing = FALSE;
+
+    HW_PBClr(BUZZER);
+
+    for (ITEM = 0; ITEM < BUZZER_ITEM_MAX; ITEM++)
+    {
+        if (g_BuzzerItem[ITEM].Enable == FALSE)
+            continue;
+
+        if (g_BuzzerItem[ITEM].u8Interval == 0)
+        {
+            memset(&g_BuzzerItem[ITEM], 0x00, sizeof(BuzzerItem_t));
+
+            continue;
+        }
+
+        g_BuzzerItem[ITEM].u8CountIntv--;
+
+        if (g_BuzzerItem[ITEM].u8CountIntv == 0)
+        {
+            IsRing = TRUE;
+
+            g_BuzzerItem[ITEM].u8CountIntv = g_BuzzerItem[ITEM].u8Interval;
+
+            if (g_BuzzerItem[ITEM].u8CountBeep != BUZZER_BEEP_CONTINUE)
+            {
+                if (g_BuzzerItem[ITEM].u8CountBeep)
+                {
+                    g_BuzzerItem[ITEM].u8CountBeep--;
+                }
+
+                if (g_BuzzerItem[ITEM].u8CountBeep == 0)
+                    memset(&g_BuzzerItem[ITEM], 0x00, sizeof(BuzzerItem_t));
+            }
+        }
+    }
+
+    if (IsRing == TRUE)
+    {
+        if (FlagBuzzerMute == SET)
+            return TRUE;
+
+        HW_PBSet(BUZZER);
+    }
+
+    return TRUE;
+}
+
+//============================================================================//
+// @brief  Handle buzzer process version 2.
+// @param  None.
+// @retval TRUE: Buzzer is playing.
+//         FALSE: Buzzer is stopped.
+//============================================================================//
+bool Buzzer_Handle_Proc2(void)
+{
+    if (bBzEnable == FALSE)
+    {
+        HW_PBClr(BUZZER);
+
+        return FALSE;
+    }
+
+    switch (u8BzItem)
+    {
+    case 1:
+        Buzzer_Beep(BEEP_SHORT, 1);
+
+        break;
+
+    case 2:
+        Buzzer_Beep(BEEP_SHORT, 2);
+
+        break;
+
+    case 3:
+        Buzzer_Beep(BEEP_SHORT, 3);
+
+        break;
+
+    case 4:
+        Buzzer_Beep(BEEP_SHORT, 4);
+
+        break;
+
+    case 5:
+        Buzzer_Beep(BEEP_SHORT, 5);
+
+        break;
+
+    case 6:
+        Buzzer_Beep(BEEP_LONG, 1);
+
+        break;
+
+    case 7:
+        Buzzer_Beep(BEEP_LONG, 2);
+
+        break;
+
+    default:
+        HW_PBClr(BUZZER);
+
+        break;
+    }
+
+    return TRUE;
+}

@@ -1,0 +1,4 @@
+USER_CommFunc.c:14:6:StopChar	16	static
+USER_CommFunc.c:26:6:ChangeChar	16	static
+USER_CommFunc.c:48:6:RTOSprintf	16	static
+USER_CommFunc.c:84:7:RTOSmalloc	24	static

@@ -1,0 +1,367 @@
+#ifndef _MX25L_DRIVER_H_
+#define _MX25L_DRIVER_H_
+//============================================================================//
+
+
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "main.h"
+#include "CommFunc.h"
+#include "DataType.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+// MX25L type //
+#define MX25L3233F   (0)
+
+#define MX25L6433F   (1)
+
+// Memory organization //
+
+// Memory start address
+#define MX25L_MEM_START_ADDR        0x000000
+
+// MX25L3233F memory size
+#define MX25L3233F_MEM_SIZE         0x400000
+
+// MX25L6433F memory size
+#define MX25L6433F_MEM_SIZE         0x800000
+
+// Page size
+#define MX25L_PAGE_SIZE             256 // 256 bytes
+
+// Sector size
+#define MX25L_SECTOR_SIZE           (4 * 1024) // 4KB
+
+// Block32 size
+#define MX25L_BLOCK32_SIZE          (32 * 1024) // 32KB
+
+// Block64 size
+#define MX25L_BLOCK64_SIZE          (64 * 1024) // 64KB
+
+// MX25L3233F number of sectors
+#define MX25L3233F_SECTOR_NUM       1024 // 1024 sectors
+
+// MX25L3233F number of pages
+#define MX25L3233F_PAGE_NUM         (16 * MX25L3233F_SECTOR_NUM)
+
+// MX25L3233F number of Block32
+#define MX25L3233F_BLOCK32_NUM      128 // 128 Block32
+
+// MX25L3233F number of Block64
+#define MX25L3233F_BLOCK64_NUM      64 // 64 Block64
+
+// MX25L6433F number of sectors
+#define MX25L6433F_SECTOR_NUM       2048 // 1024 sectors
+
+// MX25L6433F number of pages
+#define MX25L6433F_PAGE_NUM         (16 * MX25L6433F_SECTOR_NUM)
+
+// MX25L6433F number of Block32
+#define MX25L6433F_BLOCK32_NUM      256 // 128 Block32
+
+// MX25L6433F number of Block64
+#define MX25L6433F_BLOCK64_NUM      128 // 64 Block64
+
+// Register address //
+#define MX25L_READ                  0x03 // Read data bytes        
+#define MX25L_FAST_READ             0x0B // Higher speed read        
+#define MX25L_2READ                 0xBB // 2 x I/O read command   
+#define MX25L_DREAD                 0x3B // 1I / 2O read command     
+#define MX25L_4READ                 0xEB // 4 x I/O read command     
+#define MX25L_QREAD                 0x6B // 1I / 4O read command   
+#define MX25L_WREN                  0x06 // Write Enable             
+#define MX25L_WRDI                  0x04 // Write Disable           
+#define MX25L_RDSR                  0x05 // Read status register    
+#define MX25L_RDCR                  0x15 // Read config register     
+#define MX25L_WRSR                  0x01 // Write stat/conf register 
+#define MX25L_4PP                   0x38 // Quad page program      
+#define MX25L_SE                    0x20 // 4Kb Sector erase        
+#define MX25L_BE32                  0x52 // 32Kbit block Erase   
+#define MX25L_BE64                  0xD8 // 64Kbit block Erase      
+#define MX25L_CE                    0xC7 // Chip erase              
+#define MX25L_CE_ALT                0x60 // Chip erase (alternate) 
+#define MX25L_PP                    0x02 // Page program             
+#define MX25L_DP                    0xB9 // Deep power down         
+#define MX25L_RDP                   0xAB // Release deep power down   
+#define MX25L_PGM_SUSPEND           0x75 // Suspends program      
+#define MX25L_ERS_SUSPEND           0xB0 // Suspends erase         
+#define MX25L_PGM_RESUME            0x7A // Resume program        
+#define MX25L_ERS_RESUME            0x30 // Resume erase            
+#define MX25L_RDID                  0x9F // Read identification      
+#define MX25L_RES                   0xAB // Read electronic ID     
+#define MX25L_REMS                  0x90 // Read manufacture and ID 
+#define MX25L_ENSO                  0xB1 // Enter secured OTP       
+#define MX25L_EXSO                  0xC1 // Exit secured OTP        
+#define MX25L_RDSCUR                0x2B // Read security register   
+#define MX25L_WRSCUR                0x2F // Write security register 
+#define MX25L_RSTEN                 0x66 // Reset Enable            
+#define MX25L_RST                   0x99 // Reset Memory             
+#define MX25L_RDSFDP                0x5A // Read out until CS# high  
+#define MX25L_SBL                   0xC0 // Set Burst Length       
+#define MX25L_SBL_ALT               0x77 // Set Burst Length        
+#define MX25L_NOP                   0x00 // No Operation            
+
+// Device ID //
+#define MX25L_MANUFACTURER_ID       0xC2 // Macronix manufacturer ID 
+#define MX25L3233F_ID               0x15 // MX25L3233F device ID 
+#define MX25L6433F_ID               0x16 // MX25L6433F device ID 
+
+// Read ID register values //
+#define MX25L_MEMORY_TYPE           0x20 // MX25L  memory type 
+#define MX25L3233F_CAPACITY         0x16 // MX25L3233F memory capacity 
+#define MX25L6433F_CAPACITY         0x17 // MX25L6433F memory capacity 
+
+// Status register bit definitions //
+#define MX25L_SR_WIP                (1 << 0) // Bit 0: Write in progress 
+#define MX25L_SR_WEL                (1 << 1) // Bit 1: Write enable latch 
+#define MX25L_SR_BP_SHIFT           (2) // Bits 2-5: Block protect bits 
+#define MX25L_SR_BP_MASK            (15 << MX25L_SR_BP_SHIFT)
+#define MX25L_SR_QE                 (1 << 6) // Bit 6: Quad enable 
+#define MX25L_SR_SRWD               (1 << 7) // Bit 7: Status register write protect 
+
+// Configuration register bit definitions //
+#define MX25L_CR_ODS                (1 << 0) // Bit 0: Output driver strength 
+#define MX25L_CR_TB                 (1 << 3) // Bit 3: Top/bottom selected 
+#define MX25L_CR_DC                 (1 << 6) // Bit 6: Dummy cycle 
+
+// Dummy byte value
+#define MX25L_DUMMY                 MX25L_NOP
+
+// Flash erase value
+#define MX25L_ERASED_STATE          0xFF
+
+// Chip power state //
+#define MX25L_POWER_NORMAL          TRUE // Chip in normal operation mode
+
+#define MX25L_DEEP_POWER_DOWN       FALSE // Chip in deep power-down mode
+
+// Maximum waiting time for each operation in milliseconds //
+#define MX25L_WRITE_STATUS_WAIT     40U // Write status register: 40ms
+
+#define MX25L_PAGE_PROG_WAIT        2U // Program a page: 2ms
+
+#define MX25L_SECT_ERASE_WAIT       200U // Erase a sector: 200ms
+
+#define MX25L_B32_ERASE_WAIT        600U // Erase a 32K block: 600ms
+
+#define MX25L_B64_ERASE_WAIT        S_2_mS(1U) // Erase a 64K block: 1s
+
+#define MX25L_CHIP_ERASE_WAIT       S_2_mS(30U) // Erase the whole chip: 30s
+
+#define MX25L_ENT_PWR_DOWN_WAIT     1U // Transition to deep power down mode: 1ms
+
+#define MX25L_RLS_PWR_DOWN_WAIT     1U // Transition from deep power down mode: 1ms
+
+#define MX25L_RST_WAIT              15U // Wait for reset operation complete: 15ms
+
+#define MX25L_ERR_CNT_MAX           5U // Maximum MX25L errors allowed before restart the IC
+
+#define MX25L_RESTART_CNT_MAX       2U // Maximum number of restart for MX25L
+
+#define MX25L_REPORT_ERR_TIMEOUT    S_2_mS(120U) // Timeout for waiting for MX25L error report
+
+// Convert offset address to memory physical address //
+
+// Page address
+#define __MX25L_PAGE_ADDR(__PAGE_OFFST__)      (uint32_t)(MX25L_MEM_START_ADDR + \
+                                                          MX25L_PAGE_SIZE * \
+																												  __PAGE_OFFST__)
+
+// Sector address
+#define __MX25L_SECT_ADDR(__SECT_OFFST__)      (uint32_t)(MX25L_MEM_START_ADDR + \
+                                                          MX25L_SECTOR_SIZE * \
+																						              __SECT_OFFST__)
+
+// Block32 address
+#define __MX25L_B32_ADDR(__B32_OFFST__)        (uint32_t)(MX25L_MEM_START_ADDR + \
+                                                          MX25L_BLOCK32_SIZE * \
+																						              __B32_OFFST__)
+
+// Block64 address
+#define __MX25L_B64_ADDR(__B64_OFFST__)        (uint32_t)(MX25L_MEM_START_ADDR + \
+                                                          MX25L_BLOCK64_SIZE * \
+																						              __B64_OFFST__)
+
+// ExFlash Memory divide //
+
+// Chinese characters font
+#define B32_EXFLASH_CHARACTERS_LIB_START       0U
+
+#define EXFLASH_CHARACTERS_LIB_START_ADDR      __MX25L_B32_ADDR(B32_EXFLASH_CHARACTERS_LIB_START)
+
+// g_Setting
+#define B32_EXFLASH_G_SETTING_START            30U
+
+#define EXFLASH_G_SETTING_START_ADDR           __MX25L_B32_ADDR(B32_EXFLASH_G_SETTING_START)
+
+// Firmware temporary storage
+#define B32_EXFLASH_TEMP_START                 32U
+
+#define EXFLASH_TEMP_START_ADDR                __MX25L_B32_ADDR(B32_EXFLASH_TEMP_START)
+
+// Temporary Firmware size
+#define B32_EXFLASH_TEMP_SIZE_START          	 63U
+
+#define EXFLASH_TEMP_SIZE_START_ADDR           __MX25L_B32_ADDR(B32_EXFLASH_TEMP_SIZE_START)
+
+// Speed record
+#define B32_EXFLASH_SPEED_RECORD_START         64U
+
+#define EXFLASH_SPEED_RECORD_START_ADDR        __MX25L_B32_ADDR(B32_EXFLASH_SPEED_RECORD_START)
+  
+// File index
+#define B32_EXFLASH_FILE_INDEX_START           72U
+
+#define EXFLASH_FILE_INDEX_START_ADDR          __MX25L_B32_ADDR(B32_EXFLASH_FILE_INDEX_START) 
+
+// Distance Value
+#define B32_EXFLASH_BACKUP_SETTING_START			 74U
+
+#define EXFLASH_BACKUP_SETTING_START_ADDR      __MX25L_B32_ADDR(B32_EXFLASH_BACKUP_SETTING_START)
+
+
+//============================================================================//
+// User TypeDefs
+//============================================================================//
+typedef enum
+{
+	MX25L_OK = 0x00U, // Operation successful
+	MX25L_WRITE_ERROR = 0x01U, // Error when write a byte
+	MX25L_READ_ERROR = 0x02U, // Error when read a byte
+	MX25L_MATCH_ERROR = 0x03U, // 2 values of status register or
+	                           // config register is not match
+	MX25L_WR_EN_ERROR = 0x04U, // Error when trying to enable write
+	MX25L_WR_DIS_ERROR = 0x05U, // Error when trying to disable write
+	MX25L_ADDR_INVALID = 0x06U, // Address is invalid
+	MX25L_LEN_INVALID = 0x07U, // Length of data is invalid
+	MX25L_PROGRAM_ERROR = 0x08U, // Error when writing to flash
+	MX25L_WAIT_ERROR = 0x09U, // Error when waiting for an operation completes
+	MX25L_GET_ERROR = 0x0AU, // Error when reading from flash
+	MX25L_ERASE_ERROR = 0x0BU, // Error when erase flash
+	MX25L_TIMEOUT = 0x0CU // Timeout when waiting for mutex
+} MX25L_StatusTypeDef;
+
+typedef enum
+{
+	MX25L_BLOCK_UNLOCK = 0, // Non block
+	MX25L_BLOCK_LOCK_1, // Level 1
+	MX25L_BLOCK_LOCK_2, // Level 2
+	MX25L_BLOCK_LOCK_4, // Level 3
+	MX25L_BLOCK_LOCK_8, // Level 4
+	MX25L_BLOCK_LOCK_16, // Level 5
+	MX25L_BLOCK_LOCK_32, // Level 6
+	MX25L_BLOCK_LOCK_64, // Level 7
+	MX25L_BLOCK_LOCK_128, // Level 8
+	MX25L_BLOCK_LOCK_ALL, // Level 9
+} MX25L_BlockLevelTypeDef;
+
+typedef struct
+{
+	// MX25L IC type
+	uint8_t u8MX25L_Type;
+
+	// Manufacturer code
+	uint8_t u8MX25L_Manufacturer;
+
+	// Device ID
+	uint8_t u8MX25L_DeviceID;
+
+	// Memory type
+	uint8_t u8MX25L_Memory;
+
+	// Memory capacity type
+	uint8_t u8MX25L_Capacity;
+
+	// Memory size
+	uint32_t u32MX25L_MemSize;
+
+	// Number of pages
+	uint16_t u16MX25L_PageNum;
+
+	// Number of sectors
+	uint16_t u16MX25L_SectorNum;
+
+	// Number of 32K blocks
+	uint16_t u16MX25L_B32Num;
+
+	// Number of 64K blocks
+	uint8_t u8MX25L_B64Num;
+
+	// Locking state
+	uint8_t MX25L_LockState;
+
+	// Power mode
+	bool MX25L_PowerState;
+
+} MX25L_TypeDef;
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+extern MX25L_TypeDef* mx25lHandle;
+
+extern bool bMX25L_ReportErrFlag;
+
+extern uint32_t u32MX25L_ReportErrLastTick;
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+
+// Chip select mode
+static void MX25L_Select(void);
+static void MX25L_Deselect(void);
+
+// Struct instance initialization
+MX25L_StatusTypeDef MX25L_Init(void);
+
+// Restart IC MX25L
+void MX25L_Restart(void);
+
+// Read status register and configuration register
+MX25L_StatusTypeDef MX25L_ReadStatConf(uint8_t* pu8Stat, uint8_t* pu8Conf);
+
+// Flash protection
+MX25L_StatusTypeDef MX25L_BlockLock(MX25L_BlockLevelTypeDef mx25lLockLevel,
+                                    bool bLockBot);
+MX25L_StatusTypeDef MX25L_BlockUnlock(void);
+
+// Flash read/ write
+//bool MX25L_WaitOperation(uint32_t u32Timeout);
+MX25L_StatusTypeDef MX25L_PageProgram(uint32_t u32Addr, uint8_t* pu8Dat,
+                                      uint8_t u8DatLen);
+MX25L_StatusTypeDef MX25L_MultiPagesProgram(uint32_t u32PageOffset, uint8_t* pu8Dat,
+                                            uint32_t u32DatLen);
+MX25L_StatusTypeDef MX25L_MultiBytesRead(uint32_t u32Addr, uint8_t* pu8Dat,
+                                         uint32_t u32DatLen);
+
+// Flash erase
+MX25L_StatusTypeDef MX25L_SectorErase(uint16_t u16SectorOffset);
+MX25L_StatusTypeDef MX25L_MultiSectorsErase(uint16_t u16SectorOffset,
+                                            uint16_t u16SectorNum);
+MX25L_StatusTypeDef MX25L_Block32Erase(uint16_t u16Block32Offset);
+MX25L_StatusTypeDef MX25L_MultiBlock32Erase(uint16_t u16B32Offset,
+                                            uint16_t u16B32Num);
+MX25L_StatusTypeDef MX25L_Block64Erase(uint8_t u8B64Offset);
+MX25L_StatusTypeDef MX25L_MultiBlock64Erase(uint8_t u8B64Offset,
+                                            uint8_t u8B64Num);
+MX25L_StatusTypeDef MX25L_ChipErase(void);
+
+// Operation mode
+MX25L_StatusTypeDef MX25L_PwrDownEnter(void);
+MX25L_StatusTypeDef MX25L_PwrDownRelease(void);
+
+// Software reset
+MX25L_StatusTypeDef MX25L_Reset(void);
+
+
+//============================================================================//
+#endif //_MX25L_DRIVER_H_

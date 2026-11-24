@@ -1,0 +1,164 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "SW_Timer.h"
+#include "stm32fxxx_hal_user.h"
+#include "Default.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+#define TIMER_ITEM_MAX		32 // Heinz
+
+
+//============================================================================//
+// User Typedefs
+//============================================================================//
+
+typedef struct // Heinz
+{
+	bool bEnable;
+
+	uint32_t u32CountCurr;
+
+	uint32_t u32CountIntv; //Timer Interval
+
+	TIMER_TYPE_t Type;
+
+	TIMER_CB_t callback;
+
+} TimerItem_t;
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+
+TimerItem_t g_TIMER_Items[TIMER_ITEM_MAX];
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+void SWTIM_Init(void)
+{
+	uint8_t u8Item;
+
+
+	for(u8Item = 0; u8Item < TIMER_ITEM_MAX; u8Item++)
+	{
+		SWTIM_ClrTimer(u8Item);
+	}
+}
+
+static uint8_t SWTIM_CheckFreeID(void)
+{
+	uint8_t u8Item;
+
+
+	for(u8Item = 0; u8Item < TIMER_ITEM_MAX; u8Item++)
+	{
+		if(g_TIMER_Items[u8Item].bEnable == FALSE)
+			return u8Item;
+	}
+
+	return TIMER_INVALID_ID;
+}
+
+uint8_t SWTIM_SetTimer(uint32_t interval, TIMER_TYPE_t type, TIMER_CB_t callback)
+{
+	uint8_t u8FreeID;
+
+
+	u8FreeID = SWTIM_CheckFreeID();
+
+	if(u8FreeID != TIMER_INVALID_ID)
+	{
+		g_TIMER_Items[u8FreeID].bEnable = TRUE;
+
+		g_TIMER_Items[u8FreeID].u32CountCurr = HAL_GetTick();
+
+		g_TIMER_Items[u8FreeID].u32CountIntv = mS_2_SysTick(interval);
+
+		g_TIMER_Items[u8FreeID].Type = type;
+
+		g_TIMER_Items[u8FreeID].callback = callback;
+	}
+
+	return u8FreeID;
+}
+
+bool SWTIM_ClrTimer(uint8_t TimerID)
+{
+	if(TimerID == TIMER_INVALID_ID)
+		return TRUE;
+
+	if(TimerID >= TIMER_ITEM_MAX)
+		return FALSE;
+
+	g_TIMER_Items[TimerID].bEnable = FALSE;
+
+	g_TIMER_Items[TimerID].u32CountCurr = 0;
+
+	g_TIMER_Items[TimerID].u32CountIntv = 0;
+
+	g_TIMER_Items[TimerID].Type  = TIMER_ONESHOT;
+
+	return TRUE;
+}
+
+void SWTIM_CheckTimer(void)
+{
+	static uint8_t u8Item = 0xFF;
+	uint32_t CurrTickCnt;
+
+
+	u8Item++;
+
+	if(u8Item >= TIMER_ITEM_MAX)
+		u8Item = 0;
+
+	if(g_TIMER_Items[u8Item].bEnable == FALSE)
+		return;
+
+	CurrTickCnt = HAL_GetTick();
+
+	if(g_TIMER_Items[u8Item].u32CountIntv > (CurrTickCnt - g_TIMER_Items[u8Item].u32CountCurr)) // Heinz
+		return;
+
+	switch(g_TIMER_Items[u8Item].Type)
+	{
+		case TIMER_ONESHOT:
+			if((*g_TIMER_Items[u8Item].callback)() == TRUE)
+				SWTIM_ClrTimer(u8Item);
+			else
+			{
+				g_TIMER_Items[u8Item].u32CountCurr = CurrTickCnt;
+
+				g_TIMER_Items[u8Item].u32CountIntv = mS_2_SysTick(S_2_mS(10)); // Heinz 10
+			}
+
+			break;
+
+		case TIMER_CONTINUE:
+			g_TIMER_Items[u8Item].u32CountCurr = CurrTickCnt;
+
+			(*g_TIMER_Items[u8Item].callback)();
+
+			break;
+
+		default:
+			break;
+	}
+}
+
+/*
+bool bGetTimerStatus(uint8_t TimerIndex)
+{
+	return g_TIMER_Items[TimerIndex].bEnable;
+}
+*/

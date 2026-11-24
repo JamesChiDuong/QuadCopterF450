@@ -1,0 +1,2655 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+/*
+#include "PRN_Module.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Buzzer.h"
+#include "DataCollect.h"
+#include "DataLog.h"
+#include "Default.h"
+#include "EXT_Module.h"
+#include "GSM_Driver.h"
+#include "Protocol.h"
+#include "SD_Module.h"
+*/
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+#if ENABLE_BGTVT_2014
+#pragma pack(1)
+typedef enum
+{
+	TYPE_ALL,
+	TYPE_BASIC,
+	TYPE_WORK,
+	TYPE_STOP,
+	TYPE_ROUTE,
+	TYPE_SPEED,
+	TYPE_END,
+} ReadCodeOfData_t;
+
+typedef struct
+{
+	// uID of card
+	uint8_t UID[8];
+	// 駕照號碼
+	char szLicense[15];
+	// 駕照號碼檢查碼
+	uint8_t u8CheckLic;
+	// 駕駛資訊
+	char NAME[43];
+	// 駕駛資訊檢查碼
+	uint8_t u8CheckName;
+	// 封包檢查碼
+	uint16_t u16CheckPkg;
+
+} RFID_INFO_t;
+#pragma pack()
+
+#pragma pack(1)
+typedef struct
+{
+	// uID of card
+	uint8_t UID[8];
+	// 駕照號碼
+	char szLicense[15];
+	// 駕照號碼檢查碼
+	uint8_t u8CheckLic;
+	// 駕駛資訊
+	char NAME[43];
+	// 駕駛資訊檢查碼
+	uint8_t u8CheckName;
+	// 封包檢查碼
+	uint16_t u16CheckPkg;
+
+} RFID_INFO_t;
+#pragma pack()
+#endif
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+//uint8_t g_CmdPkgIdx = 0;
+
+//char g_CmdPkg[UART_BASE_BUFFER_SIZE];
+
+#if ENABLE_DMD
+bool bDMD_Change= {0};
+
+MEM_U8_t uDMD_LAST_STATUE= {0};
+
+MEM_U8_t uDMD_STATUE= {0};
+
+time_t Last_Recv_Data_Time= {0};
+
+bool bDMD_ERROR= {0};
+#endif
+
+#if ENABLE_BGTVT_2014
+time_t Readrawtime;
+time_t ReadLastUCT;
+time_t ReadStartUCT;
+time_t ReadStopUCT;
+
+uint8_t ReadRunCmd = 0;
+ReadCodeOfData_t ReadCodeOfData;
+uint8_t GetAllData = 0;
+
+uint32_t ReadSdCardCapacity=0;
+
+uint32_t ReadFileSize;
+uint32_t ReadLogBegin = 0;
+char ReadFileName[32];
+
+uint32_t ReadWorkDrvIn = INVALID_VALUE_DEF;
+int32_t i32ReadStLatitude;
+int32_t i32ReadStLongitude;
+
+DRV_DATA_t ReadDrvData= {0};
+DRV_DATA_t ReadDrvAll[DRIVER_INFO_MAX]= {0};
+
+// 最近一次總工作時間
+uint16_t ReadLCDT[DRIVER_INFO_MAX];
+uint16_t ReadLastDrvLCDT = 0;
+
+// 目前架駛的INFO_IND
+uint8_t ReadDriInfoInd = 0;
+
+// 記下 00:00:00  時的 LCDT  用以扣除昨天的工作時數
+uint16_t ReadStartLCDT = 0;
+
+// one  min  30  speed
+uint8_t ReadCntSpdInd = 0;
+
+//  FOR TYPE:5
+char ReadQuicBuf[300];
+
+char *pReadQuicBuf;
+
+//	用來備份目前的 Debug 模式
+DebugMode_t ReadDebugMode = DBG_END;
+
+uint8_t RFID_CountRxTime = 0;
+
+uint8_t RFID_ErrorCnt = 0;
+
+//	讀取的 Block Ind
+uint8_t StartBlockInd = 0;
+
+uint8_t RFID_RING = BUZZER_INVALID_ID;
+#endif
+
+#if ENABLE_EUPFIN_RS232
+char DataBuf[128];
+#endif
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+#if ENABLE_PRINTER
+static void PRN_SendBuffer(uint8_t *Buf, uint16_t BufLen)
+{
+	UART_SendBuffer(PRINTER_COMPORT_DEF, Buf, BufLen);
+
+	if(g_Setting.DebugMode == DBG_DB9)
+	{
+		UART_SendBuffer(SET_COMPORT_DEF, Buf, BufLen);
+	}
+}
+
+void PRN_PrintTest(void)
+{
+	uint8_t PrnBuf[UART_BASE_BUFFER_SIZE];
+	char *pBuf;
+
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_HEAD, strlen(STR_PRINT_HEAD));
+
+	pBuf = (char*)PrnBuf;
+
+	sprintf(pBuf, "This is test page\r\n");
+
+	pBuf += strlen(pBuf);
+
+	sprintf(pBuf, "%s %s %s %s V%d.%02d B%04d%s\r\n",
+	        STR_TITLE,
+	        STR_PRODUCT,
+	        STR_CUST,
+	        STR_HW,
+	        VERSION_MAJOR,
+	        VERSION_MINOR,
+	        VERSION_BUILD,
+	        VERSION_TEST);
+	pBuf += strlen(pBuf);
+
+	pBuf = (char*)PrnBuf;
+
+	PRN_SendBuffer(PrnBuf, strlen(pBuf));
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+}
+
+#if ENABLE_BGTVT_2011
+void PRN_PrintStd(time_t *rawtime)
+{
+	bool DrvLogin;
+	char *pStr, PrnBuf[512];
+	time_t LocalTime;
+
+
+	Datalog_DirectSave();
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_HEAD, strlen(STR_PRINT_HEAD));
+
+	LocalTime = *rawtime + g_Setting.i32TimeZoneOffset;
+
+	pStr = PrnBuf;
+
+	sprintf(pStr, "%s ", strPRN_Date);
+
+	pStr += strlen(pStr);
+
+	strftime(pStr, sizeof(PrnBuf), "%y/%m/%d\r\n", localtime(&LocalTime));
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	pStr = PrnBuf;
+
+	sprintf(pStr, "%s ", strPRN_Time);
+
+	pStr += strlen(pStr);
+
+	strftime(pStr, sizeof(PrnBuf), "%H:%M:%S\r\n", localtime(&LocalTime));
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	sprintf(PrnBuf, "%s\r  %s\r\n", strPRN_CompName, g_Setting.szCompName);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	sprintf(PrnBuf, "%s\r  %s\r\n", strPRN_CompAddr, g_Setting.szCompAddr);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	sprintf(PrnBuf, "%s\r  %s\r\n", strPRN_VehicleID, g_Setting.szVIN);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	sprintf(PrnBuf, "%s\r  %s\r\n", strPRN_VehicleLPN, g_Setting.szBus_ID);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	{
+		uint8_t i;
+		DRV_DATA_t DrvData;
+
+
+		DrvLogin = FALSE;
+		// 取得駕駛資訊
+		for(i = 0; i < DRIVER_INFO_MAX; i++)
+		{
+			if(Info_GetDrvData(i, &DrvData) == TRUE
+			        && DrvData.IN == g_Setting.u32DrvIdNum)
+			{
+				DrvLogin = TRUE;
+
+				break;
+			}
+		}
+
+		if(DrvLogin == TRUE)
+		{
+			time_t TempTime;
+
+
+			sprintf(PrnBuf, "%s\r %s\r\n", strPRN_DrvName, DrvData.NAME);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s\r %s\r\n", strPRN_DrvLN, DrvData.szLicense);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			pStr = PrnBuf;
+
+			sprintf(pStr, "%s\r ", strPRN_DrvIssue);
+
+			pStr += strlen(pStr);
+
+			TempTime = DrvData.ISSUE_DATE;
+
+			strftime(pStr, sizeof(PrnBuf), "%y/%m/%d\r\n", localtime(&TempTime));
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			pStr = PrnBuf;
+
+			sprintf(pStr, "%s\r ", strPRN_DrvExpire);
+
+			pStr += strlen(pStr);
+
+			TempTime = DrvData.EXPIRE_DATE;
+
+			strftime(pStr, sizeof(PrnBuf), "%y/%m/%d\r\n", localtime(&TempTime));
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+		else
+		{
+			sprintf(PrnBuf, "%s\r xxxxxxxxxx\r\n", strPRN_DrvName);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s\r xxxxxxxxxx\r\n", strPRN_DrvLN);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s\r xx/xx/xx\r\n", strPRN_DrvIssue);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s\r xx/xx/xx\r\n", strPRN_DrvExpire);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+	}
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	{
+		time_t DestTime;
+		uint8_t i;
+		DATALOG_BGTVT_t DataLog;
+
+
+		sprintf(PrnBuf, "%s\r\n", strPRN_SpeedInfo);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		DestTime = *rawtime - (*rawtime % MINUTE_2_SECOND(1));
+
+		for(i = 0; i < COUNT_SPD_PRN; i++)
+		{
+			pStr = PrnBuf;
+
+
+			LocalTime = DestTime + g_Setting.i32TimeZoneOffset;
+
+			strftime(PrnBuf, sizeof(PrnBuf), "%y/%m/%d,%H:%M:%S", localtime(&LocalTime));
+
+			pStr += strlen(pStr);
+
+			if(Datalog_GetLogByTime(&DestTime, &DataLog) == TRUE)
+			{
+				sprintf(pStr, "%03d", DataLog.SPEED);
+			}
+			else
+			{
+				sprintf(pStr, "000");
+			}
+
+			pStr += strlen(pStr);
+
+			sprintf(pStr, "\r\n");
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			DestTime -= MINUTE_2_SECOND(1);
+		}
+	}
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	{
+		if(DrvLogin == TRUE)
+		{
+			sprintf(PrnBuf, "%s %03d\r\n\n",
+			        strPRN_CntOverSpeed,
+			        g_SysInfo.DrvInfo.CntOverSpeed);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %02d:%02d\r\n",
+			        strPRN_WorkTime,
+			        (g_SysInfo.DrvInfo.WorkTime / 60) / 60,
+			        (g_SysInfo.DrvInfo.WorkTime / 60) % 60);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %02d\r\n\n",
+			        strPRN_CntOverWork,
+			        g_SysInfo.DrvInfo.CntOverWork);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %02d:%02d\r\n",
+			        strPRN_AccumTime,
+			        (g_SysInfo.DrvInfo.AccumTime / 60) / 60,
+			        (g_SysInfo.DrvInfo.AccumTime / 60) % 60);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %02d\r\n\n",
+			        strPRN_CntOverAccum,
+			        g_SysInfo.DrvInfo.CntOverAccum);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %03d\r\n",
+			        strPRN_CntDoorOpen,
+			        g_SysInfo.DrvInfo.CntDoorOpen);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %03d\r\n",
+			        strPRN_CntDoorClose,
+			        g_SysInfo.DrvInfo.CntDoorClose);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %03d\r\n",
+			        strPRN_CntEngineOn,
+			        g_SysInfo.DrvInfo.CntEngineOn);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s %03d\r\n",
+			        strPRN_CntEngineOff,
+			        g_SysInfo.DrvInfo.CntEngineOff);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+		else
+		{
+			sprintf(PrnBuf, "%s xxx\r\n\n", strPRN_CntOverSpeed);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xx:xx\r\n", strPRN_WorkTime);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xx\r\n\n", strPRN_CntOverWork);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xx:xx\r\n", strPRN_AccumTime);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xx\r\n\n", strPRN_CntOverAccum);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf,  "%s xxx\r\n", strPRN_CntDoorOpen);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xxx\r\n", strPRN_CntDoorClose);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xxx\r\n", strPRN_CntEngineOn);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+			sprintf(PrnBuf, "%s xxx\r\n", strPRN_CntEngineOff);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+	}
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+}
+
+void PRN_PrintExt1(time_t *rawtime)
+{
+	bool DrvLogin;
+	char PrnBuf[512];
+	DATALOG_BGTVT_t DataLog;
+	uint8_t i;
+	DRV_DATA_t DrvData;
+	time_t LocalTime;
+
+
+	if(Datalog_GetLogByTime(rawtime, &DataLog) == FALSE)
+	{
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		sprintf(PrnBuf, "BKS: %s\r\n", g_Setting.szBus_ID);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "LX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So GPLX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So se-ri TBGSHT:%s\r\n", g_Setting.szBus_SN);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		LocalTime = *rawtime + g_Setting.i32TimeZoneOffset;
+
+		strftime(PrnBuf, 64, "Thoi diem in: %H:%M:%S\r\n              %d/%m/%y\r\n", localtime(&LocalTime));
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		sprintf(PrnBuf, "So lan vuot toc do: xx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		sprintf(PrnBuf, "So lan mo cua xe: xx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		sprintf(PrnBuf, "LXLT: xx gio xx phut\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "LXTN: xx gio xx phut\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+
+		return;
+	}
+
+	DrvLogin = FALSE;
+
+	// 取得駕駛資訊
+	for(i = 0; i < DRIVER_INFO_MAX; i++)
+	{
+		if(Info_GetDrvData(i, &DrvData) == TRUE
+		        && DrvData.IN == DataLog.u32DRV_IN)
+		{
+			DrvLogin = TRUE;
+
+			break;
+		}
+	}
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_HEAD, strlen(STR_PRINT_HEAD));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	sprintf(PrnBuf, "BKS: %s\r\n", g_Setting.szBus_ID);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	if(DrvLogin == TRUE)
+	{
+		sprintf(PrnBuf, "LX: %s\r\n", DrvData.NAME);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So GPLX: %s\r\n", DrvData.szLicense);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+	else
+	{
+		sprintf(PrnBuf, "LX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So GPLX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+
+	sprintf(PrnBuf, "So se-ri TBGSHT:%s\r\n", g_Setting.szBus_SN);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	LocalTime = DataLog.UTC + g_Setting.i32TimeZoneOffset;
+
+	strftime(PrnBuf, 64, "Thoi diem in: %H:%M:%S\r\n              %d/%m/%y\r\n", localtime(&LocalTime));
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	memset((uint8_t*)PrnBuf, 0x00, strlen(PrnBuf));
+
+	if(Datalog_EventPrnByLog(&DataLog, PrnBuf) == TRUE)
+	{
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+	else
+	{
+		sprintf(PrnBuf, "So lan vuot toc do: 00\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		sprintf(PrnBuf, "So lan mo cua xe: 00\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	if(DrvLogin == TRUE)
+	{
+		sprintf(PrnBuf, "LXLT: %02d gio %02d phut\r\n",
+		        S_2_HOUR(DataLog.DRV_LCDT),
+		        S_2_MIN(DataLog.DRV_LCDT) % 60);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "LXTN: %02d gio %02d phut\r\n",
+		        S_2_HOUR(DataLog.DRV_LTWT),
+		        S_2_MIN(DataLog.DRV_LTWT) % 60);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+	else
+	{
+		sprintf(PrnBuf, "LXLT: xx gio xx phut\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "LXTN: xx gio xx phut\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+
+}
+
+void PRN_PrintExt2(time_t *rawtime)
+{
+	bool DrvLogin;
+	char PrnBuf[512];
+	DATALOG_BGTVT_t DataLog;
+	uint8_t i;
+	DRV_DATA_t DrvData;
+	time_t LocalTime;
+
+
+	if(Datalog_GetLogByTime(rawtime, &DataLog) == FALSE)
+	{
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		sprintf(PrnBuf, "BKS: %s\r\n", g_Setting.szBus_ID);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "LX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So GPLX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So se-ri TBGSHT:%s\r\n", g_Setting.szBus_SN);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		LocalTime = *rawtime + g_Setting.i32TimeZoneOffset;
+
+		strftime(PrnBuf, 64, "Thoi diem in: %H:%M:%S\r\n              %d/%m/%y\r\n", localtime(&LocalTime));
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		// 取得駕駛資訊
+		for(i = 0; i < COUNT_SPD_PRN; i++)
+		{
+			sprintf(PrnBuf, "%2d: 000 km/h\r\n", i + 1);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+
+		// 列印區分間隔
+		PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+		PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+
+		return;
+	}
+
+	DrvLogin = FALSE;
+	// 取得駕駛資訊
+	for(i = 0; i < DRIVER_INFO_MAX; i++)
+	{
+		if(Info_GetDrvData(i, &DrvData) == TRUE
+		        && DrvData.IN == DataLog.u32DRV_IN)
+		{
+			DrvLogin = TRUE;
+
+			break;
+		}
+	}
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_HEAD, strlen(STR_PRINT_HEAD));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	sprintf(PrnBuf, "BKS: %s\r\n", g_Setting.szBus_ID);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	if(DrvLogin == TRUE)
+	{
+		sprintf(PrnBuf, "LX: %s\r\n", DrvData.NAME);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So GPLX: %s\r\n", DrvData.szLicense);
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+	else
+	{
+		sprintf(PrnBuf, "LX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+		sprintf(PrnBuf, "So GPLX: xxxxxxxxxx\r\n");
+
+		PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+	}
+
+	sprintf(PrnBuf, "So se-ri TBGSHT:%s\r\n", g_Setting.szBus_SN);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	LocalTime = DataLog.UTC + g_Setting.i32TimeZoneOffset;
+
+	strftime(PrnBuf, 64, "Thoi diem in: %H:%M:%S\r\n              %d/%m/%y\r\n", localtime(&LocalTime));
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	sprintf(PrnBuf, " 1: %03d km/h\r\n", DataLog.SPEED);
+
+	PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+
+	for(i = 1; i < COUNT_SPD_PRN; i++)
+	{
+		time_t DestTime;
+
+
+		DestTime = *rawtime - i;
+
+		if(Datalog_GetLogByTime(&DestTime, &DataLog) == TRUE)
+		{
+			sprintf(PrnBuf, "%2d: %03d km/h\r\n", i + 1, DataLog.SPEED);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+		else
+		{
+			sprintf(PrnBuf, "%2d: 000 km/h\r\n", i + 1);
+
+			PRN_SendBuffer((uint8_t*)PrnBuf, strlen(PrnBuf));
+		}
+	}
+
+	// 列印區分間隔
+	PRN_SendBuffer((uint8_t*)STR_SEPARATE, strlen(STR_SEPARATE));
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+}
+#else // ENABLE_BGTVT_2011
+void PRN_PrintStd(time_t *rawtime)
+{
+}
+
+void PRN_PrintExt1(time_t *rawtime)
+{
+}
+
+void PRN_PrintExt2(time_t *rawtime)
+{
+}
+#endif // ENABLE_BGTVT_2011
+
+void PRN_PrintString(char* StrBuf)
+{
+	PRN_SendBuffer((uint8_t*)StrBuf, strlen(StrBuf));
+
+	PRN_SendBuffer((uint8_t*)STR_PRINT_END, strlen(STR_PRINT_END));
+}
+#endif // ENABLE_PRINTER
+
+#if ENABLE_SCANNER
+static bool SCAN_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_SCAN_PKG_TIMEOUT;
+	uint16_t i, BufLen;
+	uint8_t Buf[UART_BASE_BUFFER_SIZE];
+	char *pBuf, ch;
+
+
+	BufLen = UART_GetRxBufLen(SCANNER_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = MAX_SCAN_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = MAX_SCAN_PKG_TIMEOUT;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	BufLen = UART_GetRxBuffer(SCANNER_COMPORT_DEF, Buf, sizeof(Buf));
+
+	pBuf = (char*)Buf;
+
+	for(i = 0; i < BufLen; i++)
+	{
+		ch = *pBuf++;
+
+		if(ch == '\r')
+		{
+			g_CmdPkg[g_CmdPkgIdx] = '\0';
+
+			g_CmdPkgIdx = 0;
+
+			return TRUE;
+		}
+		else
+		{
+			g_CmdPkg[g_CmdPkgIdx++] = ch;
+		}
+
+		if(g_CmdPkgIdx >= UART_MAX_BUFFER_SIZE)
+		{
+			g_CmdPkgIdx = 0;
+
+			continue;
+		}
+	}
+
+	return FALSE;
+}
+
+static bool SCAN_Process(void)
+{
+	char szTEMP[UART_BASE_BUFFER_SIZE];
+
+
+	if(SCAN_GetCmdPkg() == FALSE)
+		return TRUE;
+
+#if ENABLE_DEBUG_MSG
+	RTOSprintf("\r\n> BARCODE: %s", g_CmdPkg);
+#endif
+
+#if ENABLE_LCM
+	sprintf(szTEMP, "%s%s\r\n", STR_AS_LCD_BARCODE, g_CmdPkg);
+
+	Protocl_ChkCmdPkg(szTEMP, NULL);
+#endif
+
+	strncpy(szTEMP, g_CmdPkg, BARCODE_SIZE_MAX);
+
+	DataStream_EventBuild(STR_EVENT_BARCODE, szTEMP);
+
+	return TRUE;
+}
+
+void SetTID_ScanProc(void)
+{
+	SWTIM_SetTimer(TIMER_SCAN_PROC, TIMER_CONTINUE, SCAN_Process);
+}
+#endif // ENABLE_SCANNER
+
+#if ENABLE_DVR
+void DVR_SendCmdPkg(uint8_t *Pkg, uint16_t PkgLen)
+{
+	//#if 0
+#if ENABLE_EXT_BOX // Heinz
+	char *pStr;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	uint16_t BufLen;
+
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	pStr = (char*)Buf;
+
+	sprintf(pStr, "%s%s,", STR_AS_EXTBOX, "DVR");
+
+	BufLen = strlen(pStr);
+
+	pStr += BufLen;
+
+	memcpy(pStr, Pkg, PkgLen);
+
+	BufLen += PkgLen;
+
+	//UART_SendBuffer(DVR_COMPORT_DEF, Buf, BufLen);	 //Heinz
+
+	if( (g_SysInfo.DrvInfo.WorkTime * 1000) > S_2_mS(40))
+		EXT_SendBuffer(Buf, BufLen);
+
+	if(g_Setting.DebugMode == DBG_DB9)	  //DB9
+	{
+		SET_SendBuffer(Buf, BufLen);
+	}
+
+#else
+	UART_SendBuffer(DVR_COMPORT_DEF, Pkg, PkgLen);
+
+	if(g_Setting.DebugMode == DBG_DB9)
+	{
+		SET_SendBuffer(Pkg, PkgLen);
+	}
+#endif
+}
+
+static void DVR_DataBuild(void)
+{
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+	char *pStr;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	time_t rawtime;
+	char szTime[16];
+	GPS_DATA_t GPS_AllData;
+
+
+	time(&rawtime);
+
+	rawtime += g_Setting.i32TimeZoneOffset;
+
+	strftime(szTime, sizeof(szTime), "%Y%m%d%H%M%S", localtime(&rawtime));
+
+	GPS_GetAllData(&GPS_AllData);
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	pStr = (char*)Buf;
+
+	sprintf(pStr, "*%-10s,%07X,00000,%s,%c,%04d%02d%04d,%c,%02d%02d%04d,00,00,0000,%d00000000000,%03d,%05d,%05d\r\n",
+	        g_Setting.szBus_ID,
+	        g_Setting.u32DrvIdNum & 0x0FFFFFFF,
+	        szTime,
+	        GPS_AllData.tLongitude.cIndicator, // 經度格式須確認
+	        GPS_AllData.tLongitude.ddd,
+	        GPS_AllData.tLongitude.mm,
+	        GPS_AllData.tLongitude.mmmm,
+	        GPS_AllData.tLatitude.cIndicator, // 緯度格式須確認
+	        GPS_AllData.tLatitude.dd,
+	        GPS_AllData.tLatitude.mm,
+	        GPS_AllData.tLatitude.mmmm,
+	        g_SysInfo.EXTIO.bits.IN_ACC, // 啟動
+	        GPS_AllData.Course,
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+	        u16hmSpeedAvg,//Heinz
+#else
+	        M_2_100M(g_SysInfo.VehicleState.u32Speed),
+#endif
+	        g_SysInfo.VehicleState.u16RPM);
+
+	DVR_SendCmdPkg(Buf, strlen(pStr));
+#else
+	char *pStr;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	time_t rawtime;
+	char szTime[16];
+	GPS_DATA_t GPS_AllData;
+	uint8_t ChkSum = 0x00;
+
+
+	time(&rawtime);
+
+	rawtime += g_Setting.i32TimeZoneOffset;
+
+	strftime(szTime, sizeof(szTime), "%Y%m%d%H%M%S", localtime(&rawtime));
+
+	GPS_GetAllData(&GPS_AllData);
+
+#if !ENABLE_GPS_MODULE && !ENABLE_GPS_FUNC
+	GPS_AllData.tLatitude.cIndicator = 'N';
+
+	GPS_AllData.tLongitude.cIndicator = 'E';
+#endif
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	pStr = (char*)Buf;
+
+	sprintf(pStr, "*%10s,%07X,%s,%c%04d%02d%04d,%c%02d%02d%04d,%d%d%d%d%d%d%d%d,%04d,%04d,",
+	        g_Setting.szBus_ID,
+	        g_Setting.u32DrvIdNum & 0x0FFFFFFF,
+	        szTime,
+	        GPS_AllData.tLongitude.cIndicator, // 經度格式須確認
+	        GPS_AllData.tLongitude.ddd,
+	        GPS_AllData.tLongitude.mm,
+	        GPS_AllData.tLongitude.mmmm,
+	        GPS_AllData.tLatitude.cIndicator, // 緯度格式須確認
+	        GPS_AllData.tLatitude.dd,
+	        GPS_AllData.tLatitude.mm,
+	        GPS_AllData.tLatitude.mmmm,
+	        g_SysInfo.EXTIO.bits.IN_ACC, // 啟動
+	        g_SysInfo.EXTIO.bits.IN_7, // 前
+	        g_SysInfo.EXTIO.bits.IN_8, // 後
+	        g_SysInfo.EXTIO.bits.IN_2, // 左
+	        g_SysInfo.EXTIO.bits.IN_3, // 右
+	        g_SysInfo.EXTIO.bits.IN_5, // 近
+	        g_SysInfo.EXTIO.bits.IN_4, // 遠
+	        g_SysInfo.EXTIO.bits.IN_1, // 剎
+	        M_2_100M(g_SysInfo.VehicleState.u32Speed),
+	        g_SysInfo.VehicleState.u16RPM);
+
+	do
+	{
+		ChkSum ^= *pStr++;
+
+	}
+	while(*pStr);
+
+	ChkSum &= 0xFF;
+
+	sprintf(pStr, "%02X\r\n", ChkSum);
+
+	pStr = (char*)Buf;
+
+	DVR_SendCmdPkg(Buf, strlen(pStr));
+#endif
+}
+
+static bool DVR_Process(void)
+{
+	DVR_DataBuild();
+
+	return TRUE;
+}
+
+void SetTID_DvrProc(void)
+{
+	SWTIM_SetTimer(TIMER_DVR_CONN_PROC, TIMER_CONTINUE, DVR_Process);
+}
+#endif // ENABLE_DVR
+
+#if ENABLE_FUEL
+static void FUEL_ChkCmdPkg(char *pStr)
+{
+	StopChar(pStr, '\n');
+
+	StopChar(pStr, '\r');
+
+	StopChar(pStr, ',');
+
+	if(strlen(pStr) > 0)
+	{
+		g_SysInfo.DrvInfo.FUEL.LEVEL_1 = atoi(pStr);
+	}
+
+	pStr += strlen(pStr) + 1;
+
+	StopChar(pStr, ',');
+
+	if(strlen(pStr) > 0)
+	{
+		g_SysInfo.DrvInfo.FUEL.LEVEL_2 = atoi(pStr);
+	}
+
+	pStr += strlen(pStr) + 1;
+
+	StopChar(pStr, ',');
+
+	if(strlen(pStr) > 0)
+	{
+		g_SysInfo.DrvInfo.FUEL.TEMPER = atoi(pStr);
+	}
+
+	pStr += strlen(pStr) + 1;
+}
+
+static bool FUEL_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_FUEL_PKG_TIMEOUT;
+	uint16_t i, BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	char *pBuf, ch;
+
+
+	BufLen = UART_GetRxBufLen(FUEL_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = MAX_FUEL_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = MAX_FUEL_PKG_TIMEOUT;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	BufLen = UART_GetRxBuffer(FUEL_COMPORT_DEF, Buf, sizeof(Buf));
+
+	pBuf = (char*)Buf;
+
+	for(i = 0; i < BufLen; i++)
+	{
+		ch = *pBuf++;
+
+		if(ch == '\0')
+			continue;
+
+		g_CmdPkg[g_CmdPkgIdx++] = ch;
+
+		if(ch == '\n')
+		{
+			g_CmdPkg[g_CmdPkgIdx] = '\0';
+
+			g_CmdPkgIdx = 0;
+
+			return TRUE;
+		}
+
+		if(g_CmdPkgIdx >= UART_MAX_BUFFER_SIZE)
+		{
+			g_CmdPkgIdx = 0;
+
+			continue;
+		}
+	}
+
+	return FALSE;
+}
+
+static bool FUEL_Process(void)
+{
+	if(FUEL_GetCmdPkg() == FALSE)
+		return TRUE;
+
+	if(g_Setting.DebugMode == DBG_DB9)
+	{
+		SET_SendBuffer((uint8_t*)g_CmdPkg, strlen(g_CmdPkg));
+	}
+
+	FUEL_ChkCmdPkg(g_CmdPkg);
+
+	return TRUE;
+}
+
+void SetTID_FuelProc(void)
+{
+	SWTIM_SetTimer(TIMER_FUEL_PROC, TIMER_CONTINUE, FUEL_Process);
+}
+#endif // ENABLE_FUEL
+
+#if ENABLE_DMD
+#if DMD_BUZZER_ENABLE
+static void DMD_BUZZER(void)
+{
+	static uint8_t BID_DMD_RING = BUZZER_INVALID_ID;
+
+
+	Buzzer_ClrRing(&BID_DMD_RING);
+
+	Buzzer_SetRing(&BID_DMD_RING, BEEP_SHORT, 5);
+}
+#endif // DMD_BUZZER_ENABLE
+
+static bool DMD_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_DMD_PKG_TIMEOUT;
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+
+
+	BufLen = UART_GetRxBufLen(DMD_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = MAX_DMD_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = MAX_DMD_PKG_TIMEOUT;
+	}
+
+	BufLen = UART_GetRxBuffer(DMD_COMPORT_DEF, Buf, sizeof(Buf));
+
+	if(Buf[0] != '*' || Buf[6] != '#')
+	{
+		return FALSE;
+	}
+
+	memset(g_CmdPkg, 0x00, sizeof(g_CmdPkg));
+
+	memcpy(g_CmdPkg, Buf,BufLen);
+
+	return TRUE;
+}
+
+static bool DMD_Process(void)
+{
+	time_t rawtime;
+	char ARTC_DEVICE_DATA[10]= {"0"};
+
+
+	time(&rawtime);
+
+	if(Last_Recv_Data_Time == 0)
+		Last_Recv_Data_Time = rawtime;
+
+	if(DMD_GetCmdPkg() == FALSE)
+	{
+		if((rawtime - Last_Recv_Data_Time) > DMD_NORMAL_TIME)
+		{
+			//  如果連續一天都沒有資料
+			Last_Recv_Data_Time = DAY_2_SECOND(1);
+
+			if(bDMD_ERROR == 0)
+			{
+				RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_DMD_ERROR);
+				bDMD_ERROR = 1;
+			}
+
+#if DMD_BUZZER_ENABLE
+			DMD_BUZZER();
+#endif // DMD_BUZZER_ENABLE
+		}
+
+		return TRUE;
+	}
+
+	if(g_Setting.DebugMode == DBG_DB9)
+	{
+		SET_SendBuffer((uint8_t*)g_CmdPkg, strlen(g_CmdPkg));
+	}
+
+	memset(ARTC_DEVICE_DATA, 0x00, sizeof(ARTC_DEVICE_DATA));
+
+	memcpy(ARTC_DEVICE_DATA,g_CmdPkg+1,5);
+
+	uDMD_STATUE._U8=0;
+
+	uDMD_STATUE.bit._0=ARTC_DEVICE_DATA[4]&0x01;
+
+	uDMD_STATUE.bit._1=ARTC_DEVICE_DATA[3]&0x01;
+
+	uDMD_STATUE.bit._2=ARTC_DEVICE_DATA[2]&0x01;
+
+	uDMD_STATUE.bit._3=ARTC_DEVICE_DATA[1]&0x01;
+
+	uDMD_STATUE.bit._4=ARTC_DEVICE_DATA[0]&0x01;
+
+	Last_Recv_Data_Time = rawtime;
+
+	bDMD_ERROR = 0;
+
+	/  轉態才寫入
+	//  1.過濾每十分鐘會發一次裝置正常訊號 *00000#
+	//  2.避免主機異常 不斷發連續狀態
+	//  3.可結省 DTR 檔案大小
+	if(uDMD_LAST_STATUE._U8 != uDMD_STATUE._U8)
+	{
+		uDMD_LAST_STATUE._U8 = uDMD_STATUE._U8;
+
+		bDMD_Change=1;
+	}
+
+	return TRUE;
+}
+/
+uint8_t DMD_GetAllData(void)
+{
+	bDMD_Change=0;
+
+	return uDMD_STATUE._U8;
+}
+
+bool DMD_ChkArtcDmdData(void)
+{
+	return bDMD_Change;
+}
+
+void SetTID_DMDProc(void)
+{
+	SWTIM_SetTimer(TIMER_DMD_PROC, TIMER_CONTINUE, DMD_Process);
+}
+#endif // ENABLE_DMD
+
+//============================================================================//
+#if ENABLE_LDWS
+//============================================================================//
+//LDWS:防撞系統
+//以事件將 8byte 資料轉 16byte-Ascii 以事件送出
+//$AS+C2270=XXXXXXXX(8 Byte)
+//============================================================================//
+//
+#define LDWS_COMPORT_DEF		DB9_COMPORT_DEF
+
+//
+#define	TIMER_LDWS_PROC			100
+#define	MAX_LDWS_PKG_TIMEOUT	(500 / TIMER_LDWS_PROC)
+
+//
+#define LDWS_DEVICE_HEAD		"$AS+C2270="
+
+static bool LDWS_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_LDWS_PKG_TIMEOUT;
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+
+
+	BufLen = UART_GetRxBufLen(LDWS_COMPORT_DEF);
+
+	if(BufLen == 0)
+
+		GetPkgTimeout = MAX_LDWS_PKG_TIMEOUT;
+
+	return FALSE;
+}
+else
+{
+	if(GetPkgTimeout > 0)
+	{
+		GetPkgTimeout--;
+
+		return FALSE;
+	}
+
+	GetPkgTimeout = MAX_LDWS_PKG_TIMEOUT;
+}
+
+BufLen = UART_GetRxBuffer(LDWS_COMPORT_DEF, Buf, sizeof(Buf));
+
+if(g_Setting.DebugMode == DBG_DB9)
+{
+	SET_SendBuffer((uint8_t*)Buf,BufLen);
+}
+if(memcmp(Buf,LDWS_DEVICE_HEAD,strlen(LDWS_DEVICE_HEAD))!=0
+        || BufLen < (strlen(LDWS_DEVICE_HEAD)+8)
+        || BufLen > 30 )
+{
+	return FALSE;
+}
+
+memset(g_CmdPkg, 0x00, sizeof(g_CmdPkg));
+
+memcpy(g_CmdPkg, Buf+strlen(LDWS_DEVICE_HEAD),8);
+
+return TRUE;
+}
+
+static bool LDWS_Process(void)
+{
+	char ASCII_LDWS_DATA[16+1]= {0};
+
+
+	if(LDWS_GetCmdPkg() == FALSE)
+	{
+		return TRUE;
+	}
+
+	memset(ASCII_LDWS_DATA, 0x00, sizeof(ASCII_LDWS_DATA));
+
+	sprintf(ASCII_LDWS_DATA,"%02X%02X%02X%02X%02X%02X%02X%02X",
+	        g_CmdPkg[0],
+	        g_CmdPkg[1],
+	        g_CmdPkg[2],
+	        g_CmdPkg[3],
+	        g_CmdPkg[4],
+	        g_CmdPkg[5],
+	        g_CmdPkg[6],
+	        g_CmdPkg[7]);
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_CPTI
+	DataStream_EventBuild(CPTI_EVENT_LDWS, ASCII_LDWS_DATA);
+#endif
+
+	return TRUE;
+}
+
+void SetTID_LDWSProc(void)
+{
+	SWTIM_SetTimer(TIMER_LDWS_PROC, TIMER_CONTINUE, LDWS_Process);
+}
+#endif // ENABLE_LDWS				
+
+#if ENABLE_BGTVT_2014
+//============================================================================//
+//$GSHT,2,Len,<Nguyen Van A,AN234343,00:01:29,105.34344,21.34343,04:02:13,105.3464433,21.32343>,Checksum#
+//Checksum = SUM($GSHT,2,080,<Nguyen Van A,AN234343,00:01:29,105.34344,21.34343,04:02:13,105.3464433,21.32343>,)&255 = 181.
+//Checksum = SUM($GSHT,2,80,<Nguyen Van A,AN234343,00:01:29,105.34344,21.34343,04:02:13,105.3464433,21.32343>,)&255 = 133.
+//============================================================================//
+uint8_t READ_GetChecksum(uint8_t *Buf, uint16_t BufLen)
+{
+	uint16_t i;
+	uint8_t Checksum;
+
+
+	Checksum = 0;
+
+	for(i = 0; i < BufLen; i++)
+		Checksum += Buf[i];
+
+	return Checksum;
+}
+
+void READ_SendData(uint8_t *Buf, uint16_t BufLen)
+{
+	char CheckStr[512];
+	char SendStr[512];
+
+
+	sprintf(CheckStr,"$GSHT,%1d,%03d,<%s>,",
+	        ReadCodeOfData,
+	        BufLen,
+	        Buf);
+
+	sprintf(SendStr,"%s%03d#\r\n",
+	        CheckStr,
+	        READ_GetChecksum((uint8_t*)CheckStr,strlen(CheckStr)));
+
+	UART_SendBuffer(READ_COMPORT_DEF, (uint8_t*)SendStr,strlen(SendStr));
+
+	if(g_Setting.DebugMode == DBG_DB9)
+	{
+		SET_SendBuffer(Buf, BufLen);
+	}
+}
+
+void READ_InitValue(void)
+{
+	ReadRunCmd = 1;
+
+	ReadLogBegin = 0;
+
+	ReadLastUCT = Readrawtime-1;
+
+	ReadStartUCT = 0;
+
+	ReadStopUCT = 0;
+
+	ReadWorkDrvIn = INVALID_VALUE_DEF;
+
+	i32ReadStLongitude = 0;
+
+	i32ReadStLatitude = 0;
+
+	ReadDrvAll[0].IN = 0;
+
+	ReadDriInfoInd = 0;
+
+	ReadLastDrvLCDT = 0;
+
+	ReadStartLCDT = 0;
+
+	GetAllData = 0;
+
+	ReadDrvAll[0].IN = 0;
+
+	ReadCntSpdInd = 0;
+
+	memset(ReadQuicBuf, 0x00, sizeof(ReadQuicBuf));
+
+	pReadQuicBuf = ReadQuicBuf;
+}
+
+bool READ_GetFileName(time_t *TargetTime)
+{
+	time_t LocalTime;
+	time_t DestTime;
+	bool RESULT;
+	DATALOG_BGTVT_t DataLog;
+
+
+	time(&LocalTime);
+
+	LocalTime += g_Setting.i32TimeZoneOffset;
+
+	DestTime = *TargetTime + g_Setting.i32TimeZoneOffset;
+
+	if(DestTime / DAY_2_SECOND(1) == LocalTime / DAY_2_SECOND(1))
+	{
+		sprintf(ReadFileName, "%s", FILENAME_DATALOG_BIN);
+	}
+	else
+	{
+		strftime(ReadFileName, sizeof(ReadFileName), "%Y%m%d.DTR", localtime(&DestTime));
+	}
+
+	ReadFileSize = SD_GetFileSize(ReadFileName);
+
+	if(ReadFileSize == 0)
+		return FALSE;
+
+	RESULT = SD_ReadAddrToBuff(ReadFileName, (uint8_t*)&DataLog, sizeof(DATALOG_BGTVT_t), 0);
+
+	if(RESULT == TRUE && DataLog.CMD != CMD_DATALOG_BGTVT_2014)
+	{
+		RESULT = FALSE;
+	}
+
+	return RESULT;
+}
+
+bool READ_GetDrvData(uint32_t IN, DRV_DATA_t *DrvData)
+{
+	uint8_t j;
+
+
+	if(ReadDrvAll[0].IN == 0)
+	{
+		// 取得所有駕駛資訊
+		for(j = 0; j < DRIVER_INFO_MAX; j++)
+		{
+			Info_GetDrvData(j, &ReadDrvAll[j]);
+		}
+	}
+
+	// 取得目前駕駛資訊
+	for(j = 0; j < DRIVER_INFO_MAX; j++)
+	{
+		if(IN == ReadDrvAll[j].IN)
+		{
+			*DrvData = ReadDrvAll[j];
+
+			ReadDriInfoInd = j;
+
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+void READ_TypeBasic(DATALOG_BGTVT_t *pDataLog)
+{
+	time_t Nrawtime;
+	char DataStr[255];
+	char szDTStr[32];
+
+
+	// Supplier
+	sprintf(DataStr, "1,%s",STR_TITLE);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// Name of model
+	sprintf(DataStr, "2,%s",STR_PRODUCT);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// Seri number
+	sprintf(DataStr, "3,%s", g_Setting.szBus_SN);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// Car plate
+	sprintf(DataStr, "4,%s", g_Setting.szBus_ID);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// Method of measure speed
+	if(g_Setting.ENABLE_SET.bits.CAN_SPEED == 1)
+		sprintf(DataStr, "5,2");
+	else if(g_Setting.tSpeedSet.fGain == 0)
+		sprintf(DataStr, "5,1");
+	else
+		sprintf(DataStr, "5,0");
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// Fulse configuration / km
+	sprintf(DataStr, "6,%f",g_Setting.tSpeedSet.fGain);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Maximum speed
+	sprintf(DataStr, "7,%d",M_2_KM(g_Setting.tSpeedSet.u32Limit[2]));
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Latest Install date
+	if(g_Setting.TempSet.ttLastInstall == NULL
+	        || g_Setting.TempSet.ttLastInstall == INVALID_VALUE_DEF)
+	{
+		sprintf(DataStr, "8,");
+	}
+	else
+	{
+		strftime(DataStr, sizeof(szDTStr), "8,%Y/%m/%d",
+		         localtime((const time_t *)&g_Setting.TempSet.ttLastInstall));
+	}
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Latest updated date
+	if(g_Setting.TempSet.ttLastUpgrade == NULL
+	        || g_Setting.TempSet.ttLastUpgrade == INVALID_VALUE_DEF)
+	{
+		sprintf(DataStr, "9,");
+	}
+	else
+	{
+		strftime(DataStr, sizeof(szDTStr), "9,%Y/%m/%d",
+		         localtime((const time_t *)&g_Setting.TempSet.ttLastUpgrade));
+	}
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Status of GSM
+	sprintf(DataStr, "10,%1d",pDataLog->NOW.STATE.GSM);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Status of GPS
+	sprintf(DataStr, "11,%1d",pDataLog->NOW.STATE.GPS);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Status of memory card
+	sprintf(DataStr, "12,1");
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// SD Memory capacity
+	sprintf(DataStr, "13,%d",ReadSdCardCapacity);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	//  Information of current driver
+	if(ReadLastDrvLCDT != 0
+	        && pDataLog->DRV_LCDT == 0)
+	{
+		ReadLCDT[ReadDriInfoInd] += ReadLastDrvLCDT-ReadStartLCDT;
+
+		ReadLastDrvLCDT = 0;
+	}
+
+	if(pDataLog->u32DRV_IN != INVALID_VALUE_DEF)
+	{
+		if(ReadDrvData.IN == pDataLog->u32DRV_IN)
+		{
+			sprintf(DataStr, "14,%s,%s",
+			        ReadDrvData.szName,
+			        ReadDrvData.szLicense);
+		}
+		else if(READ_GetDrvData(pDataLog->u32DRV_IN, &ReadDrvData) == TRUE)
+		{
+			sprintf(DataStr, "14,%s,%s",
+			        ReadDrvData.szName,
+			        ReadDrvData.szLicense);
+
+			ReadStartLCDT = 0;
+
+			if(Readrawtime == pDataLog->UTC)
+			{
+				ReadStartLCDT = pDataLog->DRV_LCDT;
+			}
+		}
+
+		READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+		// Continous driving time
+		sprintf(DataStr, "15,%d",S_2_MIN(pDataLog->DRV_LCDT));
+
+		READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+	}
+	else
+	{
+		sprintf(DataStr, "14,");
+
+		READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+		//  Continous driving time
+		sprintf(DataStr, "15,");
+
+		READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+	}
+
+	// 如果要做假再拿掉判斷
+	if(pDataLog->NOW.STATE.GPS == 1)
+	{
+		// Longitude, latitude
+		sprintf(DataStr, "16,%0.6f,%0.6f",
+		        (double)pDataLog->i32Longitude / 1000000,
+		        (double)pDataLog->i32Latitude / 1000000);
+	}
+	else
+		sprintf(DataStr, "16,0.000000,0.000000");
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	// Speed
+	sprintf(DataStr, "17,%d",pDataLog->u8Speed);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+	Nrawtime = pDataLog->UTC + g_Setting.i32TimeZoneOffset;
+
+	strftime(szDTStr, sizeof(szDTStr), "%Y/%m/%d %H:%M:%S", localtime(&Nrawtime));
+
+	sprintf(DataStr, "18,%s",szDTStr);
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+}
+
+//============================================================================//
+//	需判別  15分鐘  分段
+//	20150525 james 要求
+// now it is calculate base on the status of speed: when the speed < 3km/h,
+// it means that is relax time (The speed =0).
+
+//============================================================================//
+void READ_TypeWork(DATALOG_BGTVT_t *pDataLog)
+{
+	char DataStr[255];
+	char szDTStrS[32];
+	char szDTStr[32];
+	time_t Nrawtime=0;
+	bool StopOver15 = FALSE;
+
+	if(pDataLog->u32DRV_IN == INVALID_VALUE_DEF
+	        && ReadWorkDrvIn == INVALID_VALUE_DEF)
+		return;
+
+	if(ReadWorkDrvIn == INVALID_VALUE_DEF)
+	{
+		// 取得駕駛資訊
+		if(READ_DRIVER_WORK
+		        && READ_GetDrvData(pDataLog->u32DRV_IN, &ReadDrvData) == TRUE)
+		{
+			ReadStartUCT = pDataLog->UTC;
+
+			ReadWorkDrvIn = pDataLog->u32DRV_IN;
+
+			i32ReadStLongitude = pDataLog->i32Longitude;
+
+			i32ReadStLatitude = pDataLog->i32Latitude;
+		}
+
+		return;
+	}
+
+	// 15 分鐘需切割為兩段
+	if(READ_DRIVER_STOP)
+	{
+		if(ReadStopUCT == 0)
+			ReadStopUCT = pDataLog->UTC-1;
+		else  if((pDataLog->UTC-ReadStopUCT)>MINUTE_2_SECOND(15))
+			StopOver15 = TRUE;
+	}
+	else if(ReadStopUCT != 0)
+		ReadStopUCT = 0;
+
+	if(ReadWorkDrvIn != pDataLog->u32DRV_IN
+	        || StopOver15 == TRUE
+	        || (Readrawtime+DAY_2_SECOND(1)-1) <= (pDataLog->UTC))
+	{
+		Nrawtime = ReadStartUCT + g_Setting.i32TimeZoneOffset;
+
+		strftime(szDTStrS, sizeof(szDTStrS), "%H:%M:%S", localtime(&Nrawtime));
+
+		if(StopOver15 == TRUE)
+			Nrawtime = ReadStopUCT + g_Setting.i32TimeZoneOffset;
+
+		else if(ReadWorkDrvIn != pDataLog->u32DRV_IN)
+			Nrawtime = pDataLog->UTC + g_Setting.i32TimeZoneOffset - 1;
+
+		else
+			Nrawtime = pDataLog->UTC + g_Setting.i32TimeZoneOffset;
+
+		strftime(szDTStr, sizeof(szDTStr), "%H:%M:%S", localtime(&Nrawtime));
+
+		sprintf(DataStr, "%s,%s,%s,%0.6f,%0.6f,%s,%0.6f,%0.6f",
+		        ReadDrvData.szName,
+		        ReadDrvData.szLicense,
+		        szDTStrS,
+		        (double)i32ReadStLongitude / 1000000,
+		        (double)i32ReadStLatitude / 1000000,
+		        szDTStr,
+		        (double)pDataLog->i32Longitude / 1000000,
+		        (double)pDataLog->i32Latitude / 1000000);
+
+		READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+		ReadStartUCT = 0;
+
+		ReadWorkDrvIn = INVALID_VALUE_DEF;
+
+		i32ReadStLongitude = 0;
+
+		i32ReadStLatitude = 0;
+
+		ReadStopUCT = 0;
+
+		if(pDataLog->u32DRV_IN != INVALID_VALUE_DEF
+		        && READ_DRIVER_WORK)
+		{
+			// 取得駕駛資訊
+			if(READ_GetDrvData(pDataLog->u32DRV_IN, &ReadDrvData) == TRUE)
+			{
+				ReadStartUCT = pDataLog->UTC+1;
+
+				ReadWorkDrvIn = pDataLog->u32DRV_IN;
+
+				i32ReadStLongitude = pDataLog->i32Longitude ;
+
+				i32ReadStLatitude = pDataLog->i32Latitude ;
+			}
+		}
+	}
+}
+
+//============================================================================//
+//	需計算停止時間
+//============================================================================//
+void READ_TypeStop(DATALOG_BGTVT_t *pDataLog, bool LsatData)
+{
+	time_t Nrawtime;
+	char DataStr[255];
+	char szDTStr[32];
+	uint32_t StopLong;
+
+
+	if(ReadStartUCT == 0)
+	{
+		if(READ_DRIVER_STOP)
+		{
+			ReadStartUCT = pDataLog->UTC;
+		}
+	}
+	else
+	{
+		if((READ_DRIVER_WORK) || LsatData == TRUE)
+		{
+			StopLong = (pDataLog->UTC+1 - ReadStartUCT) / 60;
+
+			Nrawtime = ReadStartUCT + g_Setting.i32TimeZoneOffset;
+
+			strftime(szDTStr, sizeof(szDTStr), "%H:%M:%S", localtime(&Nrawtime));
+
+			sprintf(DataStr, "%s,%0.6f,%0.6f,%ld",
+			        szDTStr,
+			        (double)pDataLog->i32Longitude / 1000000,
+			        (double)pDataLog->i32Latitude / 1000000,
+			        StopLong);
+
+			READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+
+			ReadStartUCT = 0;
+		}
+	}
+}
+
+void READ_TypeRoute(DATALOG_BGTVT_t *pDataLog)
+{
+	time_t Nrawtime;
+	char DataStr[255];
+	char szDTStr[32];
+
+
+	Nrawtime = pDataLog->UTC + g_Setting.i32TimeZoneOffset;
+
+	strftime(szDTStr, sizeof(szDTStr), "%H:%M:%S", localtime(&Nrawtime));
+
+	if(pDataLog->NOW.STATE.GPS == 1)
+	{
+		sprintf(DataStr, "%s,%0.6f,%0.6f,%d,%d",
+		        szDTStr,
+		        (double)pDataLog->i32Longitude / 1000000,
+		        (double)pDataLog->i32Latitude / 1000000,
+		        pDataLog->GPS_SPEED,
+		        pDataLog->PULS_SPEED);
+	}
+	else
+	{
+		sprintf(DataStr, "%s,0.000000,0.000000,%d,%d",
+		        szDTStr,
+		        pDataLog->GPS_SPEED,
+		        pDataLog->PULS_SPEED);
+	}
+
+	READ_SendData((uint8_t*)DataStr, strlen(DataStr));
+}
+
+//============================================================================//
+//All one group, 30 Speed, start only 00S or 30S
+//============================================================================//
+void READ_TypeSpeed(DATALOG_BGTVT_t *pDataLog, bool LsatData)
+{
+	char szDTStr[32];
+	time_t Nrawtime;
+	static time_t NextNrawtime;
+	uint8_t GetLossSpeed=0;
+
+
+	if(ReadCntSpdInd == 0)
+	{
+		memset(ReadQuicBuf,0,sizeof(ReadQuicBuf));
+
+		Nrawtime = pDataLog->UTC + g_Setting.i32TimeZoneOffset;
+
+		if(pDataLog->UTC%60 < 30 )
+		{
+			strftime(szDTStr, sizeof(szDTStr), "%H:%M:00", localtime(&Nrawtime));
+		}
+		else
+		{
+			strftime(szDTStr, sizeof(szDTStr), "%H:%M:30", localtime(&Nrawtime));
+		}
+
+		sprintf(ReadQuicBuf, "%s,%d",
+		        szDTStr,
+		        pDataLog->u8Speed);
+
+		NextNrawtime = (pDataLog->UTC/30*30)+29;
+
+		GetLossSpeed = pDataLog->UTC%30;
+
+		for(; ReadCntSpdInd<GetLossSpeed; ReadCntSpdInd++)
+		{
+			sprintf(szDTStr,",0");
+
+			strcat(ReadQuicBuf,szDTStr);
+		}
+	}
+	else
+	{
+		sprintf(szDTStr, ",%d", pDataLog->u8Speed);
+
+		strcat(ReadQuicBuf,szDTStr);
+	}
+
+	ReadCntSpdInd++;
+
+	if(ReadCntSpdInd >= 30
+	        || (pDataLog->UTC) >= (NextNrawtime)
+	        || LsatData == TRUE
+	  )
+	{
+		for(; ReadCntSpdInd<30; ReadCntSpdInd++)
+		{
+			if(LsatData == TRUE)
+				sprintf(szDTStr, ",0");
+			else
+				sprintf(szDTStr, ",%d",pDataLog->u8Speed);
+
+			strcat(ReadQuicBuf,szDTStr);
+		}
+
+		READ_SendData((uint8_t*)ReadQuicBuf, strlen(ReadQuicBuf));
+
+		ReadCntSpdInd = 0;
+	}
+}
+
+void READ_SendProcess(uint8_t type)
+{
+	static DATALOG_BGTVT_t DataLog[READ_ONCE_READ_DATA];
+	uint32_t target,starget;
+	uint32_t LogIdx, LogEnd;
+	uint8_t GetIndex;
+	uint8_t i;
+	static uint8_t RunI;
+
+
+	LogEnd = ReadFileSize / sizeof(DATALOG_BGTVT_t);
+
+	starget = GetSysTickCount();
+
+	target = starget + mS_2_SysTick(READ_ONCE_RUN_TIME);
+
+	do
+	{
+		if(ReadLogBegin == 0)
+			RunI = 0;
+
+		LogIdx = ReadLogBegin;
+
+		if(LogIdx >= LogEnd)
+		{
+			ReadRunCmd = 0;
+
+			ReadLogBegin = 0;
+
+			break;
+		}
+
+		//  只讀最後一筆
+		if(type == TYPE_BASIC)
+		{
+			ReadLogBegin =  LogEnd -1;
+
+			LogIdx = ReadLogBegin;
+		}
+
+		GetIndex=READ_ONCE_READ_DATA;
+
+		if(RunI == 0
+		        || RunI >= READ_ONCE_READ_DATA)
+		{
+			if((LogEnd-LogIdx) < READ_ONCE_READ_DATA)
+				GetIndex = LogEnd-LogIdx;
+
+			RunI = 0;
+		}
+
+		if(RunI
+		        || SD_ReadAddrToBuff(ReadFileName, (uint8_t*)&DataLog, sizeof(DATALOG_BGTVT_t)*GetIndex, sizeof(DATALOG_BGTVT_t) * LogIdx) == TRUE)
+		{
+			for(i=RunI; i<GetIndex; i++)
+			{
+				if((GetSysTickCount()) > target)
+				{
+					return;
+				}
+
+				ReadLogBegin++;
+
+				RunI++;
+
+				if(ReadLastUCT < DataLog[i].UTC)
+				{
+					//	濾掉已處理過的時間
+					ReadLastUCT = DataLog[i].UTC;
+
+					switch (type)
+					{
+						case TYPE_BASIC:
+							READ_TypeBasic(&DataLog[i]);
+
+							break;
+
+						case TYPE_WORK:
+							READ_TypeWork(&DataLog[i]);
+
+							break;
+
+						case TYPE_STOP:
+							READ_TypeStop(&DataLog[i],ReadLogBegin >= LogEnd);
+
+							break;
+
+						case TYPE_ROUTE:
+							READ_TypeRoute(&DataLog[i]);
+
+							break;
+
+						case TYPE_SPEED:
+							READ_TypeSpeed(&DataLog[i],ReadLogBegin >= LogEnd);
+
+							break;
+
+						default:
+							ReadRunCmd = 0;
+
+							break;
+					}
+				}
+			}
+		}
+
+	}
+	while(GetSysTickCount() < target);
+
+}
+
+bool READ_GetCmdPkg(void)
+{
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+
+
+	BufLen = UART_GetRxBufLen(READ_COMPORT_DEF);
+
+	if(!BufLen)
+	{
+		return FALSE;
+	}
+
+	if(BufLen != READ_DEVICE_LEN)
+	{
+		return FALSE;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	BufLen = UART_GetRxBuffer(READ_COMPORT_DEF, Buf, sizeof(Buf));
+
+	if(g_Setting.DebugMode == DBG_DB9)
+	{
+		SET_SendBuffer(Buf, BufLen);
+	}
+
+	if(memcmp(Buf, READ_DEVICE_HEAD, strlen(READ_DEVICE_HEAD)) != 0)
+	{
+		return FALSE;
+	}
+
+	if(memcmp(Buf + strlen(READ_DEVICE_HEAD) + READ_RECV_LEN, READ_DEVICE_END, strlen(READ_DEVICE_END) != 0))
+	{
+		return FALSE;
+	}
+
+	memset(READ_BUF, 0x00, sizeof(READ_BUF));
+
+	memcpy(READ_BUF, Buf + strlen(READ_DEVICE_HEAD), READ_RECV_LEN);
+
+	// 停止上次命令
+	ReadRunCmd = 0;
+
+	return TRUE;
+}
+
+bool READ_Process(void)
+{
+	struct tm * timeinfo;
+	char DataStr[10];
+
+
+	if(READ_GetCmdPkg() == FALSE
+	        && ReadRunCmd == 0)
+	{
+		return TRUE;
+	}
+
+	if(ReadRunCmd == 0)
+	{
+		memset(DataStr,0,sizeof(DataStr));
+
+		strncpy(DataStr, READ_BUF, 2);
+
+		if(DataStr[0] < 'A'
+		        && DataStr[1] < 'A' )
+		{
+			ReadCodeOfData = (ReadCodeOfData_t)atoi(DataStr);
+		}
+		else
+			return TRUE;
+
+		if(ReadCodeOfData > TYPE_SPEED)
+		{
+			return TRUE;
+		}
+
+		timeinfo = localtime(&Readrawtime);
+
+		strncpy(DataStr, READ_BUF + 2, 2);
+		timeinfo->tm_mday = atoi(DataStr);
+
+		strncpy(DataStr, READ_BUF + 4, 2);
+		timeinfo->tm_mon = atoi(DataStr) - 1;
+
+		strncpy(DataStr, READ_BUF + 6, 2);
+		timeinfo->tm_year = atoi(DataStr) + 100;
+
+		timeinfo->tm_hour = 0;
+
+		timeinfo->tm_min = 0;
+
+		timeinfo->tm_sec = 0;
+
+		Readrawtime = mktime(timeinfo);
+
+		// 取得 UTC 時間
+		Readrawtime -= g_Setting.i32TimeZoneOffset;
+
+		READ_InitValue();
+
+		if(ReadCodeOfData == TYPE_ALL)
+		{
+			ReadCodeOfData++;
+
+			GetAllData = 1;
+		}
+
+		if(READ_GetFileName(&Readrawtime) == TRUE)
+		{
+			// 將此時間點的 log 先存入
+			Datalog_DirectSave();
+
+			if(ReadSdCardCapacity == 0)
+			{
+				SD_CardInfo SDCardInfo;
+
+				SD_GetCardInfo(&SDCardInfo);
+
+				ReadSdCardCapacity=SDCardInfo.CardCapacity;
+			}
+		}
+		else
+		{
+			ReadCodeOfData = TYPE_END;
+		}
+	}
+
+	HwCfg_LEDToggle(LED_RDY);
+
+	//	為加快速度不從  SET 送出目前所讀的檔名 Debug 先設成 TIME
+	ReadDebugMode = g_Setting.DebugMode;
+
+	g_Setting.DebugMode =  DBG_END;
+
+	if(GetAllData == 1)
+	{
+		if(ReadCodeOfData == 1)
+			READ_SendProcess(TYPE_BASIC);
+
+		if(ReadCodeOfData == 2)
+			READ_SendProcess(TYPE_WORK);
+
+		if(ReadCodeOfData == 3)
+			READ_SendProcess(TYPE_STOP);
+
+		if(ReadCodeOfData == 4)
+			READ_SendProcess(TYPE_ROUTE);
+
+		if(ReadCodeOfData == 5)
+			READ_SendProcess(TYPE_SPEED);
+
+		if(ReadRunCmd == 0
+		        && ReadCodeOfData < 5)
+		{
+			ReadCodeOfData++;
+
+			READ_GetFileName(&Readrawtime);
+
+			READ_InitValue();
+
+			GetAllData = 1;
+		}
+	}
+	else if(ReadCodeOfData != TYPE_END)
+	{
+		READ_SendProcess(ReadCodeOfData);
+	}
+
+	HwCfg_LEDToggle(LED_RDY);
+
+	//	還原 Debug 模式
+	g_Setting.DebugMode =  ReadDebugMode;
+
+	return TRUE;
+}
+
+void SetTID_ReadProc(void)
+{
+	SWTIM_SetTimer(TIMER_READ_PROC, TIMER_CONTINUE, READ_Process);
+}
+
+//============================================================================//
+//
+// 大於 14 會超過 1024   =>  14 x72 =1008byte
+// #define	DRIVER_INFO_MAX		(14)
+// 目前寫到那個 DrvInd(存在 Drv 14 的 NAME )
+//  00,01,02......14
+// 當Rfid-Tag 的駕駛資料
+// 行車記錄器沒有就會自動設定駕駛資料
+// 從第一個開始寫
+// 滿了就會從第一個駕駛開始複寫
+// DrvData 寫入 如下:
+// 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12 -> 13 -> 1
+//============================================================================//
+bool RFID_ChkDrvData(RFID_INFO_t *pRFID_Info)
+{
+	DRV_DATA_t DRV_DATA= {0};
+	uint8_t i;
+	uint32_t NowDrvIndex;
+	char CMD[128];
+
+
+	// 	過濾掉白卡 (20150522 通知越南要改為不設定駕駛資料 所以白卡也過)
+	if(memcmp(pRFID_Info->szLicense,RFID_Tag_No_Data,sizeof(DRV_DATA.szLicense)) == 0)
+	{
+		return FALSE;
+	}
+
+	RTOSprintf("\r\n> RFID UID: 0x%02X-0x%02X-0x%02X-0x%02X-0x%02X-0x%02X-0x%02X-0x%02X",
+	           pRFID_Info->UID[0],
+	           pRFID_Info->UID[1],
+	           pRFID_Info->UID[2],
+	           pRFID_Info->UID[3],
+	           pRFID_Info->UID[4],
+	           pRFID_Info->UID[5],
+	           pRFID_Info->UID[6],
+	           pRFID_Info->UID[7]);
+
+	RTOSprintf("\r\n> RFID INFO: NAME = %s ,chk = 0x%02X, LICENES= %s  ,chk = 0x%02X",
+	           pRFID_Info->NAME, pRFID_Info->u8CheckLic,
+	           pRFID_Info->szLicense, pRFID_Info->u8CheckName);
+
+	// 取得所有駕駛資訊
+	for(i = 0; i < DRIVER_INFO_MAX; i++)
+	{
+		Info_GetDrvData(i, &DRV_DATA);
+
+		if(strcmp(DRV_DATA_NAME, pRFID_Info->NAME) == 0
+		        && strcmp(DRV_DATA.szLicense,pRFID_Info->szLicense) == 0)
+		{
+			if(Info_CheckDrvId(DRV_DATA.IN) == TRUE)
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	//	如果已 LogIn 就先 LogOut
+	if(g_Setting.u32DrvIdNum != INVALID_VALUE_DEF)
+		Info_CheckDrvId(g_Setting.u32DrvIdNum);
+
+	// 讀出目前寫到那個 DrvInd(存在 Drv 14 的 NAME )
+	Info_GetDrvData(DRIVER_INFO_MAX-1, &DRV_DATA);
+
+	if(DRV_DATA.IN != (DRIVER_INFO_MAX/10*16+DRIVER_INFO_MAX%10))
+	{
+		// 有重複的 IN 會被視同已寫入過 所以改為用 DRV_DATA_NAME 字串記錄 ???
+		sprintf(CMD, "%s%02d,%08d,01,lic,140901,490901\r\n",STR_AS_DRIVER_DATA,(DRIVER_INFO_MAX),(DRIVER_INFO_MAX));
+
+		Protocl_ChkCmdPkg(CMD, NULL);
+
+		Info_GetDrvData(DRIVER_INFO_MAX-1, &DRV_DATA);
+	}
+
+	NowDrvIndex = atoi(DRV_DATA_NAME);
+
+	sprintf(CMD, "%s%02d,%08d,%s,%s,140901,490901\r\n", STR_AS_DRIVER_DATA,NowDrvIndex,NowDrvIndex,pRFID_Info->NAME,pRFID_Info->szLicense);
+
+	// 寫入 DrvData CMD
+	Protocl_ChkCmdPkg(CMD, NULL);
+
+	//  進行 LogIN
+	if(Info_CheckDrvId(DRV_DATA.IN) != TRUE)
+		return FALSE;
+
+	// 回寫 DrvInd
+	NowDrvIndex++;
+
+	if(NowDrvIndex >= DRIVER_INFO_MAX )
+		NowDrvIndex = 1;
+
+	sprintf(CMD, "%s%02d,%08d,%02d,%s,140901,490901\r\n",STR_AS_DRIVER_DATA,(DRIVER_INFO_MAX),(DRIVER_INFO_MAX),NowDrvIndex,pRFID_Info->szLicense);
+
+	if(Protocl_ChkCmdPkg(CMD, NULL) == TRUE)
+		return TRUE;
+
+	return FALSE;
+}
+
+void RFID_GetDataPkg(void)
+{
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	RFID_INFO_t RFID_Info;
+	uint8_t i;
+	uint16_t u16CheckSum;
+
+
+	if(UART_GetRxBufLen(RFID_COMPORT_DEF) != sizeof(RFID_INFO_t))
+		return;
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	UART_GetRxBuffer(RFID_COMPORT_DEF, Buf, sizeof(Buf));
+
+	memcpy(&RFID_Info, Buf, sizeof(RFID_INFO_t));
+
+	u16CheckSum = 0;
+
+	for(i = 0; i < (sizeof(RFID_INFO_t) - OFFSET_SIZE(RFID_INFO_t, u16CheckPkg)); i++)
+	{
+		u16CheckSum += Buf[i];
+	}
+
+	u16CheckSum &= 0xFF;
+
+	if(u16CheckSum != RFID_Info.u16CheckPkg)
+		return;
+
+	if(RFID_ChkDrvData(&RFID_Info) ==  TRUE)
+	{
+		if(g_Setting.u32DrvIdNum == INVALID_VALUE_DEF)
+			Buzzer_SetRing(&RFID_RING, BEEP_SHORT, 3);
+		else
+			Buzzer_SetRing(&RFID_RING, BEEP_SHORT, 2);
+	}
+	else
+	{
+		Buzzer_SetRing(&RFID_RING, BEEP_SHORT, 1);
+	}
+}
+
+static bool RFID_Process(void)
+{
+	// 越南法規2014  stop=0 OR ACC-OFF  才 logon/lonout
+	if(BGTVT_DRIVER_WORK
+	        && M_2_KM(g_SysInfo.VehicleState.u32Speed) >= 3)
+		return TRUE;
+
+	RFID_GetDataPkg();
+
+	return TRUE;
+}
+
+void SetTID_RfidProc(void)
+{
+	SWTIM_SetTimer(TIMER_RFID_PROC, TIMER_CONTINUE, RFID_Process);
+}
+#endif // ENABLE_BGTVT_2014
+
+#if ENABLE_EUPFIN_RS232
+uint8_t CmdStopHead_EUPFIN(char *pStr)
+{
+	StopChar(pStr, '=');
+
+	RTOSprintf("\r\n> Command {%s} process..", pStr);
+
+	return strlen(pStr) + 1;
+}
+
+bool CMD_EUPFIN_RS232_PD(char *pStr)
+{
+	uint8_t i,Buflen;
+
+
+	if(strncmp(pStr, STR_AS_EUPFIN_RS232_PD, strlen(STR_AS_EUPFIN_RS232_PD)) != 0)
+		return FALSE;
+
+	pStr += CmdStopHead_EUPFIN(pStr);
+	if(strlen(pStr) < 128)
+	{
+		Buflen = strlen(pStr);
+	}
+	else
+	{
+		Buflen = 128;
+	}
+
+	for(i=0; i<Buflen; i++)
+	{
+		if ('\n' == pStr[i])
+		{
+			DataBuf[i] = '\0';
+		}
+		else if ('\r' == pStr[i])
+		{
+			DataBuf[i] = '\0';
+		}
+		else
+		{
+			DataBuf[i] = pStr[i];
+		}
+	}
+
+	//RTOSprintf("\r\n> @@@ AT$PD: %s @@@", DataBuf);
+	DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_RS232_PD, DataBuf);
+
+	return TRUE;
+}
+
+bool CMD_EUPFIN_RS232_CODE(char *pStr)
+{
+	uint8_t i,Buflen;
+
+
+	if(strncmp(pStr, STR_AS_EUPFIN_RS232_CODE, strlen(STR_AS_EUPFIN_RS232_CODE)) != 0)
+		return FALSE;
+
+	pStr += CmdStopHead_EUPFIN(pStr);
+
+	if (strlen(pStr) < 128)
+	{
+		Buflen = strlen(pStr);
+	}
+	else
+	{
+		Buflen = 128;
+	}
+
+	for (i=0; i<Buflen; i++)
+	{
+		if ('\n' == pStr[i])
+		{
+			DataBuf[i] = '\0';
+		}
+		else if ('\r' == pStr[i])
+		{
+			DataBuf[i] = '\0';
+		}
+		else
+		{
+			DataBuf[i] = pStr[i];
+		}
+	}
+
+	//RTOSprintf("\r\n> @@@ AT$CODE: %s @@@", DataBuf);
+	DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_RS232_CODE, DataBuf);
+
+	return TRUE;
+}
+
+static bool RS232_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_RS232_PKG_TIMEOUT;
+	uint16_t i, BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	char *pBuf, ch;
+
+
+	BufLen = UART_GetRxBufLen(EXT_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = MAX_RS232_PKG_TIMEOUT;
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+			return FALSE;
+		}
+
+		GetPkgTimeout = MAX_RS232_PKG_TIMEOUT;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+	BufLen = UART_GetRxBuffer(EXT_COMPORT_DEF, Buf, sizeof(Buf));
+	pBuf = (char*)Buf;
+
+	//RTOSprintf("\r\n===== Get EXT ==========");
+	for(i = 0; i < BufLen; i++)
+	{
+		ch = *pBuf++;
+		g_CmdPkg[i] = ch;
+
+		//RTOSprintf("%c", g_CmdPkg[i]);
+		if (i >= UART_MAX_BUFFER_SIZE)
+			break;
+	}
+
+	//RTOSprintf("\r\n========================\r\n");
+
+	return TRUE;
+}
+
+static bool RS232_Process(void)
+{
+	if(bUpgradeFlag == TRUE)
+		return TRUE;
+
+	if(RS232_GetCmdPkg() == FALSE)
+		return TRUE;
+
+	if (CMD_EUPFIN_RS232_PD(g_CmdPkg) == TRUE)
+		return TRUE;
+
+	if (CMD_EUPFIN_RS232_CODE(g_CmdPkg) == TRUE)
+		return TRUE;
+
+	return TRUE;
+}
+
+void SetTID_RS232Proc(void)
+{
+	SWTIM_SetTimer(TIMER_RS232_PROC, TIMER_CONTINUE, RS232_Process);
+}
+#endif
+
+
+
+
+
+

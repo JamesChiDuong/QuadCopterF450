@@ -1,0 +1,2456 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "EXT_Module.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "Buzzer.h"
+#include "DataSend.h"
+#include "Default.h"
+#include "GPS_Driver.h"
+#include "GSM_Driver.h"
+#include "PRN_Driver.h"
+#include "Protocol.h"
+#include "SD_Module.h"
+#include "UART_Driver.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+#if ENABLE_LCM
+#define	TIMER_LCM_PROC			    250  //Heinz 100 //1000 ok //500
+
+//#define	MAX_LCM_PKG_TIMEOUT		  (250 / TIMER_LCM_PROC) //500 //Heinz  100 //1000	//500
+
+#define	COUNT_LCM_SEND_INFO		  (500 / TIMER_LCM_PROC)	 //500 //Heinz 500 //5000 //3000
+
+#define	MAX_VIDEO_CTRL_COUNT	  1  //Heinz
+
+//Heinz
+#define	MAX_TIME_COUNT	        60 // 10 // Heinz 
+#define MAX_DIST_COUNT          3 // 5 // Heinz 
+#define MAX_GPS_COUNT	          2 // 4	//heinz
+
+#define CHK_CMD_VERSION			    TO_CONN(STR_AS_VERSION, "?")
+#define CHK_CMD_SPD_LIMIT		    TO_CONN(STR_AS_SPEED_LIMIT, "?")
+#endif
+
+#if ENABLE_KEYPAD
+#define	TIMER_KEYPAD_PROC		    100
+
+#define	MAX_KEYPAD_PKG_TIMEOUT	(500 / TIMER_KEYPAD_PROC)
+
+#define KEYIN_SIZE_MAX			    20
+
+#define STR_KEYPAD_HEAD			    "riti"
+#endif
+
+#if ENABLE_CAMERA
+//============================================================================//
+//  用 PTC06 照像 利用 ftp 上傳
+//
+// 	用  CMD 或簡訊觸發
+//	$AS+SYS=PHOTO
+//	1111@SYS:PHOTO
+//
+//	只存一張照片，上傳後才可再照相
+//	每次觸發間隔  3分鐘
+//============================================================================//
+#define PTC06_COMPORT_DEF		   EXT_COMPORT_DEF
+
+#if ENABLE_BGTVT_2014
+#undef PTC06_COMPORT_DEF
+#define PTC06_COMPORT_DEF		   SET_COMPORT_DEF
+#endif
+
+// 低於 50 mS 就會亂回
+#define	TIMER_PTC06_PROC			 100
+
+#define	TIMER_PTC06_UP_CHK		 5000
+
+#if UART_MAX_BUFFER_SIZE == 512
+#undef READ_IMG_BLOCK
+#define	READ_IMG_BLOCK			   496
+#else
+#undef READ_IMG_BLOCK
+#define	READ_IMG_BLOCK			   240
+#endif
+
+#define	READ_IMG_BLOCK_H			 (READ_IMG_BLOCK / 256)
+
+#define	READ_IMG_BLOCK_L			 (READ_IMG_BLOCK % 256)
+
+#define	PTC06_MAX_GET_PKG_TIMEOUT		  (S_2_mS(1) / TIMER_PTC06_PROC)
+
+#define	PTC06_EveryGetPictureTime_M		1
+
+#define PTC06_R_HEAD_A				 0x76
+
+#define PTC06_R_HEAD_B				 0
+
+#define UP_LIST_END_ID				 (0x5AA5)
+#endif
+
+#if ENABLE_TAXIMETER
+#define TAXIMETER_COMPORT_DEF	EXT_COMPORT_DEF
+
+#if ENABLE_BGTVT_2014
+#undef TAXIMETER_COMPORT_DEF
+#define TAXIMETER_COMPORT_DEF	EXT_COMPORT_DEF
+#endif
+
+#define	TIMER_TAXI_PROC			   100
+
+#define	MAX_TAXI_PKG_TIMEOUT	 (100 / TIMER_TAXI_PROC)
+
+// 廠牌 PAT TAXI METER
+#define	TAXI_PKG_CMD_POS		   9
+
+#define	TAXI_DATA_LEN_POS		   11
+
+#define	GET_TAXI_PKG_LEN(pkg)	 (pkg[TAXI_DATA_LEN_POS] + 16)
+
+#define STR_TAXI_PKG_START		 "\x10\x02"
+
+#define STR_TAXI_PKG_END		   "\x10\x03"
+
+#define STR_TAXI_DEV_CMD04		 "\x21\x04"
+
+#define STR_TAXI_DEV_CMD06		 "\x21\x06"
+
+#define STR_TAXI_DEV_CMD07		 "\x21\x07"
+
+#define STR_TAXI_DEV_CMD40		 "\x21\x40"
+
+#define STR_TAXI_DEV_CMDA0		 "\x21\xA0"
+
+#define STR_TAXI_SEND_CMD92		 "\x10\x02\x00\x01\x01\x02\x12\x92\x12\x01\x00\x00\x39\x89\x10\x03"
+
+#define	STR_TAXI_SEND_CMD92_LEN	  16
+#endif
+
+//============================================================================//
+//============================================================================//
+//TPMS:胎溫壓系統
+//問輪胎資料send :01001@
+//010   為固定.
+//01    為輪胎代碼 (目前01~06六個輪胎)
+//@     為固定
+//將收到的資料截取 16Byte 資料 以事件送出
+//$AS+TPMS=01002020108P025C000@(4~20 Byte)
+//截取 16Byte 資料:02020108P025C000
+//01	：02	 代表左前輪
+//00	：02	 代表Tx  之ID  尾碼(TireNum)
+//0033  ：0108	 表示壓力，  33  數值
+//N	：P	 代表壓力單位，P  代表PSI、K  代表KPa、B  代表Bar
+//020	：025	 表示溫度，  20  數值
+//M	：C	 代表溫度單位，C  表示攝氏、F  表示華氏
+//X	：0	 此位置為1  表示此輪胎壓力低於23PSI，為  0  則代表正常
+//Y	：0	 此位置為1  表示此輪胎溫度高於85C，為  0  則代表正常
+//Z	：0	 此位置為1  表示此輪胎正處於漏氣，為  0  則代表正常
+//後三碼為1代表異常,才需送事件
+//============================================================================//
+#if ENABLE_TPMS
+#define TPMS_COMPORT_DEF		    EXT_COMPORT_DEF
+#define TPMS_DBG_MODE				    DBG_EXT
+#define TPMS_BUF					      ExtBuf
+
+#define	TIMER_TPMS_PROC				  100
+#define	MAX_TPMS_PKG_TIMEOUT		(500 / TIMER_TPMS_PROC)
+
+//  控制多久問一個輪胎
+#define	TPMS_SEND_TIMER				  (S_2_mS(2) / TIMER_TPMS_PROC)
+
+#define	TPMS_DEVICE_SEND_HEAD		"010"
+
+//	第1輪  開始碼
+#define	TPMS_FIRST_TIRE				  (1)
+
+//	讀多少輪資料
+#define	TPMS_LAST_TIRE				  (10)
+
+#define	TPMS_DEVICE_RECV_HEAD		"$AS+TPMS="
+#endif
+
+//============================================================================//
+//	RFID_READER_RR10
+//
+//Block Amount
+//This field is absent if “Result” field is not equal to 0x00.
+//Tag has “Block Amount”+1 blocks.
+//3F = 63+1=64
+//
+//Block Size
+//This field is absent if “Result” field is not equal to 0x00.
+//The block size is “Block Size”+1 bytes.
+//3+1 = 4
+//
+//============================================================================//
+#if ENABLE_RFID
+#define RFID_COMPORT_DEF		        EXT_COMPORT_DEF
+
+#define	TIMER_RFID_PROC					    (100)
+
+#define	TIMER_RFID_WAIT 				    (100)
+
+#define	TIMER_RFID_TOTAL_WAIT       (500)
+
+// 多久確認一次卡片 RFID_SCAN_TIME x TIMER_RFID_PROC ==> 4X100mS = 400mS
+#define	RFID_SCAN_TIME			 		    (5)
+
+#define	RFID_MAX_GET_PKG_TIMEOUT		(S_2_mS(1) / TIMER_RFID_PROC)
+
+#define RFID_SEND_TX_HEAD				    (0x55)
+
+#define RFID_SEND_RX_HEAD	          (0xAA)
+
+#define RFID_RECV_TX_HEAD			     	(0xA5)
+
+#define RFID_RECV_RX_HEAD				    (0x5A)
+
+#define RFID_CONNECTION_OK				  ("\x06\x01\x05\x00\x0C\x00")
+
+// 表示卡片無資料
+#define RFID_TAG_NO_DATA				    ("\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+
+#define RFID_READ_BYTE					    (64)
+
+//#define RFID_READ_BYTE					    (256)
+#endif
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+
+#if ENABLE_LCM
+typedef enum
+{
+	LCD_SIGNAL,
+	LCD_DIST,
+	LCD_GPS,
+	LCD_CALL,
+	LCD_VIDEO,
+	LCD_END,
+} LCD_CMD_t;
+
+typedef enum
+{
+	CALL_INIT,
+	CALL_CANCEL,
+	CALL_RING,
+	CALL_TALK,
+} LCD_CALL_t;
+
+typedef enum
+{
+	STATE_INIT,
+	STATE_ON,
+	STATE_OFF,
+} STATE_DETECT_t;
+
+typedef enum
+{
+	VIDEO_INIT,
+	VIDEO_CH1,
+	VIDEO_CH2,
+	VIDEO_CH3,
+} LCD_VIDEO_CHANNEL_t;
+#endif
+
+#if ENABLE_CAMERA
+typedef enum
+{
+	PTC06_SetSizeS=0,
+	//PTC06_SetSizeM=0,
+	//PTC06_SetSizeB=0,
+
+	PTC06_Reset,
+	PTC06_ResetBuf,
+
+	PTC06_TakePicture,
+	PTC06_GetPictureLen,
+	PTC06_GetPictureBuf,
+
+	PTC06_CMD_END,
+	PTC06_CMD_ERROR,
+
+} PTC06_COMMAND_t;
+
+typedef struct
+{
+	PTC06_COMMAND_t PTC06_COMMAND;
+
+	char *PTC06_CMD_BUF;
+
+	char  PTC06_CMD_BUF_LEN;
+
+} PTC06_CMD_t;
+
+typedef struct
+{
+	time_t PhotoRawtime;
+
+	// ASSIC
+	char  PhotoTime[18];
+
+	uint16_t End;
+
+} CAMERA_JPG_END_t;
+#endif
+
+#if ENABLE_TAXIMETER
+#pragma pack(1)
+
+typedef struct
+{
+	uint8_t START[2];
+
+	uint8_t VERSION[2];
+
+	// device number
+	uint8_t DEV_NUM[2];
+
+	// counter number
+	uint8_t PKG_CNT[2];
+
+	// record Command
+	uint8_t PKG_CMD[2];
+
+	// Lenght packet
+	uint8_t PKG_LEN[2];
+
+} TAXIMETER_TST_HEAD_t;
+
+typedef struct
+{
+	uint8_t CRC16[2];
+
+	uint8_t END[2];
+
+} TAXIMETER_TST_END_t;
+
+typedef struct
+{
+	TAXIMETER_TST_HEAD_t HEAD;
+
+	TAXIMETER_TST_END_t END;
+
+} TAXIMETER_TST_PKG_t;
+
+typedef struct
+{
+	// DRIVER number
+	uint8_t DRV_NUM[10];
+
+	// TAXI number
+	uint8_t TAXI_NUM[6];
+
+	// COMPANY number
+	uint8_t COP_NUM[4];
+
+	// start date-time
+	uint8_t START_TIME[7];
+
+	// start date-time
+	uint8_t END_TIME[7];
+
+	// price
+	uint8_t PRICE[2];
+
+	// km, unit=100 m?
+	uint16_t u16Distance; //KM
+
+	// wait time
+	uint8_t WAIT_TIME[2];
+
+	// emtpy km
+	uint8_t EMTPY_DIST[2];
+
+	// status
+	uint8_t STATUS[2];
+
+	// money
+	uint8_t MONEY[3];
+
+	// allow hire times
+	uint8_t HIRE_TIMES[2];
+
+	// times
+	uint8_t TIMES[2];
+
+	// pay number
+	uint8_t  PAY_NUM[4];
+
+} TAXIMETER_TST_DEV_CMD06_t;
+
+#pragma pack()
+#endif
+
+#if ENABLE_RFID
+#pragma pack(1)
+
+typedef struct
+{
+	uint8_t UID[8];
+
+	uint8_t BLOCK_AMOUNT;
+
+	uint8_t BLOCK_SIZE;
+
+	char BLOCK_DATA[256];
+
+} TAG_INFO_t;
+
+typedef struct
+{
+	// 駕照號碼
+	char szLicense[15];
+
+	uint8_t u8CheckSumA;
+
+	// 姓名
+	char NAME[43];
+
+	uint8_t u8CheckSumB;
+
+	// 其他資訊
+	uint8_t OTHER[20];
+
+} RFID_INFO_t;
+
+typedef enum
+{
+	RFID_ConnectionA=0,
+	RFID_ConnectionB,
+	RFID_GetVersion,
+	RFID_SelectRF,
+
+	RFID_TagInventory,
+	RFID_GetInfoA,
+	RFID_GetInfoB,
+
+	RFID_ReadMultBlock,
+
+	RFID_CMD_END,
+	RFID_CMD_ERROR,
+
+} RFID_COMMAND_t;
+
+typedef struct
+{
+	RFID_COMMAND_t RFID_COMMAND;
+
+	char *RFID_CMD_BUF;
+
+	char RFID_CMD_BUF_LEN;
+
+} RFID_CMD_t;
+
+#pragma pack()
+#endif
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+
+uint8_t ExtBuf[UART_BASE_BUFFER_SIZE];
+
+#if ENABLE_LCM
+char LCD_TimeSync = 0; //Heinz
+
+static char DistTemp = 0;
+static char GpsTemp = 0;
+
+uint8_t LCD_VideoCtrlCount = 0;
+
+uint8_t LCD_PkgBuf[UART_MAX_BUFFER_SIZE] = {0};
+
+LCD_CMD_t LCD_CMD = (LCD_CMD_t)0;
+
+LCD_CALL_t LCD_CallState = CALL_INIT;
+
+FlagStatus LCD_VideoState = RESET;
+
+LCD_VIDEO_CHANNEL_t LCD_VideoChannel = VIDEO_CH2; // VIDEO_INIT;
+#endif
+
+#if ENABLE_CAMERA
+static const PTC06_CMD_t PTC06_CMD_d[] =
+{
+	//(char PTC06_COMMAND, BYTE *PTC06_CMD_BUF, PTC06_CMD_BUF_LEN)
+	{PTC06_SetSizeS, "\x56\x00\x31\x05\x04\x01\x00\x19\x22", 9},
+	//{PTC06_SetSizeM, "\x56\x00\x31\x05\x04\x01\x00\x19\x11", 9},
+	//{PTC06_SetSizeB, "\x56\x00\x31\x05\x04\x01\x00\x19\x00", 9},
+
+	{PTC06_Reset,	"\x56\x00\x26\x00", 4},
+	{PTC06_ResetBuf, "\x56\x00\x36\x01\x03", 5},
+
+	{PTC06_TakePicture,	"\x56\x00\x36\x01\x00", 5},
+	{PTC06_GetPictureLen,	"\x56\x00\x34\x01\x00", 5},
+	{PTC06_GetPictureBuf,	"\x56\x00\x32\x0C\x00\x0A\x00\x00\xaa\xaa\x00\x00\xbb\xbb\x00\xFF", 16},
+
+	{PTC06_CMD_END,	"", 0},
+	{PTC06_CMD_ERROR,	"", 0},
+};
+
+PTC06_COMMAND_t gPTC06_CMD=PTC06_SetSizeS;
+//PTC06_COMMAND_t gPTC06_CMD=PTC06_SetSizeM;
+//PTC06_COMMAND_t gPTC06_CMD=PTC06_SetSizeB;
+
+// 取得照片
+bool GetPhotoNow = FALSE;
+
+// 有照片要上傳
+bool NeedUpPhotoNow = FALSE;
+
+// 如果有連接模組且模組有回應才=1
+bool CameraLinkOk = FALSE;
+
+// 計數模組回應時間如超過時間不回會重發命令
+uint8_t CountRxTime = 0;
+
+// PRC06  GET  BUF
+MEM_U32_t uNowStartAdd;
+
+MEM_U32_t uBufTotalLen;
+
+// save buf
+uint8_t gPTC06_Buf[SD_BLOCK_SIZE*2] = {"0"};
+
+uint16_t uPTC06_BufLen = 0;
+
+uint32_t uNowFileStAddr = 0;
+
+uint16_t uPTC06_NeedRxLen = 0;
+
+uint8_t TID_PTC06Save = TIMER_INVALID_ID;
+
+// 照相時間
+time_t Ptc06_rawtime = 0;
+
+// 上傳照片的照相時間
+time_t Photo_rawtime = 0;
+#endif
+
+#if ENABLE_TAXIMETER
+TAXIMETER_TST_PKG_t TST_PKG, PRE_TST_PKG;
+
+uint8_t PrnBuf[512];
+
+GpsCoordinate_t TaxiStartPoint, TaxiStopPoint;
+#endif
+
+#if ENABLE_RFID
+static const RFID_CMD_t RFID_CMD_d[] =
+{
+	//(char RFID_COMMAND,		BYTE *RFID_CMD_BUF, RFID_CMD_BUF_LEN)
+	{RFID_ConnectionA, "\x06\x01\x05\x0A\x16\x00", 6},
+	{RFID_ConnectionB, "\x06\x01\x05\x0A\x16\x00", 6},
+	{RFID_GetVersion,	"\x05\x03\x00\x08\x00", 5},
+	//{RFID_SelectRF,	"\x05\x02\x0E\x15\x00", 5},
+	{RFID_SelectRF,	"\x05\x02\x01\x08\x00", 5},
+
+	// ISO15693 Tag Inventory
+	{RFID_TagInventory,	"\x07\x06\x00\x00\x00\x0D\x00", 7},
+
+	// Get System Information
+	{RFID_GetInfoA,	"\x0D\x07\x0C\xD1\xD2\xD3\xD4\xD5\xD6\xD7\xD8\xC1\xC2", 13},
+	{RFID_GetInfoB,	"\x0D\x07\x0C\xD1\xD2\xD3\xD4\xD5\xD6\xD7\xD8\xC1\xC2", 13},
+
+	// Read Multiple Blocks
+	{RFID_ReadMultBlock, "\x11\x07\x23\xD1\xD2\xD3\xD4\xD5\xD6\xD7\xD8\x00\xAA\x04\xBB\xEA\x02", 17},
+
+	{RFID_CMD_END, "", 0},
+	{RFID_CMD_ERROR, "", 0},
+};
+
+RFID_COMMAND_t gRFID_CMD=RFID_ConnectionA;
+
+TAG_INFO_t TagInfo= {0};
+
+uint8_t RFID_CountRxTime = 0;
+
+uint8_t RFID_ErrorCnt = 0;
+
+// 讀取的 Block Ind
+uint8_t StartBlockInd = 0;
+//
+uint8_t RFID_RING = BUZZER_INVALID_ID;
+////
+//uint32_t RFID_target;
+#endif
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+void EXT_SendBuffer(uint8_t *pu8Buf, uint16_t u16BufLen)
+{
+	UART_SendBuffer(EXT_COMPORT_DEF, pu8Buf, u16BufLen);
+
+	if(g_Setting.DebugMode == DBG_EXT)
+		UART_SendBuffer(SET_COMPORT_DEF, pu8Buf, u16BufLen);
+}
+
+#if ENABLE_LCM
+void LCM_SendCmdPkg(uint8_t *Pkg, uint16_t PkgLen) // Heinz
+{
+#if ENABLE_EXT_BOX
+	char *pStr;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	uint16_t BufLen;
+
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	pStr = (char*)Buf;
+
+	sprintf(pStr, "%s%s,", STR_AS_EXTBOX, "LCD"); // Heinz
+
+	BufLen = strlen(pStr);
+
+	pStr += BufLen;
+
+	memcpy(pStr, Pkg, PkgLen);
+
+	BufLen += PkgLen;
+
+	EXT_SendBuffer(Buf, BufLen); // Heinz
+
+	//Delay_mS(50);	// Heinz
+#else
+	EXT_SendBuffer(Pkg, PkgLen);
+
+	Delay_mS(50);
+#endif
+}
+
+void LCM_VideoOn(void)
+{
+	if(LCD_VideoState == SET)
+		return;
+
+	LCD_CMD = LCD_VIDEO;
+
+	LCD_VideoState = SET;
+
+	LCD_VideoCtrlCount = MAX_VIDEO_CTRL_COUNT;
+}
+
+void LCM_VideoOff(void)
+{
+	if(LCD_VideoState == RESET
+	        && LCD_VideoChannel != VIDEO_INIT)
+		return;
+
+	LCD_CMD = LCD_VIDEO;
+
+	LCD_VideoState = RESET;
+
+	LCD_VideoCtrlCount = MAX_VIDEO_CTRL_COUNT;
+}
+
+FlagStatus LCM_GetVideoState(void)
+{
+	return LCD_VideoState;
+}
+
+void LCM_VideoCH1(void)
+{
+	if(LCD_VideoChannel != VIDEO_CH1)
+		LCD_VideoState = RESET;
+
+	LCD_VideoChannel = VIDEO_CH1;
+}
+
+void LCM_VideoCH2(void)
+{
+	if(LCD_VideoChannel != VIDEO_CH2)
+		LCD_VideoState = RESET;
+
+	LCD_VideoChannel = VIDEO_CH2;
+}
+
+void LCM_VideoCH3(void)
+{
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+	if(g_SysInfo.DrvInfo.WorkTime < MINUTE_2_SECOND(2))
+	{
+		LCD_VideoChannel = VIDEO_INIT;
+
+		LCM_VideoOff();
+	}
+	else
+	{
+		//if((g_SysInfo.DrvInfo.WorkTime * 1000) < S_2_mS(130))
+		if(g_SysInfo.DrvInfo.WorkTime < MINUTE_2_SECOND(4))
+		{
+			LCD_VideoChannel = VIDEO_CH3;
+
+			LCM_VideoOn();
+		}
+		else
+		{
+			LCD_VideoChannel = VIDEO_CH2;
+
+			LCM_VideoOff();
+		}
+	}
+#else
+	LCD_VideoChannel = VIDEO_CH3;
+#endif
+}
+
+void LCM_SendPkg(char *pStr)
+{
+	char *pMsg;
+
+
+	pMsg = (char*)LCD_PkgBuf;
+
+	pMsg += strlen(pMsg);
+
+	strncpy(pMsg, pStr, strlen(pStr));
+}
+
+bool LCM_ChkInfo(void)
+{
+	if(GSM_GetCallStatus() == TRUE
+	        && LCD_CallState != CALL_RING)
+	{
+		LCD_CMD = LCD_CALL;
+
+		return TRUE;
+	}
+
+	if(GSM_GetDialStatus() == TRUE
+	        && LCD_CallState != CALL_TALK)
+	{
+		LCD_CMD = LCD_CALL;
+
+		return TRUE;
+	}
+
+	if(GSM_GetCallStatus() == FALSE
+	        && GSM_GetDialStatus() == FALSE
+	        && LCD_CallState != CALL_CANCEL)
+	{
+		LCD_CMD = LCD_CALL;
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+void LCM_SendHead(void)	// Heinz
+{
+	char *pStr;
+	time_t rawtime;
+
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	pStr = (char*)ExtBuf;
+
+	if(LCD_TimeSync <= MAX_TIME_COUNT) // Heinz 12
+	{
+		LCD_TimeSync ++;
+
+		time(&rawtime);
+
+		rawtime += g_Setting.i32TimeZoneOffset;
+
+		sprintf(pStr, "@ %s", STR_AS_LCD_TIME);
+
+		pStr += strlen(pStr);
+
+		strftime(pStr, sizeof(ExtBuf), "%Y/%m/%d %H:%M:%S\r\n", localtime(&rawtime));
+
+		pStr = (char*)ExtBuf;
+
+		LCM_SendCmdPkg(ExtBuf, strlen(pStr));  // Heinz
+	}
+
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+	sprintf(pStr, "@ %s%.1f\r\n", STR_AS_LCD_SPEED,(float)(u16hmSpeedAvg)/10); // Heinz	FMS
+#else
+	sprintf(pStr, "@ %s%.1f\r\n", STR_AS_LCD_SPEED, M_2_KM((float)g_SysInfo.VehicleState.u32Speed));
+#endif
+
+	LCM_SendCmdPkg(ExtBuf, strlen(pStr));
+
+	sprintf(pStr, "@ %s%d\r\n", STR_AS_LCD_RPM, g_SysInfo.VehicleState.u16RPM);
+
+	LCM_SendCmdPkg(ExtBuf, strlen(pStr));
+}
+
+void LCM_SendInfo(LCD_CMD_t CMD)
+{
+	char *pStr;
+
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	pStr = (char *)ExtBuf;
+
+	switch(CMD)
+	{
+		case LCD_SIGNAL:
+			GPS_DATA_t GPS_AllData;
+			uint8_t GPS_SIGNAL;
+			uint8_t GSM_SQ;
+			uint8_t GSM_SIGNAL;
+
+
+			GPS_SIGNAL = 0;
+
+			GPS_GetAllData(&GPS_AllData);
+
+			if(GPS_AllData.Fixed == TRUE)
+			{
+				GPS_SIGNAL = 1;
+
+				if(GPS_AllData.StlNum >= 3)
+					GPS_SIGNAL = 3;
+
+				if(GPS_AllData.StlNum >= 4)
+					GPS_SIGNAL = 6;
+
+				if(GPS_AllData.StlNum >= 5)
+					GPS_SIGNAL = 9;
+			}
+
+			GSM_SIGNAL = 0;
+
+			if(GSM_GetSQ(&GSM_SQ) == TRUE)
+			{
+				if(GSM_GetNetStatus() == TRUE)
+					GSM_SIGNAL = 1;
+
+				if(GSM_SQ >= 5)
+					GSM_SIGNAL = 3;	// 3
+
+				if(GSM_SQ >= 9) // 10
+					GSM_SIGNAL = 5;	// 3
+
+				if(GSM_SQ >= 13) // 15
+					GSM_SIGNAL = 6; // 3
+
+				if(GSM_SQ >= 17) // 20
+					GSM_SIGNAL = 7;
+
+				if(GSM_SQ >= 21) // 25
+					GSM_SIGNAL = 8;	// 3
+
+				if(GSM_SQ >= 25) // 30
+					GSM_SIGNAL = 9;
+			}
+
+			sprintf(pStr, "@ %s%d,%d\r\n",
+			        STR_AS_LCD_SIGNAL,
+			        GPS_SIGNAL,
+			        GSM_SIGNAL);
+
+			break;
+
+		case LCD_DIST:
+			DistTemp++;
+
+			if(DistTemp >= MAX_DIST_COUNT) // Heinz
+			{
+				DistTemp = 0;
+
+				sprintf(pStr, "@ %s%.2f\r\n", STR_AS_LCD_DIST, M_2_KM(g_SysInfo.VehicleState.dDistance));
+			}
+
+			break;
+
+		case LCD_GPS:
+			GpsTemp++;
+
+			if(GpsTemp >= MAX_GPS_COUNT)	// Heinz
+			{
+				GPS_DATA_t GPS_AllData;
+
+				GpsTemp = 0;
+
+				GPS_GetAllData(&GPS_AllData);
+
+				sprintf(pStr, "@ %sGPS=> %c%03d%02d.%04d,%c%02d%02d.%04d\r\n",
+				        STR_AS_LCD_GPS,
+				        GPS_AllData.Longitude.Indicator,
+				        GPS_AllData.Longitude.ddd,
+				        GPS_AllData.Longitude.mm,
+				        GPS_AllData.Longitude.mmmm,
+				        GPS_AllData.Latitude.Indicator,
+				        GPS_AllData.Latitude.dd,
+				        GPS_AllData.Latitude.mm,
+				        GPS_AllData.Latitude.mmmm);
+			}
+
+			break;
+
+		case LCD_CALL:
+			if(GSM_GetCallStatus() == TRUE)
+			{
+				LCD_CallState = CALL_RING;
+
+				sprintf(pStr, "@ %sRING\r\n", STR_AS_LCD_CALL);  //Heinz
+				//sprintf(pStr, "AUTO...\r\n");	//heinz
+
+				break;
+			}
+
+			if(GSM_GetDialStatus() == TRUE)
+			{
+				LCD_CallState = CALL_TALK;
+
+				sprintf(pStr, "@ %sTALK\r\n", STR_AS_LCD_CALL);
+
+				break;
+			}
+
+			LCD_CallState = CALL_CANCEL;
+
+			sprintf(pStr, "@ %sCANCEL\r\n", STR_AS_LCD_CALL);
+
+			break;
+
+		case LCD_VIDEO:
+			if(LCD_VideoCtrlCount == 0)
+			{
+#if ENABLE_EXT_BOX
+				static bool LcdVideoInit = TRUE;
+
+
+				LCM_VideoCH3();
+
+				if(LCD_VideoChannel == VIDEO_INIT)
+					LcdVideoInit = TRUE;
+
+				if(LcdVideoInit == TRUE
+				        && LCD_VideoChannel == VIDEO_CH3)
+				{
+					LCD_VideoCtrlCount = MAX_VIDEO_CTRL_COUNT;
+
+					LcdVideoInit = FALSE;
+				}
+#endif
+
+				break;
+			}
+
+			LCD_VideoCtrlCount--;
+
+			sprintf(pStr, "@ %s%d,%d\r\n",
+			        STR_AS_LCD_VIDEO,
+			        LCD_VideoState,
+			        LCD_VideoChannel);
+
+			break;
+
+		default:
+			break;
+	}
+
+	if(strlen(pStr))
+		LCM_SendCmdPkg(ExtBuf, strlen(pStr));
+}
+
+static bool LCM_GetCmdPkg(uint8_t *pCmdPkg)
+{
+	static uint16_t GetPkgLen;
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	uint8_t i = 0, Buf2[UART_MAX_BUFFER_SIZE];
+
+
+	BufLen = UART_GetRxBufLen(EXT_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgLen = 0;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgLen != BufLen)
+		{
+			GetPkgLen = BufLen;
+
+			return FALSE;
+		}
+
+		GetPkgLen = 0;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+	memset(Buf2, 0x00, sizeof(Buf2));
+
+	BufLen = UART_GetRxBuffer(EXT_COMPORT_DEF, Buf, sizeof(Buf));
+
+	if((Buf[0] == 0x00) && (Buf[1] != 0x00) ) // Modify 7 inch moniter bug.
+	{
+		for(i = 0; i <= BufLen; i++ )
+		{
+			Buf2[i]= Buf[i + 1];
+		}
+
+		memcpy(pCmdPkg, Buf2, BufLen);
+	}
+	else
+	{
+		memcpy(pCmdPkg, Buf, BufLen);
+	}
+
+	return TRUE;
+}
+
+static void LCM_ProcCmd(char *pStr)
+{
+	if(strncmp(pStr, CHK_CMD_VERSION, strlen(CHK_CMD_VERSION)) == 0)
+	{
+		sprintf(pStr, "%s*", STR_AS_VERSION);
+
+		return;
+	}
+
+	if(strncmp(pStr, CHK_CMD_SPD_LIMIT, strlen(CHK_CMD_SPD_LIMIT)) == 0)
+	{
+		sprintf(pStr, "%s*", STR_AS_SPEED_LIMIT);
+
+		return;
+	}
+}
+
+static bool LCM_Process(void)
+{
+	static uint8_t SendInfoCount = COUNT_LCM_SEND_INFO;
+
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	if(LCM_GetCmdPkg(ExtBuf) == TRUE)
+	{
+		char *pStr;
+
+
+		pStr = (char*)ExtBuf;
+
+		if(strncmp(strstr(pStr, CMD_HEAD_STD), CMD_HEAD_STD, strlen(CMD_HEAD_STD)) == 0)
+			//if(strncmp(pStr,CMD_HEAD_STD, strlen(CMD_HEAD_STD)) == 0)
+		{
+			memcpy(ExtBuf, strstr(pStr, CMD_HEAD_STD), strlen(pStr));
+
+			if(g_Setting.DebugMode == DBG_EXT)
+				SET_SendBuffer(ExtBuf, strlen(pStr));
+
+			LCM_ProcCmd(pStr);
+
+			if(Protocl_ChkCmdPkg(pStr, pStr) == TRUE
+			        && (pStr != NULL) && (strlen(pStr))	)
+				// && strlen(pStr) != 0)
+				LCM_SendCmdPkg(ExtBuf, strlen(pStr));
+		}
+	}
+
+	if(strlen((char*)LCD_PkgBuf))
+	{
+		LCM_SendCmdPkg(LCD_PkgBuf, strlen((char*)LCD_PkgBuf));
+
+		memset(LCD_PkgBuf, 0x00, sizeof(LCD_PkgBuf));
+	}
+
+	SendInfoCount--;
+
+	if(SendInfoCount == 0)
+	{
+		LCM_SendHead();	// Time /Speed /RPM
+
+		if(LCM_ChkInfo() == TRUE)
+			LCM_SendInfo(LCD_CMD); // Heinz
+		else
+		{
+			LCM_SendInfo(LCD_CMD); // Heinz
+
+			LCD_CMD++;
+
+			if(LCD_CMD >= LCD_END)
+				LCD_CMD = (LCD_CMD_t)0;
+		}
+
+		SendInfoCount = COUNT_LCM_SEND_INFO;
+	}
+
+	return TRUE;
+}
+
+void SetTID_LcmProc(void)
+{
+	SWTIM_SetTimer(TIMER_LCM_PROC, TIMER_CONTINUE, LCM_Process);
+}
+#endif
+
+#if ENABLE_KEYPAD
+static bool KEYPAD_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_KEYPAD_PKG_TIMEOUT;
+	uint16_t BufLen;
+	char *pBuf;
+
+
+	BufLen = UART_GetRxBufLen(EXT_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = MAX_KEYPAD_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = MAX_KEYPAD_PKG_TIMEOUT;
+	}
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	BufLen = UART_GetRxBuffer(EXT_COMPORT_DEF, ExtBuf, sizeof(ExtBuf));
+
+	if(BufLen >= UART_MAX_BUFFER_SIZE)
+		return FALSE;
+
+	pBuf = (char*)ExtBuf;
+
+	if(strncmp(pBuf, STR_KEYPAD_HEAD, strlen(STR_KEYPAD_HEAD)) == 0)
+		strcpy(pBuf, pBuf + strlen(STR_KEYPAD_HEAD));
+
+	StopChar(pBuf, '\r');
+
+	return TRUE;
+}
+
+static bool KEYPAD_Process(void)
+{
+	char szTEMP[UART_MAX_BUFFER_SIZE];
+
+
+	if(KEYPAD_GetCmdPkg() == FALSE)
+		return TRUE;
+
+#if ENABLE_DEBUG_MSG
+	RTOSprintf("\r\n> KEYPAD IN: %s", ExtBuf);
+#endif
+
+	strncpy(szTEMP, (char*)ExtBuf, KEYIN_SIZE_MAX);
+
+	DataStream_EventBuild(STR_EVENT_BARCODE, szTEMP);
+
+	return TRUE;
+}
+
+void SetTID_KeypadProc(void)
+{
+	SWTIM_SetTimer(TIMER_KEYPAD_PROC, TIMER_CONTINUE, KEYPAD_Process);
+}
+#endif
+
+//============================================================================//
+//
+//============================================================================//
+#if ENABLE_CAMERA
+void PTC06_SendBuffer(uint8_t *Buf, uint16_t BufLen)
+{
+	UART_SendBuffer(PTC06_COMPORT_DEF, Buf, BufLen);
+
+	if(g_Setting.DebugMode == DBG_EXT)
+		SET_SendBuffer(Buf, BufLen);
+}
+
+static void PTC06_ResetCameraJpg(void)
+{
+	SD_Delete(FILENAME_PHOTO_JPG);
+
+	uNowFileStAddr = 0;
+}
+
+static bool PTC06_Save(void)
+{
+	bool RESULT;
+
+
+	if(uPTC06_BufLen == 0)
+		return TRUE;
+
+	RESULT = SD_WriteBuffToAddr(FILENAME_PHOTO_JPG,
+	                            gPTC06_Buf,
+	                            uPTC06_BufLen,
+	                            uNowFileStAddr);
+
+	if(RESULT == TRUE)
+	{
+		uNowFileStAddr+=uPTC06_BufLen;
+
+		TID_PTC06Save = TIMER_INVALID_ID;
+
+		memset(gPTC06_Buf, 0x00, sizeof(gPTC06_Buf));
+
+		uPTC06_BufLen = 0;
+	}
+
+	return RESULT;
+}
+
+static void SetTID_PTC06_Save(void)
+{
+	if(TID_PTC06Save != TIMER_INVALID_ID)
+		return;
+
+	TID_PTC06Save = SWTIM_SetTimer(TIMER_PTC06_PROC, TIMER_ONESHOT, PTC06_Save);
+}
+
+static bool PTC06_NowUpJpg(void)
+{
+	uint16_t FileLen=0;
+	CAMERA_JPG_END_t CameraJpgEnd;
+
+
+	FileLen = SD_GetFileSize(FILENAME_PHOTO_JPG);
+
+	if(FileLen && Photo_rawtime == 0)
+	{
+		if(SD_ReadAddrToBuff(FILENAME_PHOTO_JPG,
+		                     (uint8_t*)&CameraJpgEnd,
+		                     sizeof(CAMERA_JPG_END_t),
+		                     FileLen-sizeof(CAMERA_JPG_END_t)) == FALSE)
+		{
+			PTC06_ResetCameraJpg();
+
+			return TRUE;
+		}
+	}
+
+	if(CameraJpgEnd.End != UP_LIST_END_ID
+	        && Photo_rawtime == 0)
+	{
+		PTC06_ResetCameraJpg();
+
+		return TRUE;
+	}
+
+	if(Photo_rawtime == 0)
+		Photo_rawtime = CameraJpgEnd.PhotoRawtime;
+
+#if ENABLE_GSM_NET
+	if(Photo_rawtime != 0 && GSM_SystemPhoto(Photo_rawtime) != TRUE)
+		return FALSE;
+#endif //	ENABLE_GSM_NET
+
+	return TRUE;
+}
+
+static void PTC06_GoUpCameraJpg(void)
+{
+	NeedUpPhotoNow = TRUE;
+
+	Photo_rawtime = 0;
+
+	SWTIM_SetTimer(TIMER_PTC06_UP_CHK, TIMER_ONESHOT, PTC06_NowUpJpg);
+}
+
+static void PTC06_Build(uint8_t *Buf, uint16_t BufLen)
+{
+	if(BufLen == 0)
+		return ;
+
+	if((uPTC06_BufLen + BufLen > SD_BLOCK_SIZE)
+	        ||(uBufTotalLen._U32 == 0 && uNowStartAdd._U32 == 0))
+		SetTID_PTC06_Save();
+
+	memcpy(&gPTC06_Buf[uPTC06_BufLen], Buf, BufLen);
+
+	uPTC06_BufLen += BufLen;
+
+	if(gPTC06_Buf[uPTC06_BufLen-2] == 0xFF
+	        && gPTC06_Buf[uPTC06_BufLen-1] == 0xD9)
+	{
+		CAMERA_JPG_END_t CameraJpgEnd;
+
+		CameraJpgEnd.PhotoRawtime = Ptc06_rawtime;
+
+		strftime(CameraJpgEnd.PhotoTime, sizeof(CameraJpgEnd.PhotoTime), "%Y/%m/%d  %H:%M", localtime(&CameraJpgEnd.PhotoRawtime));
+
+		CameraJpgEnd.End = UP_LIST_END_ID;
+
+		memcpy(&gPTC06_Buf[uPTC06_BufLen],(char*)&CameraJpgEnd, sizeof(CAMERA_JPG_END_t));
+
+		uPTC06_BufLen += sizeof(CAMERA_JPG_END_t);
+	}
+}
+
+static void PTC06_InitUpState(void)
+{
+	CAMERA_JPG_END_t CameraJpgEnd;
+	uint16_t FileLen = 0;
+
+
+	NeedUpPhotoNow = FALSE;
+
+	FileLen = SD_GetFileSize(FILENAME_PHOTO_JPG);
+
+	if(FileLen == 0)
+		return ;
+
+	if(SD_ReadAddrToBuff(FILENAME_PHOTO_JPG,
+	                     (uint8_t*)&CameraJpgEnd,
+	                     sizeof(CAMERA_JPG_END_t),
+	                     FileLen-sizeof(CAMERA_JPG_END_t)) == FALSE)
+		return ;
+
+	if(CameraJpgEnd.End != UP_LIST_END_ID)
+	{
+		PTC06_ResetCameraJpg();
+
+		return ;
+	}
+
+	PTC06_GoUpCameraJpg();
+}
+
+static void PTC06_SendCmdPkg(PTC06_COMMAND_t gSEND_PTC06_CMD)
+{
+	uint8_t i;
+
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	for(i = 0; i < PTC06_CMD_END; i++)
+	{
+		if(PTC06_CMD_d[i].PTC06_COMMAND == gSEND_PTC06_CMD)
+		{
+			memcpy(ExtBuf,PTC06_CMD_d[i].PTC06_CMD_BUF,PTC06_CMD_d[i].PTC06_CMD_BUF_LEN);
+
+			break;
+		}
+	}
+
+	// 接 BUF  必須一來一回
+	if(i == PTC06_GetPictureBuf)
+	{
+		// CountRxTime==0 為有收到上次的buf,才算下一次要接的 buf
+		if(CountRxTime == 0)
+		{
+			// READ ADDRESS
+			ExtBuf[8] = uNowStartAdd._U8[1];
+			ExtBuf[9] = uNowStartAdd._U8[0];
+
+			uNowStartAdd._U32 += READ_IMG_BLOCK;
+		}
+		else
+		{
+			MEM_U32_t uRAdd;
+
+			uRAdd._U32 = uNowStartAdd._U32-READ_IMG_BLOCK;
+
+			// READ ADDRESS
+			ExtBuf[8] = uRAdd._U8[1];
+
+			ExtBuf[9] = uRAdd._U8[0];
+		}
+
+		// READ LEN
+		if(uNowStartAdd._U32 > uBufTotalLen._U32)
+		{
+			uNowStartAdd._U32-=READ_IMG_BLOCK;
+
+			NowStartAdd._U32 = uBufTotalLen._U32 - uNowStartAdd._U32;
+
+			ExtBuf[12] = uNowStartAdd._U8[1];
+
+			ExtBuf[13] = uNowStartAdd._U8[0];
+
+			uBufTotalLen._U32 = 0;
+
+			uNowStartAdd._U32 = 0;
+
+			uPTC06_NeedRxLen = uNowStartAdd._U32;
+		}
+		else
+		{
+			ExtBuf[12] = READ_IMG_BLOCK_H;
+
+			ExtBuf[13] = READ_IMG_BLOCK_L;
+
+			uPTC06_NeedRxLen = READ_IMG_BLOCK;
+		}
+	}
+	else
+		uPTC06_NeedRxLen = 0;
+
+	if(PTC06_CMD_d[i].PTC06_CMD_BUF_LEN)
+	{
+		if(i < PTC06_CMD_END)
+			PTC06_SendBuffer(ExtBuf, PTC06_CMD_d[i].PTC06_CMD_BUF_LEN);
+	}
+}
+
+static void PTC06_ChkGetPictureLen(void)
+{
+	if(ExtBuf[7] | ExtBuf[8])
+	{
+		uBufTotalLen._U8[1] = ExtBuf[7];
+
+		uBufTotalLen._U8[0] = ExtBuf[8];
+
+		uPTC06_BufLen = 0;
+	}
+	else
+		gPTC06_CMD = PTC06_SetSizeS;
+}
+
+static void PTC06_ChkGetPictureBuf(uint16_t buflen)
+{
+	PTC06_Build(ExtBuf+5,buflen-10);
+
+	if(uBufTotalLen._U32 == 0
+	        && uNowStartAdd._U32 == 0)
+	{
+		SetTID_PTC06_Save();
+
+		gPTC06_CMD = PTC06_CMD_END;
+
+		PTC06_GoUpCameraJpg();
+
+		GetPhotoNow = FALSE;
+	}
+}
+
+static uint16_t PTC06_GetCmdPkg(uint8_t *pCmdPkg)
+{
+	static uint8_t GetPkgTimeout = PTC06_MAX_GET_PKG_TIMEOUT;
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+
+
+	BufLen = UART_GetRxBufLen(PTC06_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = PTC06_MAX_GET_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = PTC06_MAX_GET_PKG_TIMEOUT;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	BufLen = UART_GetRxBuffer(PTC06_COMPORT_DEF, Buf, sizeof(Buf));
+
+	// 不合理的長度
+	if((BufLen < 5) && (BufLen > READ_IMG_BLOCK+10))
+		return FALSE;
+
+	// 長度不對代表資料有錯
+	if(uPTC06_NeedRxLen != 0 && uPTC06_NeedRxLen != BufLen-10)
+		return FALSE;
+
+	if(Buf[0] != PTC06_R_HEAD_A || Buf[1] != PTC06_R_HEAD_B)
+		return FALSE;
+
+	memcpy(pCmdPkg, Buf, BufLen);
+
+	return BufLen;
+}
+
+static bool PTC06_Process(void)
+{
+	uint16_t buflen=0;
+	time_t rawtime;
+
+
+	if(gPTC06_CMD > PTC06_Reset && GetPhotoNow == FALSE)
+		return TRUE;
+
+	if(RTC_GetStatus() == FALSE)
+		return TRUE;
+
+	time(&rawtime);
+
+	rawtime += g_Setting.i32TimeZoneOffset;
+
+	if(gPTC06_CMD == PTC06_CMD_END)
+		gPTC06_CMD = PTC06_SetSizeS;
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	buflen = PTC06_GetCmdPkg(ExtBuf);
+
+	if(buflen)
+	{
+		CountRxTime=0;
+
+		switch(gPTC06_CMD)
+		{
+				{
+				case PTC06_ResetBuf:
+					Ptc06_rawtime = rawtime;
+
+					break;
+
+				case PTC06_GetPictureLen:
+					PTC06_ChkGetPictureLen();
+
+					break;
+
+				case PTC06_GetPictureBuf:
+					PTC06_ChkGetPictureBuf(buflen);
+
+					break;
+
+				case PTC06_Reset:
+					CameraLinkOk = TRUE;
+
+					break;
+
+				case PTC06_SetSizeS:
+				//case PTC06_SetSizeM:
+				//case PTC06_SetSizeB:
+				case PTC06_TakePicture:
+
+					break;
+
+				default:
+					break;
+				}
+		}
+	}
+
+	if(gPTC06_CMD != PTC06_CMD_END)
+	{
+		if((gPTC06_CMD != PTC06_GetPictureBuf) && buflen)
+			gPTC06_CMD++;
+
+		// 時間內沒回 自動重發
+		if((CountRxTime % 64) == 0)
+			PTC06_SendCmdPkg(gPTC06_CMD);
+	}
+
+	CountRxTime++;
+
+	return TRUE;
+}
+
+void SetTID_CameraProc(void)
+{
+	SWTIM_SetTimer(TIMER_PTC06_PROC, TIMER_CONTINUE, PTC06_Process);
+	PTC06_InitUpState();
+}
+#endif
+
+bool Camera_GetPhoto(bool UpPhotoOk)
+{
+#if ENABLE_CAMERA
+	time_t rawtime;
+
+
+	//	確認是否上傳完成
+	if(NeedUpPhotoNow == TRUE)
+	{
+		if(UpPhotoOk == TRUE && SD_GetFileSize(FILENAME_PHOTO_JPG) == 0)
+		{
+			NeedUpPhotoNow = FALSE;
+
+			return TRUE;
+		}
+		else
+			return FALSE;
+	}
+
+	if(RTC_GetStatus() == FALSE ||
+	        CameraLinkOk == FALSE ||
+	        GetPhotoNow == TRUE)
+		return FALSE;
+
+	time(&rawtime);
+
+	rawtime += g_Setting.i32TimeZoneOffset;
+
+	if(S_2_MIN(rawtime - Ptc06_rawtime) < PTC06_EveryGetPictureTime_M)
+		return FALSE;
+
+	PTC06_ResetCameraJpg();
+
+	GetPhotoNow = TRUE;
+
+	gPTC06_CMD = PTC06_SetSizeS;
+
+	CountRxTime=0;
+#endif
+
+	return TRUE;
+}
+
+#if ENABLE_TAXIMETER
+static uint16_t TAXI_GetCmdPkg(uint8_t *pBuf, uint16_t BufLen)
+{
+	static uint8_t GetPkgTimeout = MAX_TAXI_PKG_TIMEOUT;
+	uint16_t PkgLen;
+
+
+	PkgLen = UART_GetRxBufLen(TAXIMETER_COMPORT_DEF);
+
+	if(PkgLen == 0)
+	{
+		GetPkgTimeout = MAX_TAXI_PKG_TIMEOUT;
+
+		return 0;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return 0;
+		}
+
+		GetPkgTimeout = MAX_TAXI_PKG_TIMEOUT;
+	}
+
+	memset(ExtBuf, 0x00, sizeof(ExtBuf));
+
+	PkgLen = UART_GetRxBuffer(TAXIMETER_COMPORT_DEF, pBuf, BufLen);
+
+	pBuf = ExtBuf;
+
+	if(GET_TAXI_PKG_LEN(pBuf) != PkgLen)
+		return 0;
+
+	memset(&TST_PKG, 0x00, sizeof(TST_PKG));
+
+	memcpy(&TST_PKG.HEAD, pBuf, sizeof(TST_PKG.HEAD));
+
+	memcpy(&TST_PKG.END, pBuf + (sizeof(TST_PKG.HEAD) + pBuf[TAXI_DATA_LEN_POS]), sizeof(TST_PKG.END));
+
+	if(memcmp(&TST_PKG.HEAD.START, STR_TAXI_PKG_START, sizeof(TST_PKG.HEAD.START))
+	        || memcmp(&TST_PKG.END.END, STR_TAXI_PKG_END, sizeof(TST_PKG.END.END)))
+		return 0;
+
+	return PkgLen;
+}
+
+static void TAXI_ChkCmdPkg(uint8_t *pBuf)
+{
+	char *pStr;
+
+
+	if(memcmp(&TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMD04, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0
+	        && memcmp(&PRE_TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMDA0, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0)
+	{
+		TaxiStartPoint.dLatitude = g_SysInfo.Location.dLatitude;
+
+		TaxiStartPoint.dLongitude = g_SysInfo.Location.dLongitude;
+	}
+
+	if(memcmp(&TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMD06, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0)
+	{
+		TAXIMETER_TST_DEV_CMD06_t TST_DEV_CMD06;
+		MEM_U32_t MONEY;
+
+
+		memset(PrnBuf, 0x00, sizeof(PrnBuf));
+
+		pStr = (char*)PrnBuf;
+
+		sprintf(pStr, "&,%s,", g_Setting.szBus_ID);
+
+		pStr += strlen(pStr);
+
+		memcpy(pStr, pBuf, GET_TAXI_PKG_LEN(pBuf));
+
+		pStr += GET_TAXI_PKG_LEN(pBuf);
+
+		sprintf(pStr, ",#\r\n");
+
+		pStr += strlen(pStr);
+
+		DataStream_BuffBuild(SOCKET_BANK_DEF, PrnBuf, ((int)pStr - (int)&PrnBuf));
+
+		memcpy(&TST_DEV_CMD06, pBuf + sizeof(TST_PKG.HEAD), sizeof(TAXIMETER_TST_DEV_CMD06_t));
+
+		memset(PrnBuf, 0x00, sizeof(PrnBuf));
+
+		pStr = (char*)PrnBuf;
+
+		sprintf(pStr, "Cong ty:\n\t%s\n",
+		        g_Setting.szCompName);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Dia chi:\n\t%s\n",
+		        g_Setting.szCompAddr);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Bien so xe:\n\t%s\n",
+		        g_Setting.szBus_ID);
+
+		pStr += strlen(pStr);
+
+
+		sprintf(pStr, "So hieu xe:\n\t%s\n",
+		        g_Setting.szBus_SN);
+
+		pStr += strlen(pStr);
+
+		// 20 14 10 23 15 59 59 -> 23/10/2014 15:59:59
+		sprintf(pStr, "Bat dau:\n\t%d%d/%d%d/%d%d%d%d %d%d:%d%d:%d%d\n",
+		        TST_DEV_CMD06.START_TIME[3] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[3] & 0x0F,
+		        TST_DEV_CMD06.START_TIME[2] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[2] & 0x0F,
+		        TST_DEV_CMD06.START_TIME[0] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[0] & 0x0F,
+		        TST_DEV_CMD06.START_TIME[1] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[1] & 0x0F,
+		        TST_DEV_CMD06.START_TIME[4] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[4] & 0x0F,
+		        TST_DEV_CMD06.START_TIME[5] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[5] & 0x0F,
+		        TST_DEV_CMD06.START_TIME[6] >> 4 & 0x0F,
+		        TST_DEV_CMD06.START_TIME[6] & 0x0F);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Ket thuc:\n\t%d%d/%d%d/%d%d%d%d %d%d:%d%d:%d%d\n",
+		        TST_DEV_CMD06.END_TIME[3] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[3] & 0x0F,
+		        TST_DEV_CMD06.END_TIME[2] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[2] & 0x0F,
+		        TST_DEV_CMD06.END_TIME[0] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[0] & 0x0F,
+		        TST_DEV_CMD06.END_TIME[1] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[1] & 0x0F,
+		        TST_DEV_CMD06.END_TIME[4] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[4] & 0x0F,
+		        TST_DEV_CMD06.END_TIME[5] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[5] & 0x0F,
+		        TST_DEV_CMD06.END_TIME[6] >> 4 & 0x0F,
+		        TST_DEV_CMD06.END_TIME[6] & 0x0F);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Quang duong:\n\t%.1f km\t\n",
+		        (float)TST_DEV_CMD06.u16Distance / 10);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Thoi gian cho:\n\t%d%d:%d%d (minutes)\t\n",
+		        TST_DEV_CMD06.WAIT_TIME[0] >> 4 & 0x0F,
+		        TST_DEV_CMD06.WAIT_TIME[0] & 0x0F,
+		        TST_DEV_CMD06.WAIT_TIME[1] >> 4 & 0x0F,
+		        TST_DEV_CMD06.WAIT_TIME[1] & 0x0F);
+
+		pStr += strlen(pStr);
+
+		MONEY._U8[0] = TST_DEV_CMD06.MONEY[2];
+		MONEY._U8[1] = TST_DEV_CMD06.MONEY[1];
+		MONEY._U8[2] = TST_DEV_CMD06.MONEY[0];
+
+		sprintf(pStr, "Tong so tien:\n\t%.2f vnd\t\n",
+		        (float)MONEY._U32 / 100);
+	}
+
+	if(memcmp(&TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMD40, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0
+	        && memcmp(&PRE_TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMD06, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0)
+	{
+		TaxiStopPoint.dLatitude = g_SysInfo.Location.dLatitude;
+
+		TaxiStopPoint.dLongitude = g_SysInfo.Location.dLongitude;
+
+		pStr = (char*)PrnBuf;
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Vi tri bat dau:\n\t(%+010.6f, %+09.6f)\n",
+		        TaxiStartPoint.dLongitude,
+		        TaxiStartPoint.dLatitude);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "Vi tri ket thuc:\n\t(%+010.6f, %+09.6f)\n",
+		        TaxiStopPoint.dLongitude,
+		        TaxiStopPoint.dLatitude);
+
+		PRN_PrintString((char*)PrnBuf);
+	}
+
+	if(memcmp(&TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMDA0, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0
+	        && memcmp(&PRE_TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMD40, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0)
+	{
+		memset(PrnBuf, 0x00, sizeof(PrnBuf));
+
+		pStr = (char*)PrnBuf;
+
+		memcpy(pStr, STR_TAXI_SEND_CMD92,STR_TAXI_SEND_CMD92_LEN);
+
+		EXT_SendBuffer(PrnBuf, STR_TAXI_SEND_CMD92_LEN);
+	}
+
+	if(memcmp(&TST_PKG.HEAD.PKG_CMD, STR_TAXI_DEV_CMD07, sizeof(TST_PKG.HEAD.PKG_CMD)) == 0)
+	{
+		memset(PrnBuf, 0x00, sizeof(PrnBuf));
+
+		pStr = (char*)PrnBuf;
+
+		sprintf(pStr, "&,%s,", g_Setting.szBus_ID);
+
+		pStr += strlen(pStr);
+
+		memcpy(pStr, pBuf, GET_TAXI_PKG_LEN(pBuf));
+
+		pStr += GET_TAXI_PKG_LEN(pBuf);
+
+		sprintf(pStr, ",#\r\n");
+
+		pStr += strlen(pStr);
+
+		DataStream_BuffBuild(SOCKET_BANK_DEF, PrnBuf, ((int)pStr - (int)&PrnBuf));
+	}
+
+	memcpy(&PRE_TST_PKG, &TST_PKG, sizeof(TAXIMETER_TST_PKG_t));
+}
+
+static bool TAXI_Process(void)
+{
+	uint16_t PkgLen;
+
+
+	PkgLen = TAXI_GetCmdPkg(ExtBuf, sizeof(ExtBuf));
+
+	if(PkgLen == 0)
+		return TRUE;
+
+	if(g_Setting.DebugMode == DBG_EXT)
+		SET_SendBuffer(ExtBuf, PkgLen);
+
+	TAXI_ChkCmdPkg(ExtBuf);
+
+	return TRUE;
+}
+
+void SetTID_TaxiProc(void)
+{
+	SWTIM_SetTimer(TIMER_TAXI_PROC, TIMER_CONTINUE, TAXI_Process);
+}
+#endif
+
+#if ENABLE_TPMS
+static bool TPMS_GetCmdPkg(void)
+{
+	static uint8_t GetPkgTimeout = MAX_TPMS_PKG_TIMEOUT;
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+
+
+	BufLen = UART_GetRxBufLen(TPMS_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = MAX_TPMS_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = MAX_TPMS_PKG_TIMEOUT;
+	}
+
+	BufLen = UART_GetRxBuffer(TPMS_COMPORT_DEF, Buf, sizeof(Buf));
+
+	if(g_Setting.DebugMode == TPMS_DBG_MODE)
+		SET_SendBuffer((uint8_t*)Buf, BufLen);
+
+	if(memcmp(Buf,TPMS_DEVICE_RECV_HEAD,strlen(TPMS_DEVICE_RECV_HEAD) != 0)
+	        || BufLen < (strlen(TPMS_DEVICE_RECV_HEAD) + 20)
+	        || BufLen > 40)
+	{
+		return FALSE;
+	}
+
+	memset(TPMS_BUF, 0x00, sizeof(TPMS_BUF));
+
+	memcpy(TPMS_BUF, Buf,BufLen);
+
+	return TRUE;
+}
+
+static bool TPMS_Process(void)
+{
+	static uint8_t CntTime=0;
+	static uint8_t CntTire=0;
+	char ASCII_TPMS_DATA[16+1];
+
+
+	memset(ASCII_TPMS_DATA, 0x00, sizeof(ASCII_TPMS_DATA));
+
+	CntTime++;
+
+	if(TPMS_GetCmdPkg() == TRUE)
+	{
+		memcpy(ASCII_TPMS_DATA,TPMS_BUF+(strlen(TPMS_DEVICE_RECV_HEAD)+3),16);
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_CPTI
+		if(ASCII_TPMS_DATA[13] != 0x30
+		        || ASCII_TPMS_DATA[14] != 0x30
+		        || ASCII_TPMS_DATA[15] != 0x30)
+		{
+			DataStream_EventBuild(CPTI_EVENT_TPMS, ASCII_TPMS_DATA);
+		}
+#endif
+		return TRUE;
+	}
+
+	if(CntTime < TPMS_SEND_TIMER)
+		return TRUE;
+
+	CntTime = 0;
+
+	CntTire++;
+
+	if(CntTire > TPMS_LAST_TIRE)
+		CntTire = TPMS_FIRST_TIRE;
+
+	sprintf(ASCII_TPMS_DATA,"%s%02d@\r\n",TPMS_DEVICE_SEND_HEAD,CntTire);
+
+	EXT_SendBuffer((uint8_t*)ASCII_TPMS_DATA, strlen(ASCII_TPMS_DATA));
+
+	return TRUE;
+}
+
+void SetTID_TPMSProc(void)
+{
+	SWTIM_SetTimer(TIMER_TPMS_PROC, TIMER_CONTINUE, TPMS_Process);
+}
+#endif // ENABLE_TPMS
+
+#if ENABLE_RFID
+void RFID_SendBuffer(uint8_t *Buf, uint16_t BufLen)
+{
+	UART_SendBuffer(RFID_COMPORT_DEF, Buf, BufLen);
+
+	if(g_Setting.DebugMode == DBG_EXT)
+		SET_SendBuffer(Buf, BufLen);
+}
+
+//============================================================================//
+//和模組溝通的CheckSum
+//DATA=>\x0D\x07\x0C\x20\x20\x46\x66\x54\x80\x07\xE0
+//Checksum = SUM(\x0D\x07\x0C\x20\x20\x46\x66\x54\x80\x07\xE0)&0xFFFF = \x02\xC7
+//SEND_DATA=> \x0D\x07\x0C\x20\x20\x46\x66\x54\x80\x07\xE0\xC7\x02
+//============================================================================//
+uint16_t RFID_GetChecksum(uint8_t *Buf, uint16_t BufLen)
+{
+	uint16_t i;
+	uint16_t Checksum;
+
+
+	Checksum = 0;
+
+	for(i = 0; i < BufLen; i++)
+		Checksum += Buf[i];
+
+	return Checksum;
+}
+
+//============================================================================//
+//
+// 大於 14 會超過 1024   =>  14 x72 =1008byte
+// #define	DRIVER_INFO_MAX		(14)
+// 目前寫到那個 DrvInd(存在 Drv 14 的 NAME )
+//  00,01,02......14
+// 當Rfid-Tag 的駕駛資料
+// 行車記錄器沒有就會自動設定駕駛資料
+// 從第一個開始寫
+// 滿了就會從第一個駕駛開始複寫
+// DrvData 寫入 如下:
+// 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12 -> 13 -> 1
+//============================================================================//
+bool RFID_ChkDrvData(RFID_INFO_t *RfidInfo)
+{
+	DRV_DATA_t Driver_Data = {0};
+	uint8_t i, j;
+	uint32_t NowDrvIndex;
+	char CMD[128];
+
+
+	// 過濾掉白卡 (20150522 通知越南要改為不設定駕駛資料 所以白卡也過)
+	if(memcmp(RfidInfo->szLicense,RFID_TAG_NO_DATA,sizeof(Driver_Data.szLicense)) == 0)
+		return FALSE;
+
+	// 越南法規的 CheckSum 加總後要再&0xff 才可以
+	if((RFID_GetChecksum((uint8_t*)RfidInfo->szLicense,strlen(RfidInfo->szLicense))&0xff) != RfidInfo->u8CheckSumA
+	        || (RFID_GetChecksum((uint8_t*)RfidInfo->NAME,sizeof(RfidInfo->NAME))&0xff) != RfidInfo->u8CheckSumB )
+	{
+		return FALSE;
+	}
+
+	for(i = 0; i < sizeof(RfidInfo->NAME); i++)
+	{
+		if(RfidInfo->NAME[i] == '0')
+			RfidInfo->NAME[i] = 0x00;
+	}
+
+	if(g_Setting.DebugMode == DBG_EXT)
+	{
+		RTOSprintf("\r\n");
+
+		RTOSprintf("\r\n> @RFID - NAME = %s, chk = 0x%X, LICENSE = %s, chk = 0x%X",RfidInfo->NAME,RfidInfo->u8CheckSumA,RfidInfo->szLicense,RfidInfo->u8CheckSumB);
+
+		RTOSprintf("\r\n");
+	}
+
+	// 取得所有駕駛資訊
+	for(j = 0; j < DRIVER_INFO_MAX; j++)
+	{
+		Info_GetDrvData(j, &Driver_Data);
+
+		// DRV_DATA_szNAME ???
+		if(strcmp(DRV_DATA_NAME, RfidInfo->NAME) == 0
+		        && strcmp(Driver_Data.szLicense, RfidInfo->szLicense) == 0)
+		{
+			if(Info_CheckDrvId(Driver_Data.IN) == TRUE)
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	// 如果已 LogIn 就先 LogOut
+	if(g_Setting.u32DrvIdNum != INVALID_VALUE_DEF)
+		Info_CheckDrvId(g_Setting.u32DrvIdNum);
+
+	// 讀出目前寫到那個 DrvInd(存在 Drv 14 的 NAME )
+	Info_GetDrvData(DRIVER_INFO_MAX-1, &Driver_Data);
+
+	if(Driver_Data.IN != (DRIVER_INFO_MAX/10*16+DRIVER_INFO_MAX%10))
+	{
+		// 有重複的 IN 會被視同已寫入過 所以改為用 DRV_DATA_NAME 字串記錄
+		sprintf(CMD, "%s%02d,%08d,01,lic,140901,490901\r\n",STR_AS_DRIVER_DATA,(DRIVER_INFO_MAX),(DRIVER_INFO_MAX));
+
+		Protocl_ChkCmdPkg(CMD, NULL);
+
+		Info_GetDrvData(DRIVER_INFO_MAX-1, &Driver_Data);
+	}
+
+	NowDrvIndex = atoi(DRV_DATA_NAME);
+
+	sprintf(CMD, "%s%02d,%08d,%s,%s,140901,490901\r\n",
+	        STR_AS_DRIVER_DATA,
+	        NowDrvIndex,
+	        NowDrvIndex,
+	        RfidInfo->NAME,
+	        RfidInfo->szLicense);
+
+	// 寫入 DrvData CMD
+	Protocl_ChkCmdPkg(CMD, NULL);
+
+	// 進行 LogIN
+	if(Info_CheckDrvId(Driver_Data.IN) != TRUE)
+		return FALSE;
+
+	// 回寫 DrvInd
+	NowDrvIndex++;
+
+	if(NowDrvIndex >= DRIVER_INFO_MAX )
+		NowDrvIndex = 1;
+
+	sprintf(CMD, "%s%02d,%08d,%02d,%s,140901,490901\r\n",
+	        STR_AS_DRIVER_DATA,
+	        DRIVER_INFO_MAX,
+	        DRIVER_INFO_MAX,
+	        NowDrvIndex,
+	        RfidInfo->szLicense);
+
+	if(Protocl_ChkCmdPkg(CMD, NULL) == TRUE)
+		return TRUE;
+
+	return FALSE;
+}
+
+void RFID_ChkReadMultBlock(void)
+{
+	memcpy(TagInfo.BLOCK_DATA+(StartBlockInd*TagInfo.BLOCK_SIZE),ExtBuf+4,(4*TagInfo.BLOCK_SIZE));
+
+	StartBlockInd+=4;
+}
+
+uint16_t RFID_GetCmdPkg(uint8_t *pCmdPkg)
+{
+	static uint8_t GetPkgTimeout = RFID_MAX_GET_PKG_TIMEOUT;
+	uint16_t BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	MEM_U16_t u16CheckSum;
+
+
+	BufLen = UART_GetRxBufLen(RFID_COMPORT_DEF);
+
+	if(BufLen == 0)
+	{
+		GetPkgTimeout = RFID_MAX_GET_PKG_TIMEOUT;
+
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgTimeout > 0)
+		{
+			GetPkgTimeout--;
+
+			return FALSE;
+		}
+
+		GetPkgTimeout = RFID_MAX_GET_PKG_TIMEOUT;
+	}
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	BufLen = UART_GetRxBuffer(RFID_COMPORT_DEF, Buf, sizeof(Buf));
+
+	if(g_Setting.DebugMode == DBG_EXT)
+		SET_SendBuffer(Buf, BufLen);
+
+	if(BufLen == 1)
+	{
+		if(Buf[0] != RFID_SEND_RX_HEAD
+		        && Buf[0] != RFID_RECV_TX_HEAD)
+			return FALSE;
+
+		memcpy(pCmdPkg, Buf, BufLen);
+		return BufLen;
+	}
+
+	else if(BufLen < 5)
+		return FALSE;
+
+	u16CheckSum._U8[0] = Buf[BufLen - 2];
+
+	u16CheckSum._U8[1] = Buf[BufLen - 1];
+
+	if(u16CheckSum._U16 != RFID_GetChecksum(Buf,BufLen - 2))
+		return FALSE;
+
+	memcpy(pCmdPkg, Buf, BufLen);
+	return BufLen;
+}
+
+uint16_t RFID_WaitRx(void)
+{
+	uint16_t buflen=0;
+	uint32_t target;
+
+
+	target = GetSysTickCount() + mS_2_SysTick(TIMER_RFID_WAIT);
+
+	do
+	{
+		DelayLoop_uS(100);
+
+		buflen = RFID_GetCmdPkg(ExtBuf);
+
+	}
+	while(GetSysTickCount() < target && buflen == 0);
+
+	return buflen;
+}
+
+void RFID_ResetRead(void)
+{
+	gRFID_CMD--;
+
+	if(gRFID_CMD == RFID_TagInventory)
+		memset(&TagInfo,0,sizeof(TagInfo));
+}
+
+void RFID_ChkRxData(void)
+{
+	uint8_t Buf[32];
+
+
+	RFID_CountRxTime=0;
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	switch(gRFID_CMD)
+	{
+		case RFID_ConnectionA:
+		case RFID_ConnectionB:
+
+			if(memcmp(ExtBuf, RFID_CONNECTION_OK, sizeof(RFID_CONNECTION_OK)) == 0)
+				gRFID_CMD++;
+
+			break;
+
+		case RFID_GetVersion:
+		case RFID_SelectRF:
+			gRFID_CMD++;
+
+			break;
+
+		case RFID_TagInventory:
+			if(ExtBuf[0] == 0x0E)
+			{
+				if(memcmp(TagInfo.UID,ExtBuf+4,8) != 0)
+				{
+					memcpy(TagInfo.UID,ExtBuf+4,8);
+
+					gRFID_CMD++;
+				}
+			}
+			else
+			{
+				//	如果有資料就清空
+				if(memcmp(TagInfo.UID, "\x00\x00\x00\x00\x00\x00\x00\x00", 8) != 0)
+					memset(&TagInfo, 0, sizeof(TagInfo));
+			}
+
+			break;
+
+		case RFID_GetInfoA:
+			if(ExtBuf[0] == 0x0C)
+			{
+				TagInfo.BLOCK_AMOUNT = ExtBuf[7]+1;
+
+				TagInfo.BLOCK_SIZE = ExtBuf[8]+1;
+
+				gRFID_CMD++;
+			}
+			else
+				RFID_ResetRead();
+
+			break;
+
+		case RFID_GetInfoB:
+			if(ExtBuf[0] == 0x0C)
+			{
+				if(TagInfo.BLOCK_AMOUNT == ExtBuf[7] + 1
+				        && TagInfo.BLOCK_SIZE == ExtBuf[8] + 1)
+				{
+					gRFID_CMD++;
+
+					RFID_ErrorCnt = 0;
+				}
+				else
+					gRFID_CMD = RFID_GetInfoA;
+			}
+			else
+				RFID_ResetRead();
+
+			break;
+
+		case RFID_ReadMultBlock:
+			if(ExtBuf[3] == 0)
+			{
+				RFID_ChkReadMultBlock();
+
+				if((StartBlockInd*TagInfo.BLOCK_SIZE) >= RFID_READ_BYTE)
+				{
+					bool RESULT = FALSE;
+					RFID_INFO_t RfidInfo;
+
+					memcpy(&RfidInfo,TagInfo.BLOCK_DATA,sizeof(RFID_INFO_t));
+
+					RESULT = RFID_ChkDrvData(&RfidInfo);
+
+					if(BGTVT_DRIVER_STOP)
+					{
+						if(RESULT ==  TRUE)
+						{
+							if(g_Setting.u32DrvIdNum == INVALID_VALUE_DEF)
+								Buzzer_SetRing(&RFID_RING, BEEP_SHORT, 3);
+							else
+								Buzzer_SetRing(&RFID_RING, BEEP_SHORT, 2);
+						}
+						else
+							Buzzer_SetRing(&RFID_RING, BEEP_SHORT, 1);
+					}
+
+					gRFID_CMD++;
+				}
+			}
+			else
+			{
+				RFID_ErrorCnt++;
+
+				if(RFID_ErrorCnt > 5)
+					RFID_ResetRead();
+			}
+
+			break;
+
+		default:
+			break;
+	}
+}
+
+bool RFID_SendCmdPkg(RFID_COMMAND_t gSEND_RFID_CMD)
+{
+	uint8_t i;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE];
+	MEM_U16_t u16CheckSum;
+
+
+	memset(Buf, 0x00, sizeof(Buf));
+
+	for(i = 0; i < RFID_CMD_END; i++)
+	{
+		if(RFID_CMD_d[i].RFID_COMMAND == gSEND_RFID_CMD)
+		{
+			memcpy(Buf,RFID_CMD_d[i].RFID_CMD_BUF,RFID_CMD_d[i].RFID_CMD_BUF_LEN);
+
+			break;
+		}
+	}
+
+	if(i == RFID_GetInfoA
+	        || i == RFID_GetInfoB)
+	{
+		memcpy(Buf + 3,TagInfo.UID,8);
+
+		u16CheckSum._U16 = RFID_GetChecksum(Buf,RFID_CMD_d[i].RFID_CMD_BUF_LEN-2);
+
+		Buf[RFID_CMD_d[i].RFID_CMD_BUF_LEN-2] = u16CheckSum._U8[0];
+
+		Buf[RFID_CMD_d[i].RFID_CMD_BUF_LEN-1] = u16CheckSum._U8[1];
+	}
+
+	if(i == RFID_ReadMultBlock)
+	{
+		memcpy(Buf+3,TagInfo.UID,8);
+
+		Buf[12] = StartBlockInd;
+
+		Buf[14] = TagInfo.BLOCK_SIZE;
+
+		u16CheckSum._U16 = RFID_GetChecksum(Buf,RFID_CMD_d[i].RFID_CMD_BUF_LEN-2);
+
+		Buf[RFID_CMD_d[i].RFID_CMD_BUF_LEN-2] = u16CheckSum._U8[0];
+
+		Buf[RFID_CMD_d[i].RFID_CMD_BUF_LEN-1] = u16CheckSum._U8[1];
+	}
+
+	if(RFID_CMD_d[i].RFID_CMD_BUF_LEN)
+	{
+		if(i < RFID_CMD_END)
+		{
+			ExtBuf[0] = RFID_SEND_TX_HEAD;
+
+			RFID_SendBuffer(ExtBuf,1);
+
+			if(RFID_WaitRx())
+			{
+				RFID_SendBuffer(Buf, RFID_CMD_d[i].RFID_CMD_BUF_LEN);
+
+				if(RFID_WaitRx())
+				{
+					if(ExtBuf[0] == RFID_RECV_TX_HEAD)
+					{
+						ExtBuf[0] = RFID_RECV_RX_HEAD;
+
+						RFID_SendBuffer(ExtBuf,1);
+					}
+
+					if(RFID_WaitRx())
+					{
+						RFID_ChkRxData();
+
+						return TRUE;
+					}
+				}
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+static bool RFID_Process(void)
+{
+	// 越南法規2014 stop=0 OR ACC-OFF 才 logon/lonout
+	if(M_2_KM(g_SysInfo.VehicleState.u32Speed) >= 3 &&
+	        g_SysInfo.VehicleState.ACC_ON == TRUE )
+	{
+		memset(&TagInfo,0,sizeof(TagInfo));
+
+		RFID_CountRxTime=0;
+
+		StartBlockInd = 0;
+
+		return TRUE;
+	}
+
+	if(gRFID_CMD == RFID_CMD_END)
+	{
+		gRFID_CMD = RFID_TagInventory;
+
+		StartBlockInd = 0;
+	}
+
+	// 因和模組溝通 要一次資料要 3個來回 所以目前運作方式為 每執行一次就處理好三個來回
+	// ex:
+	// 1.	TX:	0X55
+	// 2.	RX:	0XAA
+	// 3.	SEND	COMMAND
+	// 4.	RX:	0XA5
+	// 5.	TX:	0X5A
+	// 6.	RECV	RESPONSE
+	if(gRFID_CMD != RFID_CMD_END)
+	{
+		if((RFID_CountRxTime % RFID_SCAN_TIME) == 0)
+			RFID_SendCmdPkg(gRFID_CMD);
+	}
+
+	if(gRFID_CMD < RFID_GetInfoA)
+		RFID_CountRxTime++;
+
+	return TRUE;
+}
+
+void SetTID_RfidProc(void)
+{
+	SWTIM_SetTimer(TIMER_RFID_PROC, TIMER_CONTINUE, RFID_Process);
+}
+#endif

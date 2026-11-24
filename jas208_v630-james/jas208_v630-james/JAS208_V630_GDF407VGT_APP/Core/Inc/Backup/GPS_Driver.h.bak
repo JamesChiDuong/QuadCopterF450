@@ -1,0 +1,252 @@
+#ifndef _GPS_DRIVER_H_
+#define _GPS_DRIVER_H_
+
+
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "DataType.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+// Available modules for GPS
+#define GPS_MODULE_QTEC21         1U
+
+#define GPS_MODULE_SIM68          2U
+
+// GPS hardware type
+//#define GPS_HARDWARE_TYPE         GPS_MODULE_QTEC21
+#define GPS_HARDWARE_TYPE         GPS_MODULE_SIM68
+
+// NMEA message types
+#define NMEA_GGA                  "GGA"
+
+#define	NMEA_GLL                  "GLL"
+
+#define	NMEA_GSA                  "GSA"
+
+#define	NMEA_GSV                  "GSV"
+
+#define	NMEA_RMC                  "RMC"
+
+#define	NMEA_VTG                  "VTG"
+
+#define	NMEA_ZDA                  "ZDA"
+
+#define NMEA_HEAD_GPGGA			      "$GPGGA,"
+
+#define NMEA_HEAD_GNGGA			      "$GNGGA,"
+
+#define NMEA_HEAD_GNGNS			      "$GNGNS,"
+
+#define NMEA_HEAD_GPGSA			      "$GPGSA,"
+
+#define NMEA_HEAD_GPRMC			      "$GPRMC,"
+
+#define NMEA_HEAD_GNRMC			      "$GNRMC,"
+
+#define NMEA_HEAD_GPGSV			      "$GPGSV,"
+
+#define NMEA_HEAD_GLGSV			      "$GLGSV,"
+
+#define NMEA_HEAD_GPVTG			      "$GPVTG,"
+
+#define NMEA_HEAD_GNGSA			      "$GNGSA,"
+
+#define NMEA_HEAS_BD_SYSTEM		    "$BD"
+
+#define	MAXSATELLITE			        20
+
+//#define GPS_POS_FILTER_DIST		    100
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+//typedef enum
+//{
+//	START_COLD,
+
+//	START_HOT
+
+//} GPS_StartTypeDef;
+
+#pragma pack(1)
+// GPS time
+typedef struct
+{
+	uint16_t u16Year;
+
+	uint8_t u8Month;
+
+	uint8_t u8Day;
+
+	uint8_t u8Hour;
+
+	uint8_t u8Min;
+
+	uint8_t u8Sec;
+
+} UTC_TypeDef;
+
+// GPS Longitude
+typedef struct
+{
+	uint8_t u8ddd;
+
+	uint8_t u8mm;
+
+	uint16_t u16mmmm;
+
+	uint8_t u8ss;
+
+	char cIndicator;
+
+} GPS_LonTypeDef;
+
+// GPS Latitude
+typedef struct
+{
+	uint8_t u8dd;
+
+	uint8_t u8mm;
+
+	uint16_t u16mmmm;
+
+	uint8_t u8ss;
+
+	char cIndicator;
+
+} GPS_LatTypeDef;
+
+// GPS number of satellites used
+typedef struct
+{
+	uint8_t u8Num;
+
+	uint8_t u8Count;
+
+} GPS_StlNumTypeDef;
+
+// GPS Location
+typedef struct
+{
+	double dLatitude;
+
+	double dLongitude;
+
+} GpsCoordTypeDef;
+
+// GPS data struct
+typedef struct
+{
+	UTC_TypeDef utcTime; // UTC time
+
+	bool bStatus; // GPS data status
+
+	GPS_LonTypeDef gpsLon; // GPS Longitude
+
+	GPS_LatTypeDef gpsLat; // GPS Latitude
+
+	GpsCoordTypeDef gpsLocation; // GPS Coordinate
+
+	uint16_t u16Course; // Degree
+
+	uint32_t u32Speed; // GPS speed
+
+	//uint8_t u8PosFixInc; // Position fix indicator
+
+	uint8_t u8StlNum; // Number of satellites used
+
+	float fPDOP; // Dilution of Precision
+
+	float fHDOP; // Horizontal Dilution of Precision
+
+	float fVDOP; // Vertical Dilution of Precision
+
+	float fAltitude; // GPS Altitude
+
+} GPS_DataTypeDef;
+#pragma pack()
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+
+//extern GPS_DataTypeDef tGPS_Data;
+
+extern bool bGPS_ON;
+
+#if GPS_HARDWARE_TYPE == GPS_MODULE_QTEC21
+extern bool bGPS_GetDataEn;
+#endif
+
+extern bool bGPS_FixRTC;
+
+extern uint8_t u8GPS_RetryCnt;
+
+extern bool bGPS_SystembootTestFlag;
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+
+#if GPS_HARDWARE_TYPE == GPS_MODULE_SIM68
+void GPS_SendBuffer(uint8_t *pu8Buf, uint8_t u8Len);
+void GPS_PowerOn(void);
+void GPS_PowerOff(void);
+#elif GPS_HARDWARE_TYPE == GPS_MODULE_QTEC21
+bool GPS_ConfigOutport(void);
+bool GPS_ConfigNMEA_Src(void);
+bool GPS_ConfigGPS_NMEA_Type(void);
+bool GPS_ConfigGLONASS_NMEA_Type(void);
+bool GPS_ConfigGalileo_NMEA_Type(void);
+bool GPS_ConfigBeidou_NMEA_Type(void);
+bool GPS_ConfigGSV_Ext(void);
+bool GPS_ConfigGNSS(void);
+bool GPS_ConfigAutoGPS(void);
+bool GPS_DelMsg(void);
+bool GPS_TurnOn(void);
+bool GPS_TurnOff(void);
+bool GPS_ConfigXTRA(void);
+void GPS_Config(void);
+void GPS_EnableSendMsg(void);
+void GPS_EnableRecvMsg(void);
+void GPS_Start(void);
+void GPS_Finish(void);
+#endif
+void GPS_Reset(uint8_t u8Delay);
+bool GPS_NMEA_ChkSum(char *cMsg);
+bool GPS_NMEA_GGA_Parse(char *cMsg);
+bool GPS_NMEA_GLL_Parse(char *cMsg);
+bool GPS_NMEA_GSA_Parse(char *cMsg);
+bool GPS_NMEA_GSV_Parse(char *cMsg);
+bool GPS_NMEA_RMC_Parse(char *cMsg);
+bool GPS_NMEA_VTG_Parse(char *cMsg);
+bool GPS_NMEA_ZDA_Parse(char *cMsg);
+bool GPS_NMEA_Parse(void);
+void GPS_RX_Proc(void);
+bool GPS_GetFixed(void);
+bool GPS_GetUTC(time_t *pttUTC);
+bool GPS_GetLongitude(GPS_LonTypeDef *p_gpsLongitude);
+bool GPS_GetLatitude(GPS_LatTypeDef *p_gpsLatitude);
+void GPS_GetCoordinate(GpsCoordTypeDef *p_gpsLocation);
+uint32_t GPS_GetSpeed(void);
+uint16_t GPS_GetCourse(void);
+double GPS_CalcDist_2D(GpsCoordTypeDef *p_gpsLocat1, GpsCoordTypeDef *p_gpsLocat2);
+double GPS_LatitudeDMMtoDD(GPS_LatTypeDef *p_gpsLatitude_DMM);
+double GPS_LongitudeDMMtoDD(GPS_LonTypeDef *p_gpsLongitude_DMM);
+void GPS_LatitudeDDtoDMM(double dLatitude_DD, GPS_LatTypeDef *p_gpsLatitude_DMM);
+void GPS_LongitudeDDtoDMM(double dLongitude_DD, GPS_LonTypeDef *p_gpsLongitude_DMM);
+
+
+//============================================================================//
+#endif /* _GPS_DRIVER_H_ */

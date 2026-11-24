@@ -1,0 +1,1460 @@
+//============================================================================//
+// Includes
+//============================================================================//
+#include "DataStream.h"
+
+#include <string.h>
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Buzzer.h"
+#include "DataLog.h"
+#include "Default.h"
+#include "GPS_Driver.h"
+#include "GSM_Driver.h"
+#include "main.h"
+#include "Protocol.h"
+#include "SD_Module.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#define	FILENAME_EPA_TRACK_TMP	    "EPA_TRACK.TMP"
+
+#define	FILENAME_EPA_BCODE_TMP	    "EPA_BCODE.TMP"
+
+#define EPA_TRACK_SIZE_MAX		      12000
+
+#define EPA_INDEX_END_ID		        0x55AA
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+typedef enum
+{
+	// 正常傳遞
+	EPA_NORMAL = 0,
+
+	// 自動補回傳
+	EPA_RESEND_AUTO,
+
+	// 手動補回傳
+	EPA_RESEND_MANUAL,
+
+	// 位置確認
+	EPA_PING,
+
+	// 軌跡補回傳開始
+	EPA_RESEND_TRACK_START,
+
+	// 軌跡補回傳結束
+	EPA_RESEND_TRACK_STOP,
+
+	// 條碼補回傳開始
+	EPA_RESEND_BCODE_START,
+
+	// 條碼補回傳結束
+	EPA_RESEND_BCODE_STOP,
+
+} EPA_STATE_t;
+
+#pragma pack(1)
+typedef union
+{
+	uint8_t	byte;
+
+
+	struct
+	{
+		unsigned IN_ACC:1;
+		unsigned IN_PWR:1;
+		unsigned IN_BAT:1;
+		unsigned RESERVE_0:1;
+		unsigned RESERVE_1:1;
+		unsigned RESERVE_2:1;
+		unsigned RESERVE_3:1;
+		unsigned RESERVE_4:1;
+	} bits;
+
+} EPA_I01_t;
+
+typedef struct
+{
+	// 系統內部世界標準時間
+	time_t tmLocalTime;
+
+	// GPS 緯度資料, 為 10 進制格式再乘 10^6 後只取整數
+	int32_t i32Latitude;
+
+	// GPS 經度資料, 為 10 進制格式再乘 10^6 後只取整數
+	int32_t i32Longitude;
+
+	// 時速單位為公里
+	uint8_t u8Speed;
+
+	// 航向 0 ~ 359度
+	uint16_t u16Course;
+
+	// 可用衛星數量
+	uint8_t u8StlNum;
+
+	EPA_I01_t EPA_I01;
+
+	uint8_t CustCode[4];
+
+	char szBarCode[20];
+
+} EPA_DATA_t;
+
+typedef struct
+{
+	uint16_t START;
+
+	uint16_t COUNT;
+
+	uint16_t END;
+
+} EPA_INDEX_t;
+#pragma pack()
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+static uint8_t Buff[GSM_MAX_BUFFER_SIZE];
+
+BOOL EVENT_PWR_DOWN = 0; // Heinz
+
+time_t ttAccOff = 0; // Heinz
+
+uint16_t ReBuildBegin;
+uint16_t ReBuildEnd;
+uint16_t ReBuildCurr;
+
+char* FileName_Query;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+void DataBuild_JASS(uint8_t SocketNum, FlagStatus SOS)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+
+
+	pStr = (char *)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE
+	        && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		g_SysInfo.gpsHandle.bStatus = TRUE;
+	}
+#endif
+
+#if ENABLE_FUEL
+	memset(&FuelInfo, 0x00, sizeof(FUEL_INFO_t));
+
+	if(g_Setting.TempSet.FuelMeterGain)
+	{
+		FuelInfo.LEVEL_1 = INT10_DIV(g_SysInfo.DrvInfo.FUEL.LEVEL_1, g_Setting.TempSet.FuelMeterGain);
+
+		FuelInfo.LEVEL_2 = INT10_DIV(g_SysInfo.DrvInfo.FUEL.LEVEL_2, g_Setting.TempSet.FuelMeterGain);
+
+		g_SysInfo.DrvInfo.FUEL.LEVEL_1 = 0;
+	}
+	else
+	{
+		FuelInfo.LEVEL_1 = g_SysInfo.DrvInfo.FUEL.LEVEL_1;
+
+		FuelInfo.LEVEL_2 = g_SysInfo.DrvInfo.FUEL.LEVEL_2;
+
+		FuelInfo.TEMPER = g_SysInfo.DrvInfo.FUEL.TEMPER;
+	}
+#endif // ENABLE_FUEL
+
+	// Fms
+	sprintf(pStr, "%d,$,%s,%s,%s,%c,%c%03d%02d.%04d,%c%02d%02d.%04d,%03d,%03d,%08.0f,%04d,%04d,%04d,%04d,%d,%d,%d,%d#\r\n",
+	        SocketNum,
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+	        g_Setting.szBus_SN,
+#else
+	        g_Setting.tBusInfo.cBus_ID,
+#endif
+	        szDateStr,
+	        szTimeStr,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        g_SysInfo.gpsHandle.gpsLon.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLon.u8ddd,
+	        g_SysInfo.gpsHandle.gpsLon.u8mm,
+	        g_SysInfo.gpsHandle.gpsLon.u16mmmm,
+	        g_SysInfo.gpsHandle.gpsLat.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLat.u8dd,
+	        g_SysInfo.gpsHandle.gpsLat.u8mm,
+	        g_SysInfo.gpsHandle.gpsLat.u16mmmm,
+	        g_SysInfo.gpsHandle.u16Course,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed),
+	        M_2_10M(g_SysInfo.VehicleState.dDistance),
+	        g_SysInfo.VehicleState.u16RPM,
+	        0, //FuelInfo.LEVEL_1,
+	        0, //FuelInfo.LEVEL_2,
+	        0, //FuelInfo.TEMPER,
+	        (g_SysInfo.VehicleState.ACC_ON == TRUE) ? 1 : 0,
+	        g_SysInfo.EXTIO.bits.IN_1,
+	        g_SysInfo.EXTIO.bits.IN_2,
+	        (SOS == SET) ? 1 : 0);
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+bool DataStream_QueryByTime(time_t *TargetTime, uint16_t *INDEX)
+{
+	bool RESULT;
+	uint16_t DataBegin, DataIdx, DataEnd;
+	EPA_INDEX_t EPA_INDEX;
+	EPA_DATA_t EPA_DATA;
+
+
+	*INDEX = 0;
+
+	if(SD_GetFileSize(FileName_Query) == 0)
+		return FALSE;
+
+	RESULT = SD_ReadAddrToBuff(FileName_Query, (uint8_t*)&EPA_INDEX, sizeof(EPA_INDEX_t), 0);
+
+	if((RESULT == TRUE && EPA_INDEX.END != EPA_INDEX_END_ID)
+	        || EPA_INDEX.COUNT == 0
+	        || RESULT == FALSE)
+		return FALSE;
+
+	DataBegin = 0;
+
+	DataEnd = EPA_INDEX.COUNT;
+
+	do
+	{
+		DataIdx = (DataEnd - DataBegin) / 2 + DataBegin;
+
+		if(DataIdx <= DataBegin || DataIdx >= DataEnd)
+			break;
+
+		RESULT = SD_ReadAddrToBuff(FileName_Query, (uint8_t*)&EPA_DATA, sizeof(EPA_DATA_t),
+		                           sizeof(EPA_INDEX_t) + DataIdx * sizeof(EPA_DATA_t));
+
+		if(RESULT == TRUE
+		        && EPA_DATA.tmLocalTime == *TargetTime)
+		{
+			*INDEX = DataIdx;
+
+			return TRUE;
+		}
+
+		if(EPA_DATA.tmLocalTime > *TargetTime)
+			DataEnd = DataIdx;
+
+		if(EPA_DATA.tmLocalTime < *TargetTime)
+			DataBegin = DataIdx;
+
+	}
+	while(DataEnd != DataBegin);
+
+	return FALSE;
+}
+/*
+bool DataStream_QueryTrackEPA(time_t TimeBegin, time_t TimeEnd)
+{
+	if(ReBuildBegin && ReBuildEnd)
+		return FALSE;
+
+	if(TimeBegin > TimeEnd)
+		return FALSE;
+
+	FileName_Query = FILENAME_EPA_TRACK_TMP;
+
+	if(DataStream_QueryByTime(&TimeBegin, &ReBuildBegin) == FALSE
+		 || DataStream_QueryByTime(&TimeEnd, &ReBuildEnd) == FALSE)
+	{
+		return FALSE;
+	}
+
+	ReBuildCurr = ReBuildBegin;
+
+	return TRUE;
+}
+
+bool DataStream_QueryBcodeEPA(time_t TimeBegin, time_t TimeEnd)
+{
+	if(ReBuildBegin && ReBuildEnd)
+		return FALSE;
+
+	if(TimeBegin > TimeEnd)
+		return FALSE;
+
+	FileName_Query = FILENAME_EPA_BCODE_TMP;
+
+	if(DataStream_QueryByTime(&TimeBegin, &ReBuildBegin) == FALSE
+		 || DataStream_QueryByTime(&TimeEnd, &ReBuildEnd) == FALSE)
+		return FALSE;
+
+	ReBuildCurr = ReBuildBegin;
+
+	return TRUE;
+}
+*/
+bool DataStream_ReBuild(void)
+{
+	bool RESULT;
+	EPA_DATA_t EPA_DATA;
+	EPA_STATE_t DataState;
+	char *pStr;
+	uint8_t SocketNum;
+	time_t rawtime;
+	char szDateStr[10];
+	char szTimeStr[10];
+	GPS_LonTypeDef Longitude; // 經度
+	GPS_LatTypeDef Latitude; // 緯度
+
+
+	RESULT = SD_ReadAddrToBuff(FileName_Query, (uint8_t*)&EPA_DATA, sizeof(EPA_DATA_t),
+	                           sizeof(EPA_INDEX_t) + ReBuildCurr * sizeof(EPA_DATA_t));
+
+	if(RESULT == TRUE)
+	{
+		pStr = (char*)Buff;
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_EPA
+		SocketNum = SOCKET_BANK_DEF;
+#endif
+
+#if NET_EXTDATA_FORMAT == NET_DATA_FORMAT_EPA
+		SocketNum = SOCKET_BANK_EXT;
+#endif
+
+		rawtime = EPA_DATA.tmLocalTime;
+
+		strftime(szDateStr, sizeof(szDateStr), "%Y%m%d", localtime(&rawtime));
+
+		strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+		Coordinate_LatitudeDDtoDMM((double)EPA_DATA.i32Latitude / 1000000, &Latitude);
+
+		Coordinate_LongitudeDDtoDMM((double)EPA_DATA.i32Longitude / 1000000, &Longitude);
+
+		DataState = EPA_RESEND_MANUAL;
+
+		if(strncmp(FileName_Query, FILENAME_EPA_TRACK_TMP, strlen(FILENAME_EPA_TRACK_TMP)) == 0)
+		{
+			if(ReBuildCurr == ReBuildBegin)
+				DataState = EPA_RESEND_TRACK_START;
+
+			if(ReBuildCurr == ReBuildEnd)
+			{
+				DataState = EPA_RESEND_TRACK_STOP;
+			}
+		}
+
+		if(strncmp(FileName_Query, FILENAME_EPA_BCODE_TMP, strlen(FILENAME_EPA_BCODE_TMP)) == 0)
+		{
+			if(ReBuildCurr == ReBuildBegin)
+				DataState = EPA_RESEND_BCODE_START;
+
+			if(ReBuildCurr == ReBuildEnd)
+				DataState = EPA_RESEND_BCODE_STOP;
+		}
+
+		sprintf(pStr, "%d,$,%s,%s,%s,%c%02d%02d.%04d,%c%03d%02d.%04d,%03d,%03d,%02d,%d,%d,0,0,%d%d%d%d,%s,#\r\n",
+		        SocketNum,
+		        g_Setting.tBusInfo.szBus_SN,
+		        szDateStr,
+		        szTimeStr,
+		        Latitude.cIndicator,
+		        Latitude.u8dd,
+		        Latitude.u8mm,
+		        Latitude.u16mmmm,
+		        Longitude.cIndicator,
+		        Longitude.u8ddd,
+		        Longitude.u8mm,
+		        Longitude.u16mmmm,
+		        EPA_DATA.u8Speed,
+		        EPA_DATA.u16Course,
+		        EPA_DATA.u8StlNum,
+		        DataState,
+		        EPA_DATA.EPA_I01.byte,
+		        EPA_DATA.CustCode[0],
+		        EPA_DATA.CustCode[1],
+		        EPA_DATA.CustCode[2],
+		        EPA_DATA.CustCode[3],
+		        EPA_DATA.szBarCode);
+
+		DataSend_AddDataToQue(Buff, strlen(pStr));
+	}
+
+	if(ReBuildCurr == ReBuildEnd)
+	{
+		ReBuildBegin = 0;
+
+		ReBuildEnd = 0;
+	}
+	else
+		ReBuildCurr++;
+
+	return RESULT;
+}
+
+void DataBuild_EPA(uint8_t SocketNum, EPA_STATE_t DataState, char* BarCode)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+	GPS_DataTypeDef GPS_AllData;
+	EPA_I01_t EPA_I01;
+	uint8_t CustCode[4];
+
+
+	memset(Buff, 0x00, sizeof(Buff)); // Heinz
+
+	pStr = (char*)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%Y%m%d", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+#if ENABLE_GPS_LAST_FIXED
+	if(GPS_AllData.bStatus == FALSE && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &GPS_AllData.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &GPS_AllData.gpsLon);
+
+		GPS_AllData.bStatus = TRUE;
+	}
+#endif
+
+	EPA_I01.byte = 0x00;
+
+	EPA_I01.bits.IN_ACC = g_SysInfo.VehicleState.ACC_ON;
+
+	EPA_I01.bits.IN_PWR = g_SysInfo.VehicleState.PWR_ON;
+
+	EPA_I01.bits.IN_BAT = 1;
+
+	memset(CustCode, 0x00, sizeof(CustCode));
+
+#if CUSTOMER_TYPE == CUSTOMER_ECCOMM
+	CustCode[0] = GSM_GetNetMode();
+#endif
+
+	if(DataState == EPA_NORMAL)
+	{
+		char FileName[128];
+		EPA_INDEX_t EPA_INDEX;
+		EPA_DATA_t EPA_DATA;
+		uint16_t idx;
+
+
+		EPA_DATA.tmLocalTime = rawtime;
+
+		EPA_DATA.i32Latitude = GPS_AllData.gpsLocation.dLatitude * 1000000;
+
+		EPA_DATA.i32Longitude = GPS_AllData.gpsLocation.dLongitude * 1000000;
+
+		EPA_DATA.u8Speed = M_2_KM(g_SysInfo.VehicleState.u32Speed);
+
+		EPA_DATA.u16Course = GPS_AllData.u16Course;
+
+		EPA_DATA.u8StlNum = GPS_AllData.u8StlNum;
+
+		EPA_DATA.EPA_I01 = EPA_I01;
+
+		memcpy(EPA_DATA.CustCode, CustCode, sizeof(CustCode));
+
+		strcpy(EPA_DATA.szBarCode, BarCode);
+
+
+		if(strlen(BarCode) == 0)
+			strcpy(FileName, FILENAME_EPA_TRACK_TMP);
+		else
+			strcpy(FileName, FILENAME_EPA_BCODE_TMP);
+
+		SD_ReadAddrToBuff(FileName, (uint8_t *)&EPA_INDEX, sizeof(EPA_INDEX_t), 0);
+
+		if(EPA_INDEX.COUNT >= EPA_TRACK_SIZE_MAX)
+		{
+			idx = EPA_INDEX.START;
+
+			EPA_INDEX.START++;
+
+			if(EPA_INDEX.START >= EPA_TRACK_SIZE_MAX)
+				EPA_INDEX.START = 0;
+		}
+		else
+		{
+			idx = EPA_INDEX.COUNT;
+
+			EPA_INDEX.COUNT++;
+		}
+
+		SD_WriteBuffToAddr(FileName,
+		                   (uint8_t*)&EPA_DATA, sizeof(EPA_DATA_t),
+		                   sizeof(EPA_INDEX_t) + idx * sizeof(EPA_DATA_t));
+
+		SD_WriteBuffToAddr(FileName, (uint8_t*)&EPA_INDEX, sizeof(EPA_INDEX_t), 0);
+
+		//if(GSM_GetNetStatus() == FALSE)
+		//	DataState = EPA_RESEND_AUTO;
+	}
+
+	// Heinz
+	sprintf(pStr, "%d,$,%s,%s,%s,%c%02d%02d.%04d,%c%03d%02d.%04d,%03d,%03d,%02d,%d,%d,0,0,%d%d%d%d,%s,#\r\n",
+	        SocketNum,
+	        g_Setting.tBusInfo.szBus_SN,
+	        szDateStr,
+	        szTimeStr,
+	        GPS_AllData.gpsLat.cIndicator,
+	        GPS_AllData.gpsLat.u8dd,
+	        GPS_AllData.gpsLat.u8mm,
+	        GPS_AllData.gpsLat.u16mmmm,
+	        GPS_AllData.gpsLon.cIndicator,
+	        GPS_AllData.gpsLon.u8ddd,
+	        GPS_AllData.gpsLon.u8mm,
+	        GPS_AllData.gpsLon.u16mmmm,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed),
+	        GPS_AllData.u16Course,
+	        GPS_AllData.u8StlNum,
+	        DataState,
+	        EPA_I01.byte,
+	        CustCode[0],
+	        CustCode[1],
+	        CustCode[2],
+	        CustCode[3],
+	        BarCode);
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void DataBuild_EUPFIN(uint8_t SocketNum)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	MEM_U32_t StateCode;
+	time_t rawtime;
+	uint8_t GSM_SQ;
+	uint16_t i, ChkSum;
+
+
+	pStr = (char*)Buff;
+
+	if(strncmp(g_Setting.tBusInfo.szBus_SN, DEFAULT_STRING, strlen(DEFAULT_STRING)) == 0)
+	{
+		sprintf(pStr, "%d,", SocketNum);
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "<IMEI,%s,T168-3G,V1A01", g_SysInfo.MobileInfo.IMEI);
+
+		ChkSum = 0;
+
+		for(i = 1; i < strlen(pStr); i++)
+		{
+			ChkSum ^= pStr[i];
+		}
+
+		pStr += strlen(pStr);
+
+		sprintf(pStr, "*%02X\r\n", ChkSum & 0xFF);
+
+		DataSend_AddDataToQue(Buff, strlen((char*)Buff));
+
+		return;
+	}
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+	StateCode._U32 = 0;
+
+	StateCode.bit._00 = (g_SysInfo.VehicleState.ACC_ON == TRUE) ? 1 : 0;
+
+	StateCode.bit._01 = ~g_SysInfo.EXTIO.bits.IN_PWR;
+
+	//StateCode.bit._02 = ~GSM_GetNetStatus();
+
+	StateCode.bit._16 = g_SysInfo.EXTIO.bits.IN_1;
+
+	StateCode.bit._17 = g_SysInfo.EXTIO.bits.IN_2;
+
+	StateCode.bit._19 = g_SysInfo.EXTIO.bits.IN_3;
+
+	StateCode.bit._20 = g_SysInfo.EXTIO.bits.IN_4;
+
+	StateCode.bit._21 = g_SysInfo.EXTIO.bits.IN_5;
+
+	StateCode.bit._22 = g_SysInfo.EXTIO.bits.IN_6;
+
+	StateCode.bit._23 = g_SysInfo.EXTIO.bits.IN_7;
+
+	StateCode.bit._24 = g_SysInfo.EXTIO.bits.IN_8;
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		g_SysInfo.gpsHandle.bStatus = TRUE;
+	}
+#endif
+
+	//if(GSM_GetSQ(&GSM_SQ) == FALSE)
+	//	GSM_SQ = 0;
+
+	sprintf(pStr, "%d,", SocketNum);
+
+	pStr += strlen(pStr);
+
+	sprintf(pStr, ">%s,%07X,%s,%c,%d,%d,%.1f,%d,%s,%d,%d,%.2f",
+	        g_Setting.tBusInfo.szBus_SN,
+	        (uint32_t)StateCode._U32,
+	        szTimeStr,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        (int)(g_SysInfo.gpsHandle.gpsLocation.dLatitude * 1000000),
+	        (int)(g_SysInfo.gpsHandle.gpsLocation.dLongitude * 1000000),
+	        M_2_KNOT(g_SysInfo.VehicleState.u32Speed),
+	        g_SysInfo.gpsHandle.u16Course,
+	        szDateStr,
+	        g_SysInfo.gpsHandle.u8StlNum,
+	        GSM_SQ,
+	        g_SysInfo.VehicleState.dDistance);
+
+	ChkSum = 0;
+
+	for(i = 1; i < strlen(pStr); i++)
+	{
+		ChkSum ^= pStr[i];
+	}
+
+	pStr += strlen(pStr);
+
+	sprintf(pStr, "*%02X\r\n", ChkSum & 0xFF);
+
+	DataSend_AddDataToQue(Buff, strlen((char*)Buff));
+}
+
+void DataBuild_SKYEYES(uint8_t SocketNum, char* EventCode, char* EventMsg)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	char szDriverIN[10]= {0};
+	time_t rawtime;
+#if ENABLE_FUEL
+	FUEL_INFO_t FuelInfo;
+#endif
+
+
+	pStr = (char *)Buff;
+
+	rawtime = System_GetTime();
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+	if(g_Setting.u32DrvIdNum != INVALID_VALUE_DEF)
+		sprintf(szDriverIN, "%08X", g_Setting.u32DrvIdNum);
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE
+	        && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		//GPS_AllData.bFixed = TRUE;
+	}
+#endif
+
+#if ENABLE_FUEL
+	memset(&FuelInfo, 0x00, sizeof(FUEL_INFO_t));
+#endif
+
+#if CUSTOMER_TYPE == CUSTOMER_EUPFIN_B || CUSTOMER_TYPE == CUSTOMER_NORMAL
+	sprintf(pStr, "%d,$DATA,%s,%s,%s,%c,%c%03d%02d.%04d,%c%02d%02d.%04d,%03d,%03d,%09d,%04d,%s,%02d,%02d,%d%d%d%d%d%d%d%d,%s,%s#\r\n",
+	        SocketNum,
+	        g_Setting.tBusInfo.cBus_ID,
+	        szDateStr,
+	        szTimeStr,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        g_SysInfo.gpsHandle.gpsLon.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLon.u8ddd,
+	        g_SysInfo.gpsHandle.gpsLon.u8mm,
+	        g_SysInfo.gpsHandle.gpsLon.u16mmmm,
+	        g_SysInfo.gpsHandle.gpsLat.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLat.u8dd,
+	        g_SysInfo.gpsHandle.gpsLat.u8mm,
+	        g_SysInfo.gpsHandle.gpsLat.u16mmmm,
+	        u16GPS_Course_Tmp, // Heinz // GPS_AllData.u16Course,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed),
+	        (uint32_t)g_SysInfo.VehicleState.dDistance,
+	        g_SysInfo.VehicleState.u16RPM,
+	        szDriverIN,
+	        g_Setting.GSM_SET.NET_SET.u8GSM_CSQ,
+	        g_SysInfo.gpsHandle.u8StlNum, //Heinz
+	        g_SysInfo.EXTIO.bits.IN_ACC, //Heinz
+	        g_SysInfo.EXTIO.bits.IN_1, // 剎
+	        g_SysInfo.EXTIO.bits.IN_2, // 左
+	        g_SysInfo.EXTIO.bits.IN_3, // 右
+	        g_SysInfo.EXTIO.bits.IN_4, // 遠
+	        g_SysInfo.EXTIO.bits.IN_5, // 近
+	        g_SysInfo.EXTIO.bits.IN_7, // 前
+	        g_SysInfo.EXTIO.bits.IN_8, // 後
+	        EventCode,
+	        EventMsg);
+
+#else // Skyeye	
+	sprintf(pStr, "%d,$DATA,%s,%s,%s,%c,%c%03d%02d.%04d,%c%02d%02d.%04d,%03d,%03d,%09d,%04d,%s,%s,%s#\r\n",
+	        SocketNum,
+	        g_Setting.szBus_SN,
+	        szDateStr,
+	        szTimeStr,
+	        (GPS_AllData.bStatus == TRUE) ? 'A' : 'V',
+	        GPS_AllData.gpsLon.cIndicator,
+	        GPS_AllData.gpsLon.u8ddd,
+	        GPS_AllData.gpsLon.u8mm,
+	        GPS_AllData.gpsLon.u16mmmm,
+	        GPS_AllData.gpsLat.cIndicator,
+	        GPS_AllData.gpsLat.u8dd,
+	        GPS_AllData.gpsLat.u8mm,
+	        GPS_AllData.gpsLat.u16mmmm,
+	        GPS_AllData.u16Course,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed),
+	        (uint32_t)g_SysInfo.VehicleState.dDistance,
+	        g_SysInfo.VehicleState.u16RPM,
+	        szDriverIN,
+	        EventCode,
+	        EventMsg);
+#endif
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void DataBuild_CHK(uint8_t SocketNum)
+{
+	char *pStr;
+
+
+	pStr = (char *)Buff;
+
+	sprintf(pStr, "@ %d,$CHK,%s,%s,%s,FW-%02d%s,%d,%c%d,%d,%s,%d.%d.%d.%d:%d,%s:%d,%d,%d,%d,%f,%d,%d,%d, #\r\n",
+	        SocketNum,
+	        g_SysInfo.MobileInfo.IMEI,
+	        g_Setting.tBusInfo.cBus_ID,
+	        STR_PRODUCT,
+	        VERSION_BUILD,
+	        FW_VERSION_CHK,
+	        g_Setting.GSM_SET.NET_SET.u8GSM_CSQ,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        g_SysInfo.gpsHandle.u8StlNum,
+	        g_SysInfo.EXTIO.bits.IN_ACC,
+	        g_Setting.GSM_SET.NET_SET.APN,
+	        g_Setting.GSM_SET.tServerIP[SOCKET_BANK_DEF].u32ADDR._U8[3],
+	        g_Setting.GSM_SET.tServerIP[SOCKET_BANK_DEF].u32ADDR._U8[2],
+	        g_Setting.GSM_SET.tServerIP[SOCKET_BANK_DEF].u32ADDR._U8[1],
+	        g_Setting.GSM_SET.tServerIP[SOCKET_BANK_DEF].u32ADDR._U8[0],
+	        g_Setting.GSM_SET.tServerIP[SOCKET_BANK_DEF].u16Port,
+	        g_Setting.GSM_SET.tServerName[SOCKET_BANK_DEF].szADDR,
+	        g_Setting.GSM_SET.tServerName[SOCKET_BANK_DEF].u16Port,
+	        //g_Setting.GSM_SET.NET_SET.SendNormal,
+	        DATALOG_UPLOAD_MAX,
+	        g_Setting.GSM_SET.NET_SET.SendStandby,
+	        g_Setting.SpeedSetHandle.u16Trig, // Heinz
+	        g_Setting.SpeedSetHandle.fGain,
+	        g_Setting.RPM_SetHandle.u16Trig,
+	        g_Setting.RPM_SetHandle.DIV,
+	        g_Setting.ENABLE_SET.bits.CAN_SPEED);
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void DataBuild_FPTC(uint8_t SocketNum, char* EventCode)
+{
+	uint8_t Buff_FPTC[UART_BASE_BUFFER_SIZE]; // Heinz
+	char *pStr_FPTC;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+
+
+	memset(Buff_FPTC, 0x00, UART_BASE_BUFFER_SIZE);
+
+	pStr_FPTC = (char*)Buff_FPTC;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE
+	        && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		g_SysInfo.gpsHandle.bStatus = TRUE;
+	}
+#endif
+
+	if((g_SysInfo.gpsHandle.bStatus == FALSE ) && (!strcmp(EventCode,"000")))
+	{
+		return; // Heinz // Tai So 20170207
+	}
+	else
+	{
+		sprintf(pStr_FPTC,"%d,$,%s,%s,%c,%s,%s,%c%02d%02d.%04d,%c%03d%02d.%04d,%03d,%04d,%03d,%s,#\r\n",
+		        SocketNum,
+		        g_Setting.tBusInfo.cBus_ID,
+		        "",
+		        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+		        szDateStr,
+		        szTimeStr,
+		        g_SysInfo.gpsHandle.gpsLat.cIndicator,
+		        g_SysInfo.gpsHandle.gpsLat.u8dd,
+		        g_SysInfo.gpsHandle.gpsLat.u8mm,
+		        g_SysInfo.gpsHandle.gpsLat.u16mmmm,
+		        g_SysInfo.gpsHandle.gpsLon.cIndicator,
+		        g_SysInfo.gpsHandle.gpsLon.u8ddd,
+		        g_SysInfo.gpsHandle.gpsLon.u8mm,
+		        g_SysInfo.gpsHandle.gpsLon.u16mmmm,
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+		        (u16hmSpeedAvg/10), // Heinz	// FMS speed
+#else
+		        M_2_KM(g_SysInfo.VehicleState.u32Speed),
+#endif
+		        g_SysInfo.VehicleState.u16RPM,
+		        g_SysInfo.gpsHandle.u16Course,
+		        EventCode);
+
+		DataSend_AddDataToQue(Buff_FPTC, strlen(pStr_FPTC));
+	}
+}
+
+void DataBuild_CTPI(uint8_t SocketNum, FlagStatus SOS)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+
+
+	pStr = (char*)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE
+	        && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		g_SysInfo.gpsHandle.bStatus = TRUE;
+	}
+#endif
+
+	//BUS_ID 經測試固定10碼即可
+	sprintf(pStr, "%d,$,%-10s,%s,%s,%c,%c%03d%02d.%04d,%c%02d%02d.%04d,%03d,%03d,%08.0f,%04d,,,,%d,%d,%d,%d,,#\r\n",
+	        SocketNum,
+	        g_Setting.tBusInfo.cBus_ID,
+	        szDateStr,
+	        szTimeStr,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        g_SysInfo.gpsHandle.gpsLon.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLon.u8ddd,
+	        g_SysInfo.gpsHandle.gpsLon.u8mm,
+	        g_SysInfo.gpsHandle.gpsLon.u16mmmm,
+	        g_SysInfo.gpsHandle.gpsLat.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLat.u8dd,
+	        g_SysInfo.gpsHandle.gpsLat.u8mm,
+	        g_SysInfo.gpsHandle.gpsLat.u16mmmm,
+	        g_SysInfo.gpsHandle.u16Course,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed),
+	        M_2_10M(g_SysInfo.VehicleState.dDistance),
+	        g_SysInfo.VehicleState.u16RPM,
+	        (g_SysInfo.VehicleState.ACC_ON == TRUE) ? 1 : 0,
+	        0,
+	        0,
+	        0);
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void DataStream_DataBuild(void)
+{
+	if(HAL_RTC_GetState(&hrtc) != HAL_OK)
+		return;
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_JASS
+	DataBuild_JASS(SOCKET_BANK_DEF, RESET);
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_EPA
+	DataBuild_EPA(SOCKET_BANK_DEF, EPA_NORMAL, STR_NULL);
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_EUPFIN
+	DataBuild_EUPFIN(SOCKET_BANK_DEF);
+#endif
+
+	// Heinz
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_SKYEYE
+	//#if CUSTOMER_TYPE != CUSTOMER_EUPFIN_B
+	//DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_NORMAL, STR_NULL);
+	//#endif
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_FPTC
+	DataBuild_FPTC(SOCKET_BANK_DEF, FPTC_EVENT_NORMAL);	// Heinz 20170207
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_CPTI
+	DataBuild_CTPI(SOCKET_BANK_DEF, RESET);
+#endif
+
+#if NET_EXTDATA_FORMAT == NET_DATA_FORMAT_EPA
+	DataBuild_EPA(SOCKET_BANK_EXT, EPA_NORMAL, STR_NULL);
+#endif
+
+#if NET_EXTDATA_FORMAT == NET_DATA_FORMAT_JASS
+	DataBuild_JASS(SOCKET_BANK_EXT, RESET);
+#endif
+}
+
+static bool DataStream_Proc(void)
+{
+	DataStream_DataBuild();
+
+	return TRUE;
+}
+
+void DataStream_BuffBuild(uint8_t SocketNum, uint8_t *Buf, uint16_t BufLen)
+{
+	char *pStr;
+	uint16_t DataLen;
+
+
+	pStr = (char*)Buff;
+
+	sprintf(pStr, "%d,", SocketNum);
+
+	pStr += DataLen = strlen(pStr);
+
+	memcpy(pStr, Buf, BufLen);
+
+	DataLen += BufLen;
+
+	DataSend_AddDataToQue(Buff, DataLen);
+}
+
+void EventBuild_JASS(uint8_t SocketNum, char* EventStr, char* EventArg)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+
+
+	pStr = (char*)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE
+	        && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		g_SysInfo.gpsHandle.bStatus = TRUE;
+	}
+#endif
+
+	sprintf(pStr, "%d,", SocketNum);
+
+	pStr += strlen(pStr);
+
+	sprintf(pStr, "^,%s,%s,%s,%s,%s,%c,%c%03d%02d.%04d,%c%02d%02d.%04d,%d,%03d,%03d,0,#\r\n",
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+	        g_Setting.szBus_SN,
+#else
+	        g_Setting.tBusInfo.cBus_ID,
+#endif
+	        EventStr,
+	        szDateStr,
+	        szTimeStr,
+	        EventArg,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        g_SysInfo.gpsHandle.gpsLon.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLon.u8ddd,
+	        g_SysInfo.gpsHandle.gpsLon.u8mm,
+	        g_SysInfo.gpsHandle.gpsLon.u16mmmm,
+	        g_SysInfo.gpsHandle.gpsLat.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLat.u8dd,
+	        g_SysInfo.gpsHandle.gpsLat.u8mm,
+	        g_SysInfo.gpsHandle.gpsLat.u16mmmm,
+	        g_Setting.ENABLE_SET.bits.ASCII_UNI,
+	        g_SysInfo.gpsHandle.u16Course,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed));
+
+	if(strncmp(EventStr, STR_EVENT_SD_ERROR, strlen(STR_EVENT_SD_ERROR)) == 0)
+	{
+		if(strlen(EventArg) == 0)
+		{
+			//GSM_SocketDataTypeDef SocketData;
+
+			//SocketData.SocketNum = GSM_GetSocketNum(SOCKET_BANK_DEF);
+
+			//SocketData.cData = pStr;
+
+			//SocketData.u16DataLen = strlen(pStr);
+
+			//GSM_SendData(SocketData);
+
+			return;
+		}
+
+		if(strncmp(EventArg, STR_EVENT_ARGUMENT_SMS, strlen(STR_EVENT_ARGUMENT_SMS)) == 0)
+		{
+			GSM_MsgDataTypeDef MsgData;
+
+			if(strlen(g_Setting.GSM_SET.PhoneBank[0].cNumber) == 0)
+				return;
+
+			sprintf(pStr, "%s,%s,%s\x1A",
+			        g_Setting.tBusInfo.cBus_ID,
+			        g_Setting.tBusInfo.szBus_SN,
+			        EventStr);
+
+			strcpy(MsgData.pcPhoneNum, g_Setting.GSM_SET.PhoneBank[0].cNumber);
+
+			MsgData.cData = pStr;
+
+			MsgData.u16DataLen = strlen(pStr);
+
+			//GSM_SendMessage(MsgData);
+
+			return;
+		}
+	}
+
+	pStr = (char*)Buff;
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void EventBuild_CPTI(uint8_t SocketNum, char* EventStr, char* EventArg)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+
+
+	pStr = (char*)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+
+#if ENABLE_GPS_LAST_FIXED
+	if(g_SysInfo.gpsHandle.bStatus == FALSE
+	        && (g_SysInfo.gpsHandle.gpsLocation.dLatitude || g_SysInfo.gpsHandle.gpsLocation.dLongitude))
+	{
+		Coordinate_LatitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLatitude, &g_SysInfo.gpsHandle.gpsLat);
+
+		Coordinate_LongitudeDDtoDMM(g_SysInfo.gpsHandle.gpsLocation.dLongitude, &g_SysInfo.gpsHandle.gpsLon);
+
+		g_SysInfo.gpsHandle.bStatus = TRUE;
+	}
+#endif
+
+	//BUS_ID 經測試固定10碼即可
+	sprintf(pStr, "%d,^,%-10s,%s,%s,%s,%s,%c,%c%03d%02d.%04d,%c%02d%02d.%04d,%d,%03d,%03d,#\r\n",
+	        SocketNum,
+	        g_Setting.tBusInfo.cBus_ID,
+	        EventStr,
+	        szDateStr,
+	        szTimeStr,
+	        EventArg,
+	        (g_SysInfo.gpsHandle.bStatus == TRUE) ? 'A' : 'V',
+	        g_SysInfo.gpsHandle.gpsLon.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLon.u8ddd,
+	        g_SysInfo.gpsHandle.gpsLon.u8mm,
+	        g_SysInfo.gpsHandle.gpsLon.u16mmmm,
+	        g_SysInfo.gpsHandle.gpsLat.cIndicator,
+	        g_SysInfo.gpsHandle.gpsLat.u8dd,
+	        g_SysInfo.gpsHandle.gpsLat.u8mm,
+	        g_SysInfo.gpsHandle.gpsLat.u16mmmm,
+	        g_Setting.ENABLE_SET.bits.ASCII_UNI,
+	        g_SysInfo.gpsHandle.u16Course,
+	        M_2_KM(g_SysInfo.VehicleState.u32Speed));
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void EventBuild_KEYIN(uint8_t SocketNum, char* EventArg)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	time_t rawtime;
+
+
+	pStr = (char*)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+	sprintf(pStr, "%d,%s%s,%s,%s,%s,%s\r\n", // Heinz
+	        SocketNum,
+	        STR_AS_LCD_KEYIN,
+	        g_Setting.tBusInfo.cBus_ID,
+	        "",
+	        szDateStr,
+	        szTimeStr,
+	        EventArg);
+
+	DataSend_AddDataToQue(Buff, strlen(pStr));
+}
+
+void DataStream_EventBuild(char* EventStr, char* EventArg)
+{
+	if(HAL_RTC_GetState(&hrtc) != HAL_OK)
+		return;
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_JASS
+	if(strncmp(EventStr, STR_EVENT_MSG, strlen(STR_EVENT_MSG)) != 0
+	        && strncmp(EventStr, STR_EVENT_KEYIN, strlen(STR_EVENT_KEYIN)) != 0
+	        && strncmp(EventStr, STR_EVENT_BARCODE, strlen(STR_EVENT_BARCODE)) != 0)
+	{
+#if ENABLE_BGTVT_2014
+		if(strncmp(EventStr, STR_EVENT_SOS, strlen(STR_EVENT_SOS)) == 0)
+		{
+			DataBuild_JASS(SOCKET_BANK_DEF, SET);
+		}
+		else if(strncmp(EventStr, BGTVT_EVENT_IO_CHANGE, strlen(BGTVT_EVENT_IO_CHANGE)) == 0 )
+		{
+			DataBuild_JASS(SOCKET_BANK_DEF, RESET);
+		}
+		else
+		{
+			EventBuild_JASS(SOCKET_BANK_DEF, EventStr, EventArg);
+		}
+
+#else
+		if(strncmp(EventStr, STR_EVENT_SOS, strlen(STR_EVENT_SOS)) == 0)
+		{
+			DataBuild_JASS(SOCKET_BANK_DEF, SET);
+		}
+		else
+		{
+			EventBuild_JASS(SOCKET_BANK_DEF, EventStr, EventArg);
+		}
+#endif
+	}
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_EPA
+	if(strncmp(EventStr, STR_EVENT_PWR_ON, strlen(STR_EVENT_PWR_ON)) == 0
+	        || strncmp(EventStr, STR_EVENT_PWR_DOWN, strlen(STR_EVENT_PWR_DOWN)) == 0
+	        || strncmp(EventStr, STR_EVENT_KEY_ON, strlen(STR_EVENT_KEY_ON)) == 0
+	        || strncmp(EventStr, STR_EVENT_KEY_OFF, strlen(STR_EVENT_KEY_OFF)) == 0)
+	{
+		DataBuild_EPA(SOCKET_BANK_DEF, EPA_NORMAL, STR_NULL);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_PING, strlen(STR_EVENT_PING)) == 0)
+	{
+		DataBuild_EPA(SOCKET_BANK_DEF, EPA_PING, STR_NULL);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_BARCODE, strlen(STR_EVENT_BARCODE)) == 0)
+	{
+		DataBuild_EPA(SOCKET_BANK_DEF, EPA_NORMAL, EventArg);
+	}
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_SKYEYE
+#if ENABLE_DRIVER_LOGOUT
+	if(strncmp(EventStr, STR_EVENT_DRIVER_ID1, strlen(STR_EVENT_DRIVER_ID1)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_LOGIN, STR_NULL);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_DRIVER_ID0, strlen(STR_EVENT_DRIVER_ID0)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_LOGOUT, STR_NULL);
+	}
+#else // ENABLE_DRIVER_LOGOUT
+	if(strncmp(EventStr, STR_EVENT_DRIVER_ID, strlen(STR_EVENT_DRIVER_ID)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_LOGIN, STR_NULL);
+	}
+#endif // ENABLE_DRIVER_LOGOUT
+
+	if(strncmp(EventStr, STR_EVENT_SOS, strlen(STR_EVENT_SOS)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_SOS, EventArg);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_UPGRADE_OK, strlen(STR_EVENT_UPGRADE_OK)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_UPGRADE_OK, EventArg);
+	}
+
+#if CUSTOMER_TYPE == CUSTOMER_EUPFIN_B  || CUSTOMER_TYPE == CUSTOMER_NORMAL // Heinz
+	if(strncmp(EventStr, STR_EVENT_KEY_ON, strlen(STR_EVENT_KEY_ON)) == 0)
+	{
+		// RTOSprintf("\r\n> KEY ON ...");
+
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_KEY_ON, EventArg);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_KEY_OFF, strlen(STR_EVENT_KEY_OFF)) == 0)
+	{
+		///RTOSprintf("\r\n> KEY OFF...");
+
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_KEY_OFF, EventArg);
+	}
+
+	if(strncmp(EventStr, SKYEYE_EVENT_SPEED, strlen(SKYEYE_EVENT_SPEED) ) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF,  SKYEYE_EVENT_SPEED, EventArg);
+	}
+
+	// Heinz
+	if(strncmp(EventStr, STR_EVENT_PING, strlen(STR_EVENT_PING)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_PING, EventArg);
+	}
+
+	// Heinz
+	if(strncmp(EventStr, STR_AS_STATUS_CHECK, strlen(STR_AS_STATUS_CHECK)) == 0)
+	{
+		DataBuild_CHK(SOCKET_BANK_DEF);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_BATTERY_ERROR, strlen(STR_EVENT_BATTERY_ERROR)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_BATTERY_ERROR, EventArg);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_UPGRADE_START, strlen(STR_EVENT_UPGRADE_START)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_UPGRADE_START, EventArg);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_DELETE_FILE, strlen(STR_EVENT_DELETE_FILE)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_DELETE_FILE, EventArg);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_SD_FORMAT, strlen(STR_EVENT_SD_FORMAT)) == 0)
+	{
+		DataBuild_SKYEYES(SOCKET_BANK_DEF, SKYEYE_EVENT_SD_FORMAT, EventArg);
+	}
+#endif
+
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_FPTC
+	if(strncmp(EventStr, STR_EVENT_MSG, strlen(STR_EVENT_MSG)) == 0)
+	{
+		DataBuild_FPTC(SOCKET_BANK_DEF, EventArg); // Heinz 20170207
+	}
+
+	if(strncmp(EventStr, STR_EVENT_KEYIN, strlen(STR_EVENT_KEYIN)) == 0)
+	{
+		EventBuild_KEYIN(SOCKET_BANK_DEF, EventArg);
+
+		// Heinz
+		Buzzer_Beep(BEEP_SHORT, 2);
+	}
+#endif
+
+#if NET_DATA_FORMAT == NET_DATA_FORMAT_CPTI
+	if(strncmp(EventStr, STR_EVENT_PWR_DOWN, strlen(STR_EVENT_PWR_DOWN)) == 0
+	        || strncmp(EventStr, CPTI_EVENT_SPEED_L3, strlen(CPTI_EVENT_SPEED_L3)) == 0
+	        || strncmp(EventStr, CPTI_EVENT_RPM_OVER, strlen(CPTI_EVENT_RPM_OVER)) == 0
+	        || strncmp(EventStr, CPTI_EVENT_LDWS, strlen(CPTI_EVENT_LDWS)) == 0
+	        || strncmp(EventStr, CPTI_EVENT_TPMS, strlen(CPTI_EVENT_TPMS)) == 0)
+	{
+		if(strncmp(EventStr, STR_EVENT_PWR_DOWN, strlen(STR_EVENT_PWR_DOWN)) == 0)
+		{
+			EventBuild_CPTI(SOCKET_BANK_DEF, CPTI_EVENT_PWR_DOWN,CPTI_EVENT_PWR_DOWN_VALUE);
+		}
+		else
+		{
+			EventBuild_CPTI(SOCKET_BANK_DEF, EventStr, EventArg);
+		}
+	}
+#endif
+
+#if NET_EXTDATA_FORMAT == NET_DATA_FORMAT_EPA
+	if(strncmp(EventStr, STR_EVENT_PWR_ON, strlen(STR_EVENT_PWR_ON)) == 0
+	        || strncmp(EventStr, STR_EVENT_PWR_DOWN, strlen(STR_EVENT_PWR_DOWN)) == 0
+	        || strncmp(EventStr, STR_EVENT_KEY_ON, strlen(STR_EVENT_KEY_ON)) == 0
+	        || strncmp(EventStr, STR_EVENT_KEY_OFF, strlen(STR_EVENT_KEY_OFF)) == 0)
+	{
+		DataBuild_EPA(SOCKET_BANK_EXT, EPA_NORMAL, STR_NULL);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_PING, strlen(STR_EVENT_PING)) == 0)
+	{
+		DataBuild_EPA(SOCKET_BANK_EXT, EPA_PING, STR_NULL);
+	}
+
+	if(strncmp(EventStr, STR_EVENT_BARCODE, strlen(STR_EVENT_BARCODE)) == 0)
+	{
+		DataBuild_EPA(SOCKET_BANK_EXT, EPA_NORMAL, EventArg);
+	}
+#endif
+
+#if NET_EXTDATA_FORMAT == NET_DATA_FORMAT_JASS
+	if(strncmp(EventStr, STR_EVENT_MSG, strlen(STR_EVENT_MSG)) != 0
+	        && strncmp(EventStr, STR_EVENT_KEYIN, strlen(STR_EVENT_KEYIN)) != 0
+	        && strncmp(EventStr, STR_EVENT_BARCODE, strlen(STR_EVENT_BARCODE)) != 0)
+	{
+#if ENABLE_BGTVT_2014
+		if(strncmp(EventStr, STR_EVENT_SOS, strlen(STR_EVENT_SOS)) == 0)
+		{
+			DataBuild_JASS(SOCKET_BANK_EXT, SET);
+		}
+		else if(strncmp(EventStr, BGTVT_EVENT_IO_CHANGE, strlen(BGTVT_EVENT_IO_CHANGE)) == 0 )
+		{
+			DataBuild_JASS(SOCKET_BANK_EXT, RESET);
+		}
+		else
+		{
+			EventBuild_JASS(SOCKET_BANK_EXT, EventStr, EventArg);
+		}
+
+#else
+		if(strncmp(EventStr, STR_EVENT_SOS, strlen(STR_EVENT_SOS)) == 0)
+		{
+			DataBuild_JASS(SOCKET_BANK_EXT, SET);
+		}
+		else
+		{
+			EventBuild_JASS(SOCKET_BANK_EXT, EventStr, EventArg);
+		}
+#endif
+	}
+#endif
+}
+
+void UPSPEEDBuild(uint8_t SocketNum)
+{
+	char *pStr;
+	char szDateStr[10];
+	char szTimeStr[10];
+	uint8_t CntSpeed;
+	uint8_t UPSPEED[UPSPEED_HOW_LONG_SEC+1];
+	time_t rawtime;
+
+
+	memset(Buff, 0x00, sizeof(Buff));
+
+	pStr = (char*)Buff;
+
+	rawtime = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+	rawtime -= MINUTE_2_SECOND(1);
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime(&rawtime));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime(&rawtime));
+
+	sprintf(pStr, "%d,*,%s,%s,%s",
+	        SocketNum,
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+	        g_Setting.szBus_SN,
+#else
+	        g_Setting.tBusInfo.cBus_ID,
+#endif
+	        szDateStr,
+	        szTimeStr);
+
+	// 判別秒數偏移  將偏移的秒差重新排列
+	if(g_SysInfo.tSpeedInfo.u8UpSpeed[UPSPEED_HOW_LONG_SEC] == 30)
+	{
+		memcpy(UPSPEED, g_SysInfo.tSpeedInfo.u8UpSpeed,30);
+	}
+	else
+	{
+		memcpy(UPSPEED, &g_SysInfo.tSpeedInfo.u8UpSpeed[g_SysInfo.tSpeedInfo.u8UpSpeed[UPSPEED_HOW_LONG_SEC]],
+		       UPSPEED_HOW_LONG_SEC-g_SysInfo.tSpeedInfo.u8UpSpeed[UPSPEED_HOW_LONG_SEC]);
+
+		memcpy(&UPSPEED[UPSPEED_HOW_LONG_SEC-g_SysInfo.tSpeedInfo.u8UpSpeed[UPSPEED_HOW_LONG_SEC]],
+		       &g_SysInfo.tSpeedInfo.u8UpSpeed[0],g_SysInfo.tSpeedInfo.u8UpSpeed[UPSPEED_HOW_LONG_SEC]);
+	}
+
+	pStr += strlen(pStr);
+
+	for(CntSpeed=0; CntSpeed<UPSPEED_HOW_LONG_SEC; CntSpeed++)
+	{
+		sprintf(pStr, ",%03d",UPSPEED[CntSpeed]);
+
+		pStr += 4;
+	}
+
+	sprintf(pStr, ",#\r\n");
+
+	pStr += strlen(pStr);
+
+	DataSend_AddDataToQue((uint8_t*)Buff, ((int)pStr - (int)&Buff));
+}
+

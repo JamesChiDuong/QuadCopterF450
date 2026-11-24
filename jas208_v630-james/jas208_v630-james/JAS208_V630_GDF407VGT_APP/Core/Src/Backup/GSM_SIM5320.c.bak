@@ -1,0 +1,5177 @@
+//============================================================================//
+// Includes
+//============================================================================//
+/*
+#include "GSM_SIM5320.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Buzzer.h"
+#include "DataLog.h"
+#include "DataSend.h"
+#include "Default.h"
+#include "GSM_Driver.h"
+#include "Protocol.h"
+#include "SD_Module.h"
+#include "TTIA.h"
+*/
+
+#if ENABLE_GSM_SIM5320
+//============================================================================//
+// Private define
+//============================================================================//
+//
+#define	GSM_BAUDRATE_DEF		BR_115200bps
+//
+#define	GSM_BAUDRATE_SET		BR_921600bps
+//
+#define	MAX_GET_PKG_SIZE		UART_MAX_BUFFER_SIZE
+// How many command it can process at the same time
+#define	MAX_DATA_QUEUE_NUM		32
+
+//
+#define ENABLE_ASSIST_GPS		(0)
+
+//
+#define	STR_GREATER_THAN		'>'
+
+//
+#define	STR_MODULE_START		"START"
+
+//
+#define	STR_RESPONSE_OK			"OK"
+//
+#define	STR_RESPONSE_ERROR		"ERROR"
+
+//
+#define STR_RESPONSE_RING		"RING"
+//
+#define STR_RESPONSE_BUSY		"BUSY"
+//
+#define STR_RESPONSE_NO_CARRIER	"NO CARRIER"
+//
+#define STR_RESPONSE_NO_ANSWER	"NO ANSWER"
+
+//
+#define STR_CONNECT_OK			"Connect ok"
+//
+#define STR_CONNECT_FAIL		"Connect fail"
+
+//
+#define STR_SEND_OK				"Send ok"
+//
+#define STR_SEND_FAIL			"Send fail"
+
+//
+#define	STR_CME_ERROR			"+CME ERROR:"
+//
+#define STR_PDP_DEACT			"+PDP: DEACT"
+//
+#define STR_TCP_BUSY			"TCP busy"
+//
+#define STR_IPCLOSE				"+IPCLOSE:"
+//
+#define STR_NET_CLOSE			"Network closed"
+//
+#define STR_NET_NOT_CREA		"+IP ERROR: Connection is not created"
+//
+#define STR_NET_CLOSE_FAIL		"+IP ERROR: Netclose failed for socket opened"
+//
+#define STR_NET_NOT_OPEN		"+IP ERROR: Network not opened"
+//
+#define STR_CIPSEND             " AT+CIPSEND"
+
+//
+#define	STR_CMTI				"+CMTI:"
+//
+#define	STR_CMGR				"+CMGR:"
+//
+#define	STR_CSQ					"+CSQ:"
+//
+#define	STR_COPS				"+COPS:"
+//
+#define	STR_RECEIVE				"+RECEIVE"
+//
+#define	STR_CFTPGETFILE			"+CFTPGETFILE:"
+//
+#define	STR_CFTPPUTFILE			"+CFTPPUTFILE:"
+//
+#define	STR_FSATTRI				"+FSATTRI:"
+//
+#define	STR_CNSMOD				"+CNSMOD:"
+//
+#define	STR_CDNSGIP				"+CDNSGIP:"
+//
+#define	STR_CASSISTLOC			"+CASSISTLOC:"
+
+//
+#define	STR_GPS_STOP			"+CGPS: 0"
+//
+#define	STR_GPS_INFO_START		"AT+CGPSINFOCFG=5,3"
+//
+#define	STR_GPS_INFO_STOP		"AT+CGPSINFOCFG=0"
+
+//
+#define	FILENAME_ALL_FILE		"*.*"
+
+//============================================================================//
+// Private typedef
+//============================================================================//
+//
+typedef enum
+{
+	///Star
+	AT_CMD_BEGIN,
+	AT_ECHO_SET,
+
+	//
+	AT_REQUEST_IMEI,
+	AT_REQUEST_IMSI,
+
+	//
+#if !ENABLE_GPS_MODULE
+
+#if ENABLE_ASSIST_GPS
+	AT_AGPS_SERVER,
+	AT_GPS_CLEAR,
+	AT_GPS_START,
+	AT_GPS_START_INFO,
+#else
+	AT_GPS_START,
+	AT_GPS_START_INFO,
+#endif // ENABLE_ASSIST_GPS
+
+#endif // ENABLE_GPS_MODULE
+
+	//
+	AT_GPIO_SET,
+	AT_CME_ERR_EN,
+	AT_URC_OUTPUT_SET,
+
+	//
+	AT_MSG_DEL_ALL,
+
+	//
+	AT_MSG_FORMAT,
+	AT_MSG_STORAGE,
+	AT_MSG_NEW,
+	//
+	AT_CNMP,  ///Heinz
+
+	/*
+	//
+		AT_NET_SET_SOCKET_PDP,
+		AT_NET_SET_SOCKET,
+		AT_NET_SOCKET_CONFIG,
+		AT_NET_SHOW_MODE,
+		AT_NET_OPEN,
+		AT_NET_RESOLVE_NAME,
+		AT_NET_CONNECT,
+		AT_NET_DISCONN,
+		AT_NET_CLOSE,
+		//
+		AT_SEND_DATA,
+		AT_SEND_DATA_BEGIN,
+		//
+		AT_SEND_MSG,
+		AT_SEND_MSG_BEGIN,
+	*/
+
+	//
+	AT_AUDIO_SET_MIC,
+	AT_AUDIO_SET_SPK,
+	AT_SPK_VOLUME_INIT,
+	//
+	AT_MIC_GAIN_SET, //Heinz
+	AT_MIC_VOL_SET,	 //Heinz
+	//
+	AT_SPK_GAIN_SET, //Heinz
+	AT_SPK_VOL_SET,	 //Heinz
+
+	//
+	AT_CGATT_RD,
+	//
+
+	AT_FTP_SET_MODE,
+	AT_FTP_SET_SERVER,
+	AT_FTP_SET_PORT,
+	AT_FTP_SET_USERNAME,
+	AT_FTP_SET_PASSWORD,
+
+	//
+	AT_NET_SET_SOCKET_PDP,
+	AT_NET_SET_SOCKET,
+	AT_NET_SOCKET_CONFIG,
+	AT_NET_SHOW_MODE,
+	AT_NET_OPEN,
+	AT_NET_RESOLVE_NAME,
+	AT_NET_CONNECT,
+	AT_NET_DISCONN,
+	AT_NET_CLOSE,
+	//
+	AT_SEND_DATA,
+	AT_SEND_DATA_BEGIN,
+
+	//
+	AT_SEND_MSG,
+	AT_SEND_MSG_BEGIN,
+
+	//
+	AT_SMS_READ,
+	AT_SMS_DELETE,
+
+	//
+	AT_SPK_VOLUME_SET,
+	//
+	AT_CALL_DIAL,
+	AT_CALL_ANSWER,
+	AT_CALL_HOOK,
+	//
+	AT_CMD_CSQ,
+	AT_BAUDRATE_DEF,
+	AT_BAUDRATE_SET,
+
+	//
+	AT_GPS_TURN_ON,
+	AT_GPS_TURN_OFF,
+	AT_GPS_INFO_CONFIG,
+	AT_GPS_INFO_CLEAR,
+
+	AT_CELL_LOCATION,
+
+	//
+	AT_FTP_GET_FILE,
+	AT_FTP_PUT_FILE,
+	//
+	AT_FS_REN_FILE,
+	AT_FS_DEL_FILE,
+	AT_FS_GET_SIZE,
+	AT_FS_GET_FILE,
+	AT_FS_SEND_FILE,
+	//
+	AT_CMD_TEST,
+	//
+	AT_CMD_BREAK,
+
+} AT_CMD_t;
+///
+
+
+// GSM command status
+typedef enum
+{
+	//
+	CMD_INIT = 0,
+	//
+	CMD_SEND,
+	//
+	CMD_OK,
+	//
+	CMD_ERROR,
+} CMD_STATE_t;
+
+//============================================================================//
+#pragma pack(1)
+//
+typedef struct
+{
+	//
+	bool CREATE;
+	//
+	bool CONN;
+	//
+	uint8_t NUM;
+
+} SOCKET_STATE_t;
+
+//
+typedef struct
+{
+	//
+	uint8_t SocketNum;
+	//
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	//
+	uint16_t BufLen;
+
+} DATA_SEND_t;
+
+#pragma pack()
+
+//============================================================================//
+// Private macro
+//============================================================================//
+
+//============================================================================//
+// Private variables
+//============================================================================//
+//
+bool bGSM_PowerOn = FALSE;
+
+//
+DATA_QUEUE_t gGSM_CmdQue[MAX_DATA_QUEUE_NUM];
+// Write data queue index
+uint8_t ucGSM_QueWI;
+// Read data queue index
+uint8_t ucGSM_QueRI;
+// Data queue receive index
+uint8_t ucGSM_RxIdx;
+
+// 目前 AT command
+AT_CMD_t gGSM_CurrCmd = AT_CMD_BREAK;
+// 下一個 AT command
+AT_CMD_t gGSM_NextCmd = AT_CMD_BREAK;
+
+//
+CMD_STATE_t gCMD_STATE;
+//
+uint8_t ucGSM_CmdInterval;
+//
+uint16_t ucGSM_CmdTimeout;
+//
+uint8_t ucGSM_CmdErrCnt;
+
+//
+SOCKET_STATE_t SocketState[MAX_SOCKET_BANK];
+//
+uint8_t ucGSM_SocketInit;
+//
+uint8_t ucGSM_SocketConnCnt;
+
+//
+char szSendCmd[UART_MAX_BUFFER_SIZE];
+//
+DATA_SEND_t gGSM_DataSend = {0};
+//
+DATA_SEND_t gGSM_MsgSend = {0};
+
+//
+bool bGSM_Operator;
+//
+bool bGSM_Dialling;
+//
+bool bGSM_Calling;
+//
+bool bGSM_WriteSocket;
+
+//
+uint8_t u8GSM_CSQ;
+//
+uint8_t ucGSM_NetMode;
+
+//
+bool bGSM_GpsPower;
+//
+bool bGSM_GpsData;
+//
+GPS_DATA_t GSM_GpsData;
+
+//
+bool bGSM_TxUpgradeFile = FALSE;
+//
+bool bGSM_RxUpgradeFile = FALSE;
+
+//
+//static bool Reset_5320 = 0;
+//============================================================================//
+// Private function prototypes
+//============================================================================//
+
+//============================================================================//
+// Private functions
+//============================================================================//
+//
+static void SetTID_GsmProc(void);
+//
+static void ClrTID_GsmProc(void);
+
+//
+static void SIM5320_ReConnect(void);
+//
+static void SIM5320_ChkNetStatus(FlagStatus NET_FLAG);
+//
+static void SIM5320_ChkProcIdle(FlagStatus IDLE_FLAG);
+
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+// 	CPTI 嫌原音量太小 所以改以下做法
+static uint16_t SIM5320_GetSpkGain(void);
+#else
+//
+static uint8_t SIM5320_GetSpkGain(void);
+#endif
+
+//
+static void SIM5320_RetrieveUpgradeFile(void);
+
+//
+static void SIM5320_GpsClrReg(void);
+//
+static void SIM5320_GpsInfoCfg(FunctionalState STATE);
+
+//============================================================================//
+// Public variables
+//============================================================================//
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ClrReg(void)
+{
+	//
+	memset(gGSM_CmdQue, 0x00, sizeof(gGSM_CmdQue));
+	//
+	ucGSM_QueWI = 0;
+	//
+	ucGSM_QueRI = 0;
+	//
+	ucGSM_RxIdx = 0;
+
+	//
+	gGSM_CurrCmd = AT_CMD_BREAK;
+	//
+	gGSM_NextCmd = AT_CMD_BREAK;
+	//
+	gCMD_STATE = CMD_INIT;
+	//
+	ucGSM_CmdInterval = 0;
+	//
+	ucGSM_CmdTimeout = 0;
+	//
+	ucGSM_CmdErrCnt = 0;
+
+	//
+	memset(SocketState, 0x00, sizeof(SocketState));
+	//
+	ucGSM_SocketInit = SOCKET_BANK_DEF;
+	//
+	ucGSM_SocketConnCnt = 0;
+	//
+	SocketState[SOCKET_BANK_DEF].NUM = SOCKET_BANK_DEF;
+	//
+	SocketState[SOCKET_BANK_EXT].NUM = SOCKET_BANK_EXT;
+
+	//
+	memset(szSendCmd, 0x00, sizeof(szSendCmd));
+
+	//
+	bGSM_Operator = TRUE;
+	//
+	bGSM_Dialling = FALSE;
+	//
+	bGSM_Calling = FALSE;
+	//
+	bGSM_WriteSocket = FALSE;
+
+	//
+	memset(g_SysInfo.MobileInfo.IMSI, 0x00, OFFSET_SIZE(MOBILE_INFO_t, IMSI));
+	//
+	memset(g_SysInfo.MobileInfo.IMEI, 0x00, OFFSET_SIZE(MOBILE_INFO_t, IMEI));
+
+	//
+	u8GSM_CSQ = 99;
+	//
+	ucGSM_NetMode = 0;
+
+	//
+	DataSend_ClrCmdQue();
+	//
+	SIM5320_ChkNetStatus(RESET);
+	//
+	SIM5320_ChkProcIdle(RESET);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_PowerOn(void)
+{
+	HwCfg_PBClr(GSM_EN);
+	//
+	Delay_mS(250);
+
+	//
+	HwCfg_PBClr(GSM_PWR);
+
+	Delay_mS(500);  //Heinz
+	//
+	HwCfg_PBSet(GSM_PWR);
+	//
+	Delay_mS(500);  //Heinz 300
+	//
+	HwCfg_PBClr(GSM_PWR);
+
+	//
+	UART_Init(GSM_COMPORT_DEF, GSM_BAUDRATE_DEF);
+
+	//
+	RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_POWER_ON);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_PowerOff(void)
+{
+
+	HwCfg_PBSet(GSM_PWR);
+	Delay_mS(1200);  //Heinz
+	//HwCfg_PBClr(GSM_PWR); //AA001	//002	//777
+
+	HwCfg_PBSet(GSM_EN); //AA001
+
+	bGSM_PowerOn = FALSE;
+
+	//
+	RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_POWER_OFF);
+
+}
+
+//============================================================================//
+//
+uint8_t TID_GprsReset = TIMER_INVALID_ID;
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_Start(void)
+{
+	// 若還有命令正在執行則延後重置 GSM
+	if(SIM5320_ChkCmdBusy() == TRUE
+	        || SIM5320_GetDialStatus() == TRUE)
+		return FALSE;
+
+	//
+	ClrTID_GsmProc();
+	//
+	SIM5320_ClrReg();
+
+	//
+	//if(bGSM_PowerOn == TRUE)
+	{
+		//
+		SIM5320_PowerOff();
+		//
+		//return FALSE;
+	}
+
+	//
+
+	TID_GprsReset = TIMER_INVALID_ID;
+
+	Delay_mS(1500);  //Heinz
+	//
+	SIM5320_PowerOn();
+	//
+	SetTID_GsmProc();
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_Reset(uint8_t RestartTime)
+{
+
+	//char BufStr[20];  //Heinz
+	//
+	if(TID_GprsReset != TIMER_INVALID_ID)
+	{
+		//
+		if(RestartTime > RESET_DELAY_SHORT)
+			return;
+
+		//
+		SWTIM_ClrTimer(TID_GprsReset);
+		//
+		TID_GprsReset = TIMER_INVALID_ID;
+	}
+	//
+	TID_GprsReset = SWTIM_SetTimer(S_2_mS(RestartTime), TIMER_ONESHOT, SIM5320_Start);
+
+	//
+	RTOSprintf("> GSM will restart after %d second\r\n", RestartTime);
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_Init(void)
+{
+	//
+	SIM5320_Reset(RESET_DELAY_SHORT);
+	//
+	SIM5320_GpsClrReg();
+}
+
+//============================================================================//
+// GSM SEND
+//============================================================================//
+static void SIM5320_SendBuffer(uint8_t *Buf, uint16_t BufLen)
+{
+	//
+	UART_SendBuffer(GSM_COMPORT_DEF, Buf, BufLen);
+
+	//
+	if(g_Setting.DebugMode == DBG_GSM)
+	{
+		//
+		SET_SendBuffer(Buf, BufLen);
+	}
+}
+
+//============================================================================//
+// GSM SEND COMMAND
+//============================================================================//
+void SIM5320_SendCmd(void)
+{
+	//
+	SIM5320_SendBuffer((uint8_t*)szSendCmd, strlen(szSendCmd));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_BuildCmd(char *CMD)
+{
+	//
+	sprintf(szSendCmd, "%s\r\n", CMD);
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_SendData(GSM_SOCKET_DATA_t SocketData)
+{
+	char Buf[32];
+
+	//
+	gGSM_DataSend.SocketNum = SocketData.SocketNum;
+	//
+	memcpy(gGSM_DataSend.Buf, SocketData.Data, SocketData.u16DataLen);
+	//
+	gGSM_DataSend.u16BufLen = SocketData.u16DataLen;
+
+	//
+	sprintf(Buf, "AT+CIPSEND=%d,%d", gGSM_DataSend.SocketNum, gGSM_DataSend.u16BufLen);
+	//
+	SIM5320_BuildCmd(Buf);
+
+	//
+	gGSM_NextCmd = AT_SEND_DATA;
+	//
+	bGSM_WriteSocket = TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_ReSendData(void)
+{
+	//
+	if(gGSM_DataSend.u16BufLen == 0)
+		return;
+
+	//
+	DataStream_BuffBuild(gGSM_DataSend.SocketNum, gGSM_DataSend.Buf, gGSM_DataSend.u16BufLen);
+	//
+	memset(&gGSM_DataSend, 0x00, sizeof(DATA_SEND_t));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ReceiveData(GSM_SOCKET_DATA_t SocketData)
+{
+#if ENABLE_TTIA
+	//
+	TTIA_MsgReply(SocketData);
+#else
+	char szTEMP1[UART_MAX_BUFFER_SIZE];
+	char szTEMP2[UART_MAX_BUFFER_SIZE];
+
+	//
+	memcpy(szTEMP1, SocketData.Data, SocketData.u16DataLen);
+	//
+	Protocl_ChkCmdPkg(szTEMP1, szTEMP2);
+	//
+	if(strlen(szTEMP2) == 0)
+		return;
+
+	//
+	sprintf(szTEMP1, "%d,%s", SocketData.SocketNum, szTEMP2);
+	//
+	DataSend_AddDataToQue((uint8_t*)szTEMP1, strlen(szTEMP1));
+
+#endif
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ChkSQ(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CSQ", AT_CMD_CSQ);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_BaudrateDef(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+IPR=%d", AT_BAUDRATE_DEF, GSM_BAUDRATE_DEF);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void Qut_EC21_BaudrateSet(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+IPR=%d", AT_BAUDRATE_SET, GSM_BAUDRATE_SET);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_ChkCmdIdle(void)
+{
+	if(gGSM_CurrCmd == AT_CMD_BREAK
+	        || gGSM_CurrCmd == AT_CMD_CSQ
+	        || gGSM_CurrCmd == AT_CELL_LOCATION)
+	{
+		//
+		return TRUE;
+	}
+	else
+	{
+		//
+		return FALSE;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_NetOpen(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	//sprintf(pStr, "%d,AT+NETOPEN=\"TCP\",,1", AT_NET_OPEN);
+	sprintf(pStr, "%d,AT+NETOPEN=,,1", AT_NET_OPEN);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_NetClose(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+NETCLOSE", AT_NET_CLOSE);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ResolveName(uint8_t SocketNum)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CDNSGIP=\"%s\"",
+	        AT_NET_RESOLVE_NAME,
+	        g_Setting.TempSet.tServerName[SocketNum].szADDR);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_NetConnect(uint8_t SocketNum)
+{
+	uint8_t Buf[128];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CIPOPEN=%d,\"TCP\",\"%d.%d.%d.%d\",%d",
+	        AT_NET_CONNECT,
+	        SocketState[SocketNum].NUM,
+	        g_Setting.GSM_SET.tServerIP[SocketNum].u32ADDR._U8[3],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].u32ADDR._U8[2],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].u32ADDR._U8[1],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].u32ADDR._U8[0],
+	        g_Setting.GSM_SET.tServerIP[SocketNum].u16Port);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_NetConnInit(uint8_t SocketNum)
+{
+	//
+	if(strlen(g_Setting.TempSet.tServerName[SocketNum].szADDR) <= 6 )  //Heinz
+	{
+		//
+		SIM5320_NetConnect(SocketNum);
+	}
+	else
+	{
+		//
+		SIM5320_ResolveName(SocketNum);
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_NetDisconn(uint8_t SocketNum)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	//sprintf(pStr, "%d,AT+CIPCLOSE=%d", 		 ///heinz
+	sprintf(pStr, "%d,AT+QICLOSE=%d",
+	        AT_NET_DISCONN,
+	        SocketState[SocketNum].NUM);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ClrMsg(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CMGD=0,1", AT_SMS_DELETE);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_DeleteFile(char *FileName)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+FSDEL=%s", AT_FS_DEL_FILE, FileName);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ShowNetMode(FunctionalState STATE)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	if(STATE == ENABLE)
+	{
+		//
+		sprintf(pStr, "%d,AT+CNSMOD=1", AT_NET_SHOW_MODE);
+	}
+	else
+	{
+		//
+		sprintf(pStr, "%d,AT+CNSMOD=0", AT_NET_SHOW_MODE);
+	}
+
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_AutoNetMode(FunctionalState STATE)
+{
+	//
+	if(STATE == ENABLE)
+	{
+		//
+		SIM5320_BuildTestCmd("AT+CNMP=14");
+	}
+	else
+	{
+		//
+		SIM5320_BuildTestCmd("AT+CNMP=14");	 //Heinz
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GetCellLocation(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CASSISTLOC=1", AT_CELL_LOCATION);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ChkNetStatus(FlagStatus NET_FLAG)
+{
+	static uint8_t LED_COUNT = COUNT_LED_NET_DISCONN;
+	static uint16_t RECONN_COUNT = COUNT_NET_RECONNECT;
+	static uint16_t RESTART_COUNT = COUNT_GSM_RESTART;
+	static FunctionalState AutoNetMode = ENABLE;
+
+	//
+	LED_COUNT--;
+	//
+	if(LED_COUNT == 0)
+	{
+		//
+		if(SIM5320_GetPowerStatus() == TRUE)
+			HwCfg_LEDOn(LED_GPRS);
+
+		//
+		if(SIM5320_GetNetStatus() == TRUE)
+			LED_COUNT = COUNT_LED_NET_CONN;
+		else
+			LED_COUNT = COUNT_LED_NET_DISCONN;
+	}
+	else
+	{
+		//
+		HwCfg_LEDOff(LED_GPRS);
+	}
+
+	//
+	if(NET_FLAG == SET
+	        && SIM5320_GetNetStatus() == FALSE
+	        && SIM5320_ChkCmdIdle() == TRUE
+	        && TID_GprsReset == TIMER_INVALID_ID)
+	{
+		//
+		RECONN_COUNT--;
+	}
+	else
+	{
+		//
+		RECONN_COUNT = COUNT_NET_RECONNECT;
+	}
+	//
+	if(RECONN_COUNT == 0)
+	{
+
+#if ENABLE_MULTI_IP
+		//
+		SIM5320_NetDisconn(SOCKET_BANK_DEF);
+		//
+		SIM5320_NetDisconn(SOCKET_BANK_EXT);
+#else
+		//
+		SIM5320_NetDisconn(SOCKET_BANK_DEF);
+#endif
+
+		//
+		SIM5320_NetClose();
+		//
+		ucGSM_SocketInit = SOCKET_BANK_DEF;
+
+		//
+		if(AutoNetMode == ENABLE)
+			AutoNetMode = DISABLE;
+		else
+			AutoNetMode = ENABLE;
+		//
+		SIM5320_AutoNetMode(AutoNetMode);
+
+		//
+		RECONN_COUNT = COUNT_NET_RECONNECT;
+	}
+
+
+	//
+	if(NET_FLAG == SET
+	        && SIM5320_GetNetStatus() == FALSE
+	        && TID_GprsReset == TIMER_INVALID_ID)
+	{
+		//
+		RESTART_COUNT--;
+	}
+	else
+	{
+		//
+		RESTART_COUNT = COUNT_GSM_RESTART;
+	}
+	//
+	if(RESTART_COUNT == 0)
+	{
+		//
+		SIM5320_ReConnect();
+		//
+		SIM5320_Reset(RESET_DELAY_SHORT);
+		//
+		RESTART_COUNT = COUNT_GSM_RESTART;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ChkProcIdle(FlagStatus IDLE_FLAG)
+{
+	//static uint8_t IDLE_COUNT = COUNT_GSM_PROC_IDLE;
+	static uint16_t IDLE_COUNT = COUNT_GSM_PROC_IDLE;  //Heinz
+	static uint8_t GPS_COUNT = COUNT_GET_GPS_INFO;
+
+	//
+	if(IDLE_FLAG == RESET)
+	{
+		//
+		IDLE_COUNT = COUNT_GSM_PROC_IDLE;
+		//
+		GPS_COUNT = COUNT_GET_GPS_INFO;
+		//
+		return;
+	}
+
+	//
+	if(SIM5320_GetPowerStatus() == TRUE
+	        && SIM5320_ChkCmdBusy() == FALSE)
+	{
+		//
+		IDLE_COUNT--;
+		//
+		GPS_COUNT--;
+	}
+
+	//
+	if(IDLE_COUNT == 0)
+	{
+		//
+		SIM5320_ChkSQ();
+
+		//
+		if(bGSM_WriteSocket == TRUE)
+		{
+			//
+			SIM5320_ReSendData();
+		}
+
+		//
+		IDLE_COUNT = COUNT_GSM_PROC_IDLE;
+	}
+
+	//
+	if(GPS_COUNT == 0)
+	{
+#if ENABLE_CELL_LOCATION
+		//
+		SIM5320_GetCellLocation();
+#endif
+
+		//
+		GPS_COUNT = COUNT_GET_GPS_INFO;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ChkSendStatus(void)
+{
+	static uint16_t SEND_COUNT = COUNT_AT_CMD_TIMEOUT;
+
+	//
+	if(bGSM_WriteSocket == TRUE)
+	{
+		//
+		SEND_COUNT--;
+
+		//
+		if(SEND_COUNT == 0)
+		{
+			//
+			SIM5320_ReSendData();
+			//
+			bGSM_WriteSocket = FALSE;
+		}
+	}
+	else
+	{
+		//
+		SEND_COUNT = COUNT_AT_CMD_TIMEOUT;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ChkCallStatus(FlagStatus CALL_FLAG)
+{
+	static uint8_t CALL_COUNT = 0;
+	static uint8_t BID_RING = BUZZER_INVALID_ID;
+
+	//
+	bGSM_Calling = TRUE;
+
+	//
+	if(bGSM_Dialling == TRUE)
+	{
+		//
+		Buzzer_ClrRing(&BID_RING);
+		//
+		CALL_COUNT = 0;
+
+		//
+		bGSM_Calling = FALSE;
+
+		//
+		return;
+	}
+
+	//
+	if(CALL_FLAG == RESET)	 //Heinz
+	{
+#if CUSTOMER_TYPE != CUSTOMER_FORMOSA && CUSTOMER_TYPE != CUSTOMER_EUPFIN_B && CUSTOMER_TYPE == CUSTOMER_NORMAL
+		//
+		Buzzer_ClrRing(&BID_RING);
+		//
+		Buzzer_SetRing(&BID_RING, BEEP_SHORT, 3);
+#endif
+		//
+		CALL_COUNT = COUNT_CALL_TIMEOUT;
+		//
+		return;
+	}
+
+	//
+	if(CALL_COUNT)
+		CALL_COUNT--;
+	else
+		bGSM_Calling = FALSE;
+}
+
+//============================================================================//
+//
+#define XMODEM_CMD_START		'C'
+#define XMODEM_CMD_SOH			0x01
+#define XMODEM_CMD_STX			0x02
+#define XMODEM_CMD_EOT			0x04
+#define XMODEM_CMD_ACK			0x06
+#define XMODEM_CMD_NAK			0x15
+#define XMODEM_CMD_CAN			0x18
+#define XMODEM_CMD_CTRLZ		0x1A
+
+//
+#define XMODEM_PKG_SOH			0
+#define XMODEM_PKG_BLK			1
+#define XMODEM_PKG_NOT_BLK		2
+#define XMODEM_PKG_DATA0		3
+//
+#define XMODEM_STD_DATA_SIZE	128
+#define XMODEM_STD_PKG_SIZE		XMODEM_STD_DATA_SIZE + 5
+#define XMODEM_STD_PKG_CRC0		(XMODEM_PKG_DATA0 + XMODEM_STD_DATA_SIZE)
+#define XMODEM_STD_PKG_CRC1		(XMODEM_STD_PKG_CRC0 + 1)
+//
+#define XMODEM_EXP_DATA_SIZE	1024
+#define XMODEM_EXP_PKG_SIZE		XMODEM_EXP_DATA_SIZE + 5
+#define XMODEM_EXP_PKG_CRC0		(XMODEM_PKG_DATA0 + XMODEM_EXP_DATA_SIZE)
+#define XMODEM_EXP_PKG_CRC1		(XMODEM_EXP_PKG_CRC0 + 1)
+
+//
+uint8_t XMODEM_Buf[XMODEM_EXP_PKG_SIZE] = {0};
+//
+uint32_t FileTransmissionBegin;
+
+//============================================================================//
+//
+uint32_t UpgradeFileSize = 0;
+//
+uint32_t UpgradeFileOffset = 0;
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_TransmitUpgradeFile(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	SIM5320_ShowNetMode(DISABLE);
+	//
+	SIM5320_GpsInfoCfg(DISABLE);
+
+	//
+	sprintf(pStr, "%d,AT+FSATTRI=%s",
+	        AT_FS_GET_SIZE,
+	        FILENAME_UPGRADE_DFU);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+	//
+	sprintf(pStr, "%d,AT+CTXFILE=\"%s\",0,0",
+	        AT_FS_GET_FILE,
+	        FILENAME_UPGRADE_DFU);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+	//
+	SIM5320_GpsInfoCfg(ENABLE);
+	//
+	SIM5320_ShowNetMode(ENABLE);
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GetUpgradeFile(void)
+{
+	//
+	static uint8_t TryChar = XMODEM_CMD_START;
+	static uint8_t PkgNum = 1;
+	//
+	uint16_t BufLen;
+	//
+	uint32_t DataSize;
+	//
+	uint32_t target;
+
+	//
+	SIM5320_SendBuffer(&TryChar, sizeof(TryChar));
+
+	//
+	if(TryChar == XMODEM_CMD_START)
+	{
+		//
+		FileTransmissionBegin = GetSysTickCount();
+		//
+		RTOSprintf("> System upgrade begin!!\r\n");
+	}
+
+	//
+	target = GetSysTickCount() + mS_2_SysTick(S_2_mS(1));
+	//
+	do
+	{
+		//
+		BufLen = UART_GetRxBufLen(GSM_COMPORT_DEF);
+		//
+		if(BufLen >= XMODEM_STD_PKG_SIZE)
+			break;
+
+	}
+	while(GetSysTickCount() < target);
+
+	//
+	BufLen = UART_GetRxBuffer(GSM_COMPORT_DEF, XMODEM_Buf, UART_MAX_BUFFER_SIZE);
+	//
+	if(g_Setting.DebugMode == DBG_GSM)
+	{
+		//
+		SET_SendBuffer(XMODEM_Buf, BufLen);
+	}
+
+	//
+	switch(XMODEM_Buf[XMODEM_PKG_SOH])
+	{
+		//
+		case XMODEM_CMD_SOH:
+			{
+				uint16_t i, crc;
+
+				// Check the X-Modem package length
+				if(BufLen < XMODEM_STD_PKG_SIZE)
+				{
+					//
+					TryChar = XMODEM_CMD_NAK;
+					//
+					break;
+				}
+
+				// 檢查序號與序號捕數
+				if(XMODEM_Buf[XMODEM_PKG_BLK] != (uint8_t)(~XMODEM_Buf[XMODEM_PKG_NOT_BLK]))
+				{
+					TryChar = XMODEM_CMD_NAK;
+					break;
+				}
+
+				// 檢查是否為正確的封包序號
+				if(XMODEM_Buf[XMODEM_PKG_BLK] != PkgNum)
+				{
+					// 若為前一個封包序號
+					if(XMODEM_Buf[XMODEM_PKG_BLK] == PkgNum - 1)
+					{
+						// 忽略此封包準備接收下一筆封包
+						TryChar = XMODEM_CMD_ACK;
+					}
+					else
+					{
+						// 若不是上一筆資料, 表示發生嚴重錯誤強制中止接收程序
+						TryChar = XMODEM_CMD_CAN;
+						//
+						SIM5320_SendBuffer(&TryChar, sizeof(TryChar));
+
+						//
+						SIM5320_TransmitUpgradeFile();
+
+						//
+						TryChar = XMODEM_CMD_START;
+						//
+						PkgNum = 1;
+
+						//
+						UpgradeFileSize = 0;
+						//
+						UpgradeFileOffset = 0;
+						//
+						bGSM_TxUpgradeFile = FALSE;
+					}
+
+					//
+					break;
+				}
+
+				//
+				CRC16_Reset(0);
+				//
+				for(i = 0; i < XMODEM_STD_DATA_SIZE; i++)
+				{
+					//
+					crc = CRC16_Calc(XMODEM_Buf[XMODEM_PKG_DATA0 + i]);
+				}
+
+				// Check the CRC checksum, Big-endian
+				if(XMODEM_Buf[XMODEM_STD_PKG_CRC0] != GET_MSB(crc)
+				        && XMODEM_Buf[XMODEM_STD_PKG_CRC1] != GET_LSB(crc))
+				{
+					//
+					TryChar = XMODEM_CMD_NAK;
+					//
+					break;
+				}
+
+				//
+				DataSize = UpgradeFileSize - UpgradeFileOffset;
+				//
+				if(DataSize > XMODEM_STD_DATA_SIZE)
+					DataSize = XMODEM_STD_DATA_SIZE;
+
+				//
+				SD_AddBuffToFile(FILENAME_UPGRADE_DFU, &XMODEM_Buf[XMODEM_PKG_DATA0], DataSize);
+				//
+				UpgradeFileOffset += DataSize;
+
+				// 準備接收下一筆封包
+				TryChar = XMODEM_CMD_ACK;
+				//
+				PkgNum++;
+			}
+			break;
+		//
+		case XMODEM_CMD_EOT:
+			//
+			TryChar = XMODEM_CMD_ACK;
+			//
+			SIM5320_SendBuffer(&TryChar, sizeof(TryChar));
+
+			//
+			if(SD_GetFileSize(FILENAME_UPGRADE_DFU) == UpgradeFileSize)
+			{
+				PRODUCT_INFO_t ProductInfo;
+
+				//
+				RTOSprintf("> Upgrade file size is %d bytes, download time is %d mS\r\n",
+				           UpgradeFileSize,
+				           SysTick_2_mS(GetSysTickCount() - FileTransmissionBegin));
+
+				//
+				SD_ReadAddrToBuff(FILENAME_UPGRADE_DFU,
+				                  (uint8_t*)&ProductInfo,
+				                  sizeof(PRODUCT_INFO_t),
+				                  sizeof(DFU_PREFIX_t) + sizeof(DFU_ELEMENT_t) + PRODUCT_INFO_OFFSET);
+
+				//
+				if(ProductInfo.PID != PRODUCT_INFO.PID
+				        || ProductInfo.CustID != PRODUCT_INFO.CustID
+				        || ProductInfo.HwID != PRODUCT_INFO.HwID)
+				{
+					//
+					RTOSprintf("> Check upgrade file product infomation error.\r\n");
+					//
+					SD_Delete(FILENAME_UPGRADE_DFU);
+				}
+				else
+				{
+					//
+					if(SD_CheckUpgradeFile() == TRUE)
+					{
+						char StrBuf[128];
+
+						//
+						sprintf(StrBuf, "%s%s,10\r\n", STR_AS_RESET, ResetCmdString[RST_UPGRADE]);
+						//
+						Protocl_ChkCmdPkg(StrBuf, NULL);
+					}
+					else
+					{
+						//
+						SIM5320_TransmitUpgradeFile();
+					}
+				}
+			}
+
+			//
+			TryChar = XMODEM_CMD_START;
+			//
+			PkgNum = 1;
+
+			//
+			UpgradeFileSize = 0;
+			//
+			UpgradeFileOffset = 0;
+			//
+			bGSM_TxUpgradeFile = FALSE;
+			break;
+		//
+		default:
+			//
+			SIM5320_TransmitUpgradeFile();
+
+			//
+			TryChar = XMODEM_CMD_START;
+			//
+			PkgNum = 1;
+
+			//
+			UpgradeFileSize = 0;
+			//
+			UpgradeFileOffset = 0;
+			//
+			bGSM_TxUpgradeFile = FALSE;
+			break;
+	}
+
+}
+
+//============================================================================//
+//
+#define MAX_WRITE_BLOCK_SIZE	GSM_MAX_BUFFER_SIZE
+//
+#define MAX_DISK_SEGMENT_SIZE	(MAX_WRITE_BLOCK_SIZE * 1024)
+
+//
+uint32_t BackupFileSize = 0;
+//
+uint32_t BackupFileOffset = 0;
+//
+uint32_t BackupFileDisk = 0;
+//
+uint32_t BackupDataSize = 0;
+//
+char BackupFileName[16];
+
+//
+typedef enum
+{
+	STORE_INIT,
+	STORE_RETRY,
+	STORE_FINISH,
+} FILE_STORE_t;
+
+//============================================================================//
+// receive "DATALOG.DTR"
+//============================================================================//
+static void SIM5320_ReceiveBackupFile(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	SIM5320_ShowNetMode(DISABLE);
+	//
+	SIM5320_GpsInfoCfg(DISABLE);
+
+	//
+	sprintf(pStr, "%d,AT+CRXFILE=\"%s\"",
+	        AT_FS_SEND_FILE,
+	        FILENAME_DATALOG_DTR);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+	//
+	SIM5320_GpsInfoCfg(ENABLE);
+	//
+	SIM5320_ShowNetMode(ENABLE);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_StoreBackupFile(FILE_STORE_t FILE_STORE)
+{
+	uint8_t Buf[64];
+	char *pStr;
+	//
+	char FileName[32];
+
+	//
+	if(strncmp(BackupFileName, FILENAME_DATALOG_BIN, strlen(FILENAME_DATALOG_BIN)) == 0)
+	{
+		//
+		time_t rawtime;
+
+		//
+		time(&rawtime);
+		//
+		rawtime += g_Setting.i32TimeZoneOffset;
+		//
+		strftime(FileName, sizeof(FileName), "%Y%m%d", localtime(&rawtime));
+	}
+	else
+	{
+		//
+		strcpy(FileName, BackupFileName);
+		//
+		StopChar(FileName, '.');
+	}
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%s_%s.DTR", g_Setting.szBus_ID, FileName);
+	//
+	strcpy(FileName, pStr);
+
+	//
+	switch(FILE_STORE)
+	{
+		//
+		case STORE_INIT:
+			//
+			pStr = (char*)Buf;
+			//
+			sprintf(pStr, "%d,AT+FSRENAME=%s,%s",
+			        AT_FS_REN_FILE,
+			        FILENAME_DATALOG_DTR,
+			        FileName);
+			//
+			DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+		//
+		case STORE_RETRY:
+			//
+			pStr = (char*)Buf;
+			//
+			sprintf(pStr, "%d,AT+CFTPPUTFILE=\"/%s/%s\",0",
+			        AT_FTP_PUT_FILE,
+			        STR_DIRECTORY_BACKUP,
+			        FileName);
+			//
+			DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+			break;
+
+		//
+		case STORE_FINISH:
+			//
+			BackupFileSize = 0;
+			//
+			BackupFileOffset = 0;
+			break;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_BuildSendPkg(FlagStatus BUILD_FLAG)
+{
+	//
+	static uint8_t PkgNum = 0;
+	//
+	uint8_t *pBuf;
+	//
+	uint16_t i, crc;
+
+	//
+	PkgNum++;
+	//
+	if(BUILD_FLAG == RESET)
+	{
+		//
+		PkgNum = 1;
+		//
+		BackupFileOffset = 0;
+	}
+
+	//
+	if(BackupFileOffset == BackupFileSize)
+	{
+		//
+		uint8_t TryChar = XMODEM_CMD_EOT;
+
+		//
+		SIM5320_SendBuffer(&TryChar, sizeof(TryChar));
+		//
+		bGSM_RxUpgradeFile = FALSE;
+
+		//
+		RTOSprintf("> Datalog file size is %d bytes, upload time is %d mS\r\n",
+		           BackupFileSize,
+		           SysTick_2_mS(GetSysTickCount() - FileTransmissionBegin));
+
+		//
+		SIM5320_StoreBackupFile(STORE_INIT);
+		//
+		return;
+	}
+
+	//
+	XMODEM_Buf[XMODEM_PKG_SOH] = XMODEM_CMD_STX;
+	//
+	XMODEM_Buf[XMODEM_PKG_BLK] = PkgNum;
+	//
+	XMODEM_Buf[XMODEM_PKG_NOT_BLK] = ~PkgNum;
+
+	//
+	pBuf = &XMODEM_Buf[XMODEM_PKG_DATA0];
+	//
+	memset(pBuf, XMODEM_CMD_CTRLZ, XMODEM_EXP_DATA_SIZE);
+
+	//
+	BackupDataSize = BackupFileSize - BackupFileOffset;
+	//
+	if(BackupDataSize > XMODEM_EXP_DATA_SIZE)
+		BackupDataSize = XMODEM_EXP_DATA_SIZE;
+
+	//
+	SD_ReadAddrToBuff(BackupFileName,
+	                  pBuf,
+	                  BackupDataSize,
+	                  BackupFileOffset);
+	//
+	BackupFileOffset += BackupDataSize;
+
+	//
+	CRC16_Reset(0);
+	//
+	for(i = 0; i < XMODEM_EXP_DATA_SIZE; i++)
+	{
+		//
+		crc = CRC16_Calc(*pBuf++);
+	}
+
+	//
+	XMODEM_Buf[XMODEM_EXP_PKG_CRC0] = GET_MSB(crc);
+	//
+	XMODEM_Buf[XMODEM_EXP_PKG_CRC1] = GET_LSB(crc);
+	//
+	SIM5320_SendBuffer(XMODEM_Buf, XMODEM_EXP_PKG_SIZE);
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_SendBackupFile(void)
+{
+	//
+	uint8_t TryChar;
+
+	//
+	if(UART_GetRxBufLen(GSM_COMPORT_DEF) == 0)
+		return;
+
+	//
+	UART_GetRxBuffer(GSM_COMPORT_DEF, &TryChar, sizeof(TryChar));
+	//
+	switch(TryChar)
+	{
+		//
+		case XMODEM_CMD_START:
+			//
+			SIM5320_BuildSendPkg(RESET);
+			//
+			FileTransmissionBegin = GetSysTickCount();
+			break;
+
+		//
+		case XMODEM_CMD_ACK:
+			//
+			SIM5320_BuildSendPkg(SET);
+			break;
+
+		//
+		case XMODEM_CMD_NAK:
+			//
+			SIM5320_SendBuffer(XMODEM_Buf, XMODEM_EXP_PKG_SIZE);
+			break;
+
+		//
+		case XMODEM_CMD_CAN:
+			//
+			SIM5320_ReceiveBackupFile();
+			break;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_ReConnect(void)
+{
+	//
+	SocketState[SOCKET_BANK_DEF].CONN = FALSE;
+	//
+	SocketState[SOCKET_BANK_EXT].CONN = FALSE;
+	//
+	gGSM_CurrCmd = gGSM_NextCmd = AT_CMD_BREAK;
+	//
+	gCMD_STATE = CMD_INIT;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_CmdFinish(void)
+{
+	//
+	gGSM_CurrCmd = gGSM_NextCmd;
+	//
+	gCMD_STATE = CMD_INIT;
+	//
+	ucGSM_CmdInterval = 0;
+	//
+	ucGSM_CmdTimeout = 0;
+	//
+	ucGSM_CmdErrCnt = 0;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_CmdProc(void)
+{
+
+	//
+	switch(gCMD_STATE)
+	{
+		//
+		case CMD_INIT:
+			//
+			ucGSM_CmdInterval++;
+			//
+			if(ucGSM_CmdInterval < COUNT_AT_CMD_INTERVAL)
+				return;
+
+			//
+			switch(gGSM_CurrCmd)
+			{
+					char szTEMP[64];
+
+				//
+				case AT_CMD_BEGIN:
+					//
+					SIM5320_BuildCmd("AT");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_ECHO_SET:
+					//
+					SIM5320_BuildCmd("ATE0");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPIO_SET:
+					//
+					SIM5320_BuildCmd("AT+CKGSWT=0");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_CME_ERR_EN:
+					//
+					SIM5320_BuildCmd("AT+CMEE=2");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_URC_OUTPUT_SET:
+					//
+					SIM5320_BuildCmd("AT+CATR=1,0");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+
+#if !ENABLE_GPS_MODULE
+
+#if ENABLE_ASSIST_GPS
+				//
+				case AT_AGPS_SERVER:
+					//
+					SIM5320_BuildCmd("AT+CGPSURL=\"supl.google.com:7276\"");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPS_CLEAR:
+					//
+					SIM5320_BuildCmd("AT+CGPSDEL");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPS_START:
+					//
+					SIM5320_BuildCmd("AT+CGPS=1,2");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPS_START_INFO:
+					//
+					sprintf(szTEMP, "%s", STR_GPS_INFO_START);
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+#else
+				//
+				case AT_GPS_START:
+					//
+					SIM5320_BuildCmd("AT+CGPS=1");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_GPS_START_INFO:
+					//
+					sprintf(szTEMP, "%s", STR_GPS_INFO_START);
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+#endif // ENABLE_ASSIST_GPS
+
+#endif // ENABLE_GPS_MODULE
+
+				//
+				case AT_MSG_FORMAT:
+					//
+					SIM5320_BuildCmd("AT+CMGF=1");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_MSG_STORAGE:
+					//
+					SIM5320_BuildCmd("AT+CPMS=\"SM\",\"SM\",\"SM\"");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_MSG_NEW:
+					//
+					SIM5320_BuildCmd("AT+CNMI=1,1,0,0,0");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_CNMP:
+					//
+					SIM5320_BuildCmd("AT+CNMP=14"); ///Heinz
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_AUDIO_SET_MIC:
+					//
+					SIM5320_BuildCmd("AT+CMICAMP1=1");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_AUDIO_SET_SPK:
+					//
+					SIM5320_BuildCmd("AT+CSDVC=3,1");	//Heinz	  1
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_SPK_VOLUME_INIT:
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+					// 	CPTI 嫌原音量太小 所以改以下做法
+					sprintf(szTEMP, "AT+CRXGAIN=%d", SIM5320_GetSpkGain());
+#else
+					sprintf(szTEMP, "AT+CLVL=%d", SIM5320_GetSpkGain());
+#endif
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+
+				case AT_MIC_GAIN_SET:	//Heinz
+					//
+					SIM5320_BuildCmd("AT+CTXGAIN=20000");
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+
+				case AT_MIC_VOL_SET:	//Heinz
+					//
+					SIM5320_BuildCmd("AT+CTXVOL=20000");
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				case AT_SPK_GAIN_SET:	//Heinz
+					//
+					SIM5320_BuildCmd("AT+CRXGAIN=45000");
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+
+				case AT_SPK_VOL_SET:	//Heinz
+					//
+					SIM5320_BuildCmd("AT+CRXVOL=80");
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+
+				case AT_REQUEST_IMSI:
+					//
+					SIM5320_BuildCmd("AT+CIMI");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_REQUEST_IMEI:
+					//
+					SIM5320_BuildCmd("AT+CGSN");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+
+				//
+				case AT_MSG_DEL_ALL: //Heinz
+					//
+					SIM5320_BuildCmd("AT+CMGD=0,4");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_CGATT_RD:
+					//
+					SIM5320_BuildCmd("AT+CGATT?");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_FTP_SET_MODE:
+					//
+					SIM5320_BuildCmd("AT+CFTPMODE=1");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_FTP_SET_SERVER:
+					//
+					if(strlen(g_Setting.TempSet.tFTP_Set.tServerName.szADDR) == 0)
+					{
+						//
+						sprintf(szTEMP, "%s%s:%d,%s,%s\r\n",
+						        STR_AS_GSM_FTP,
+						        STR_FTP_SERVER_DEF,
+						        STR_FTP_PORT_DEF,
+						        STR_FTP_USERNAME_DEF,
+						        STR_FTP_PASSWORD_DEF);
+						//
+						Protocl_ChkCmdPkg(szTEMP, NULL);
+					}
+
+					//
+					///sprintf(szTEMP, "AT+CFTPSERV=\"%s\"", g_Setting.TempSet.tFTP_Set.tServerName.szADDR);
+					sprintf(szTEMP, "AT+CFTPSERV=\"ftp.jasslin.com\""); //Heinz
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_FTP_SET_PORT:
+					//
+					///sprintf(szTEMP, "AT+CFTPPORT=%d", g_Setting.TempSet.tFTP_Set.tServerName.u16Port);
+					sprintf(szTEMP, "AT+CFTPPORT=21");
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_FTP_SET_USERNAME:
+					//
+					///sprintf(szTEMP, "AT+CFTPUN=\"%s\"", g_Setting.TempSet.tFTP_Set.UserName);
+					sprintf(szTEMP, "AT+CFTPUN=\"user\"");
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_FTP_SET_PASSWORD:
+					//
+					///sprintf(szTEMP, "AT+CFTPPW=\"%s\"", g_Setting.TempSet.tFTP_Set.Password);
+					sprintf(szTEMP, "AT+CFTPPW=\"user\"");  //Heinz
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_SET_SOCKET_PDP:
+					//
+					//sprintf(szTEMP, "AT+CGSOCKCONT=1,\"IP\",\"%s\",\"0.0.0.0\",0,0",
+					sprintf(szTEMP, "AT+CGSOCKCONT=1,\"IP\",\"%s\"",
+					        g_Setting.GSM_SET.NET_SET.APN);
+					//
+					SIM5320_BuildCmd(szTEMP);
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_SET_SOCKET:
+					//
+					SIM5320_BuildCmd("AT+CSOCKSETPN=1");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = (AT_CMD_t)(gGSM_CurrCmd + 1);
+					break;
+				//
+				case AT_NET_SOCKET_CONFIG:
+					//
+					//SIM5320_BuildCmd("AT+CIPCCFG=5,500,1,1,1");
+					SIM5320_BuildCmd("AT+CIPCCFG=10,10,1,1,1");
+					//
+					SIM5320_SendCmd();
+
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+					break;
+				//
+				case AT_SEND_DATA:
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = AT_SEND_DATA_BEGIN;
+
+					break;
+				//
+				case AT_SEND_DATA_BEGIN:
+					//
+					SIM5320_SendBuffer(gGSM_DataSend.Buf, gGSM_DataSend.u16BufLen);
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+
+					break;
+				//
+				case AT_SEND_MSG:
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = AT_SEND_MSG_BEGIN;
+
+					break;
+				//
+				case AT_SEND_MSG_BEGIN:
+					//
+					SIM5320_SendBuffer(gGSM_MsgSend.Buf, gGSM_MsgSend.u16BufLen);
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+
+					break;
+
+				//
+				case AT_NET_SHOW_MODE:
+				case AT_NET_OPEN:
+				case AT_NET_RESOLVE_NAME:
+				case AT_NET_CONNECT:
+				case AT_NET_DISCONN:
+				case AT_NET_CLOSE:
+				//
+				case AT_SMS_READ:
+				case AT_SMS_DELETE:
+				//
+				case AT_SPK_VOLUME_SET:
+				//
+				case AT_CALL_DIAL:
+				case AT_CALL_ANSWER:
+				case AT_CALL_HOOK:
+				//
+
+
+				case AT_CMD_CSQ:
+				case AT_BAUDRATE_DEF:
+				case AT_BAUDRATE_SET:
+				/*
+								//
+								case AT_GPS_TURN_ON:
+								case AT_GPS_TURN_OFF:
+								case AT_GPS_INFO_CONFIG:
+								case AT_GPS_INFO_CLEAR:
+				*/
+				case AT_CELL_LOCATION:
+				//
+				case AT_FTP_GET_FILE:
+				case AT_FTP_PUT_FILE:
+				//
+				case AT_FS_REN_FILE:
+				case AT_FS_DEL_FILE:
+				case AT_FS_GET_SIZE:
+				case AT_FS_GET_FILE:
+				case AT_FS_SEND_FILE:
+				case AT_CMD_TEST:
+					//
+					SIM5320_SendCmd();
+					//
+					gGSM_NextCmd = AT_CMD_BREAK;
+
+					break;
+
+				//
+				case AT_CMD_BREAK:
+					//
+					gGSM_CurrCmd = gGSM_NextCmd;
+				//
+				default:
+					return;
+			}
+
+			//
+			gCMD_STATE = CMD_SEND;
+			break;
+
+		//
+		case CMD_SEND:
+			//
+			ucGSM_CmdTimeout++;
+			//
+			if(ucGSM_CmdTimeout < COUNT_AT_CMD_TIMEOUT)
+				break;
+
+			//
+			ucGSM_CmdTimeout = 0;
+			//
+			gCMD_STATE = CMD_ERROR;
+
+			break;
+
+		//
+		case CMD_OK:
+			//
+			switch(gGSM_CurrCmd)
+			{
+				//
+				case AT_MSG_NEW:
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+					{
+						//
+						static bool bGSM_InitFirst = TRUE;
+
+						//
+						if(g_SysInfo.VehicleState.PWR_ON == FALSE
+						        || g_Setting.ENABLE_SET.bits.DRV_ID == 0
+						        || g_Setting.u32DrvIdNum != INVALID_VALUE_DEF)
+						{
+							//
+							bGSM_InitFirst = FALSE;
+						}
+
+						//
+						if(bGSM_InitFirst == FALSE)
+							break;
+
+						//
+						bGSM_InitFirst = FALSE;
+						//
+						gGSM_NextCmd = AT_CMD_BREAK;
+						//
+						SIM5320_Reset(RESET_DELAY_LONG);
+					}
+#endif // ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+					break;
+
+				//
+				case AT_BAUDRATE_DEF:
+					//
+					UART_Init(GSM_COMPORT_DEF, GSM_BAUDRATE_DEF);
+					break;
+
+				//
+				case AT_BAUDRATE_SET:
+					//
+					UART_Init(GSM_COMPORT_DEF, GSM_BAUDRATE_SET);
+					break;
+
+				//
+				case AT_NET_SOCKET_CONFIG:
+					//
+					SIM5320_ShowNetMode(ENABLE);
+					//
+					SIM5320_NetOpen();
+					break;
+
+				//
+				case AT_NET_OPEN:
+					//
+					SIM5320_NetConnInit(ucGSM_SocketInit);
+					break;
+
+				//
+				case AT_NET_CLOSE:
+					//
+					SIM5320_NetOpen();
+					break;
+
+				//
+				case AT_SEND_DATA:
+					//
+					gGSM_CurrCmd = gGSM_NextCmd;
+					//
+					gCMD_STATE = CMD_INIT;
+					//
+					return;
+
+				//
+				case AT_SEND_DATA_BEGIN:
+					break;
+
+				//
+				case AT_SEND_MSG:
+					//
+					gGSM_CurrCmd = gGSM_NextCmd;
+					//
+					gCMD_STATE = CMD_INIT;
+					//
+					return;
+
+				//
+				case AT_SEND_MSG_BEGIN:
+					//
+					SIM5320_ClrMsg();
+					break;
+
+				//
+				case AT_CALL_DIAL:
+					//
+					bGSM_Dialling = TRUE;
+
+					break;
+
+				//
+				case AT_CALL_ANSWER:
+					//
+					bGSM_Calling = FALSE;
+					//
+					bGSM_Dialling = TRUE;
+
+					break;
+
+				//
+				case AT_CALL_HOOK:
+					//
+					bGSM_Dialling = FALSE;
+
+					break;
+
+#if !ENABLE_GPS_MODULE
+				//
+				case AT_GPS_START:
+#endif
+				case AT_GPS_TURN_ON:
+					//
+					bGSM_GpsPower = TRUE;
+					//
+					RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_POWER_ON);
+					break;
+
+				//
+				case AT_FTP_GET_FILE:
+				case AT_FTP_PUT_FILE:
+					//
+					ucGSM_CmdTimeout++;
+					//
+					if(ucGSM_CmdTimeout < COUNT_FTP_WAIT_TIMEOUT)
+						return;
+					break;
+
+				//
+				case AT_FS_GET_FILE:
+					//
+					bGSM_TxUpgradeFile = TRUE;
+					break;
+
+				//
+				case AT_FS_SEND_FILE:
+					//
+					bGSM_RxUpgradeFile = TRUE;
+					break;
+
+			}
+
+			//
+			SIM5320_CmdFinish();
+
+			break;
+
+		//
+		case CMD_ERROR:
+			//
+			ucGSM_CmdErrCnt++;
+			//
+			if(ucGSM_CmdErrCnt >= COUNT_AT_CMD_ERROR)
+			{
+				//
+				switch(gGSM_CurrCmd)
+				{
+					//
+					case AT_SEND_DATA:
+					case AT_SEND_DATA_BEGIN:
+						//
+						SIM5320_ReSendData();
+						break;
+					//
+					default:
+						break;
+				}
+
+				//
+				RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_AT_CMD_ERROR);
+				//
+				SIM5320_ReConnect();
+				//
+				SIM5320_Reset(RESET_DELAY_NORMAL);
+				//
+				break;
+			}
+
+			//
+			gCMD_STATE = CMD_INIT;
+			//
+			ucGSM_CmdInterval = 0;
+
+			//
+			switch(gGSM_CurrCmd)
+			{
+				//
+				case AT_SEND_DATA_BEGIN:
+					//
+					gGSM_CurrCmd = AT_SEND_DATA;
+					break;
+				//
+				case AT_SEND_MSG_BEGIN:
+					//
+					gGSM_CurrCmd = AT_SEND_MSG;
+					break;
+
+				//
+				case AT_NET_OPEN:
+				case AT_NET_CLOSE:
+				case AT_NET_CONNECT:
+				case AT_NET_DISCONN:
+				//
+				case AT_FTP_SET_MODE:
+				case AT_FTP_SET_SERVER:
+				case AT_FTP_SET_PORT:
+				case AT_FTP_SET_USERNAME:
+				case AT_FTP_SET_PASSWORD:
+				case AT_FTP_GET_FILE:
+				case AT_FTP_PUT_FILE:
+				//
+				case AT_FS_REN_FILE:
+				case AT_FS_DEL_FILE:
+				case AT_FS_GET_SIZE:
+				case AT_FS_GET_FILE:
+				case AT_FS_SEND_FILE:
+				//
+				case AT_GPS_TURN_ON:
+				case AT_GPS_TURN_OFF:
+				case AT_GPS_INFO_CONFIG:
+				case AT_GPS_INFO_CLEAR:
+				case AT_CELL_LOCATION:
+				//
+				case AT_CALL_ANSWER:
+				case AT_CMD_TEST:
+					//
+					SIM5320_CmdFinish();
+					break;
+
+			}
+
+			break;
+
+		//
+		default:
+			break;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_GetCmdPkg(void)
+{
+	static uint16_t GetPkgLen;
+
+	uint16_t i, BufLen;
+	uint8_t Buf[UART_MAX_BUFFER_SIZE * 6];
+	uint8_t *pBuf, ch, PreCH;
+
+	//
+	BufLen = UART_GetRxBufLen(GSM_COMPORT_DEF);
+	//
+	if(BufLen == 0)
+	{
+		//
+		GetPkgLen = 0;
+		//
+		return FALSE;
+	}
+	else
+	{
+		if(GetPkgLen != BufLen)
+		{
+			//
+			GetPkgLen = BufLen;
+			//
+			return FALSE;
+		}
+		//
+		GetPkgLen = 0;
+	}
+
+	//
+	memset(Buf, 0x00, sizeof(Buf));
+	//
+	BufLen = UART_GetRxBuffer(GSM_COMPORT_DEF, Buf, sizeof(Buf));
+	//
+	pBuf = Buf;
+
+	//
+	for(i = 0; i < BufLen; i++)
+	{
+		//
+		PreCH = ch;
+		//
+		ch = *pBuf++;
+
+		//
+		gGSM_CmdQue[ucGSM_QueWI].Data[ucGSM_RxIdx++] = ch;
+
+		//
+		if((PreCH == '\r' && ch == '\n')
+		        || (PreCH == '\n' && ch == STR_GREATER_THAN)
+		        || ucGSM_RxIdx == OFFSET_SIZE(DATA_QUEUE_t, Data))
+		{
+			//
+			if(ch == STR_GREATER_THAN)
+			{
+				//
+				gGSM_CmdQue[ucGSM_QueWI].Data[ucGSM_RxIdx++] = ' ';
+			}
+
+			// Change queue state
+			gGSM_CmdQue[ucGSM_QueWI].State = QUE_PROC;
+			//
+			gGSM_CmdQue[ucGSM_QueWI].DataLen = ucGSM_RxIdx;
+
+			//
+			ucGSM_QueWI++;
+			//
+			if(ucGSM_QueWI >= MAX_DATA_QUEUE_NUM)
+				ucGSM_QueWI = 0;
+
+			// Change queue state
+			gGSM_CmdQue[ucGSM_QueWI].State = QUE_RX;
+			//
+			gGSM_CmdQue[ucGSM_QueWI].DataLen = 0;
+			//
+			memset(gGSM_CmdQue[ucGSM_QueWI].Data, 0x00, OFFSET_SIZE(DATA_QUEUE_t, Data));
+			//
+			ucGSM_RxIdx = 0;
+		}
+	}
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//+CMTI: "ME",1
+//AT+CMGR=1
+//+CMGR: "REC UNREAD","+886918031435",,"13/07/05,17:03:43+50"
+//1111@2:AA-0001
+//
+//OK
+//
+//============================================================================//
+static void SIM5320_GetMessage(char *pStr)
+{
+	char MsgCmdBuf[UART_MAX_BUFFER_SIZE];
+	char MsgMobile[24];
+
+	char CmdStr[64];
+	char CmdArg[64];
+	char CmdMsg[UART_MAX_BUFFER_SIZE];
+
+	// "REC UNREAD",
+	StopChar(pStr, ',');
+	//
+	pStr += strlen(pStr) + 1;
+
+	// "+886918031435",
+	StopChar(pStr, ',');
+	//
+	if(strlen(pStr) == 0)
+	{
+		strcpy(MsgMobile, g_Setting.GSM_SET.PhoneBank[0].Number);
+	}
+	else
+	{
+		//
+		StopChar(pStr, '"');
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '"');
+		//
+		strcpy(MsgMobile, pStr);
+		//
+		pStr += strlen(pStr) + 1;
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	//
+	StopChar(pStr, '\n');
+	pStr += strlen(pStr) + 1;
+
+#if ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+	//
+	if(strncmp(pStr, STR_SMS_IN1_PASS, strlen(STR_SMS_IN1_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_In1_PASS, strlen(STR_SMS_In1_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_IN2_PASS, strlen(STR_SMS_IN2_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_In2_PASS, strlen(STR_SMS_In2_PASS)) == 0)
+	{
+		char *p;
+		uint8_t YEAR, MONTH, DAY;
+		uint8_t HOUR, MINUTE, SECOND;
+
+		//
+		p = MsgCmdBuf;
+
+		//
+		if(strncmp(pStr, STR_SMS_IN1_PASS, strlen(STR_SMS_IN1_PASS)) == 0
+		        || strncmp(pStr, STR_SMS_In1_PASS, strlen(STR_SMS_In1_PASS)) == 0)
+			sprintf(p, "%sEXT1,", STR_AS_PRINT);
+		//
+		if(strncmp(pStr, STR_SMS_IN2_PASS, strlen(STR_SMS_IN2_PASS)) == 0
+		        || strncmp(pStr, STR_SMS_In2_PASS, strlen(STR_SMS_In2_PASS)) == 0)
+			sprintf(p, "%sEXT2,", STR_AS_PRINT);
+		//
+		p += strlen(p);
+
+		//
+		StopChar(pStr, ':');
+		//
+		pStr += strlen(pStr) + 1;
+		// 若遇到的第一個字元為空白則指標再加一
+		if(*pStr == ' ')
+			pStr += 1;
+		//
+		StopChar(pStr, '#');
+		//
+		StopChar(pStr, ',');
+
+		//
+		StopChar(pStr, ' ');
+		DAY = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		MONTH = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		YEAR = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		HOUR = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		MINUTE = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+		//
+		StopChar(pStr, ' ');
+		SECOND = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+
+		//
+		sprintf(p, "%02d%02d%02d%02d%02d%02d\n",
+		        YEAR, MONTH, DAY,
+		        HOUR, MINUTE, SECOND);
+		//
+		if(Protocl_ChkCmdPkg(MsgCmdBuf, NULL) == TRUE)
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Print data success.\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+		else
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_SMS_ID0_PASS, strlen(STR_SMS_ID0_PASS)) == 0
+	        || strncmp(pStr, STR_SMS_ID1_PASS, strlen(STR_SMS_ID1_PASS)) == 0)
+	{
+		char *p;
+		bool isLogin;
+
+		//
+		p = MsgCmdBuf;
+
+		//
+		if(strncmp(pStr, STR_SMS_ID0_PASS, strlen(STR_SMS_ID0_PASS)) == 0)
+		{
+			//
+			sprintf(p, "%s", STR_AS_DRIVER_IN);
+			//
+			isLogin = FALSE;
+		}
+
+		//
+		if(strncmp(pStr, STR_SMS_ID1_PASS, strlen(STR_SMS_ID1_PASS)) == 0)
+		{
+			//
+			sprintf(p, "%s", STR_AS_DRIVER_IN);
+			//
+			isLogin = TRUE;
+		}
+
+		//
+		p += strlen(p);
+
+		//
+		StopChar(pStr, ':');
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '#');
+		//
+		StopChar(pStr, ',');
+
+		//
+		if((isLogin == TRUE && g_Setting.u32DrvIdNum == strtoul(pStr, NULL, 16))
+		        || (isLogin == FALSE && g_Setting.u32DrvIdNum != strtoul(pStr, NULL, 16)))
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Driver id invalid.\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+
+			//
+			return;
+		}
+
+		//
+		strcpy(p, pStr);
+		//
+		if(Protocl_ChkCmdPkg(MsgCmdBuf, NULL) == TRUE)
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Driver id success.\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+		else
+		{
+			//
+			sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		}
+
+		//
+		return;
+	}
+
+#endif // ENABLE_BGTVT_2011 || ENABLE_BGTVT_2014
+
+	/*
+	#if CUSTOMER_TYPE == CUSTOMER_EUPFIN
+		//
+		if(*pStr == '<')
+		{
+			//
+			Protocl_ChkCmdPkg(pStr, CmdMsg);
+
+			//
+			StopChar(CmdMsg, '\n');
+			//
+			StopChar(CmdMsg, '\r');
+			//
+			sprintf(MsgCmdBuf, "%s,%s\x1A", MsgMobile, CmdMsg);
+			//
+			DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+
+			//
+			return;
+		}
+
+	#endif
+	*/
+	//
+	StopChar(pStr, '@');
+	//
+	if(strncmp(pStr, STR_PASS_ADMIN, strlen(STR_PASS_ADMIN)) != 0)
+	{
+		//
+		if(strncmp(pStr, STR_PASS_USER, strlen(STR_PASS_USER)) != 0)
+		{
+			// 驗證錯誤, 簡訊命令處理取消並清除
+			SIM5320_ClrMsg();
+			// 驗證錯誤, 簡訊命令處理取消
+			return;
+		}
+		else
+		{
+			// 使用者權限
+		}
+	}
+	else
+	{
+		// 管理者權限
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	//
+	StopChar(pStr, '\n');
+	//
+	StopChar(pStr, '\r');
+
+	//
+	StopChar(pStr, ':');
+	//
+	memset(CmdStr, 0x00, sizeof(CmdStr));
+	//
+	GSM_GetMsgCmd(pStr, CmdStr);
+
+	//
+	if(strlen(CmdStr) == 0)
+	{
+		//
+		sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+		//
+		DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+		//
+		return;
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	//
+	if(strlen(pStr) == 0)
+	{
+		//
+		strcpy(CmdArg, "?");
+	}
+	else
+	{
+		//
+		strcpy(CmdArg, pStr);
+
+		//
+		if(strcmp(CmdStr, STR_AS_RESET) == 0)
+		{
+			//
+			if(strncmp(CmdArg, ResetCmdString[RST_SYS], strlen(ResetCmdString[RST_SYS])) == 0
+			        || strncmp(CmdArg, ResetCmdString[RST_GPS], strlen(ResetCmdString[RST_GPS])) == 0
+			        || strncmp(CmdArg, ResetCmdString[RST_GSM], strlen(ResetCmdString[RST_GSM])) == 0
+			        || strncmp(CmdArg, ResetCmdString[RST_LOG], strlen(ResetCmdString[RST_LOG])) == 0
+			        || strncmp(CmdArg, ResetCmdString[RST_TEMP], strlen(ResetCmdString[RST_TEMP])) == 0
+			        || strncmp(CmdArg, ResetCmdString[RST_ALL], strlen(ResetCmdString[RST_ALL])) == 0)
+			{
+				//
+				StopChar(CmdArg, ',');
+				//
+				sprintf(CmdArg, "%s,%d", CmdArg, RESET_DELAY_NORMAL);
+			}
+
+			//
+			if(strncmp(CmdArg, ResetCmdString[RST_DEFAULT], strlen(ResetCmdString[RST_DEFAULT])) == 0
+			        || strncmp(CmdArg, ResetCmdString[RST_UPGRADE], strlen(ResetCmdString[RST_UPGRADE])) == 0)
+			{
+				//
+				sprintf(MsgCmdBuf, "%s,Warning:command cancel!!\x1A", MsgMobile);
+				//
+				DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+			}
+		}
+	}
+
+	//
+	sprintf(MsgCmdBuf, "%s%s\r\n", CmdStr, CmdArg);
+	//
+	if(Protocl_ChkCmdPkg(MsgCmdBuf, CmdMsg) == TRUE)
+	{
+		char *pCmd;
+
+		//
+		if(strlen(CmdMsg) > 0)
+		{
+			//
+			pCmd = CmdMsg;
+			//
+			StopChar(pCmd, '$');
+			//
+			pCmd += strlen(pCmd) + 1;
+
+			//
+			StopChar(pCmd, '\n');
+			//
+			StopChar(pCmd, '\r');
+
+			//
+			sprintf(MsgCmdBuf, "%s,%s\x1A", MsgMobile, pCmd);
+		}
+		else
+		{
+			//
+			pCmd = CmdStr;
+			//
+			StopChar(pCmd, '$');
+			//
+			pCmd += strlen(pCmd) + 1;
+			//
+			StopChar(pCmd, '=');
+
+			//
+			sprintf(MsgCmdBuf, "%s,%s success.\x1A", MsgMobile, pCmd);
+		}
+
+		//
+		DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+	}
+	else
+	{
+		//
+		sprintf(MsgCmdBuf, "%s,Warning:command error!\x1A", MsgMobile);
+		//
+		DataSend_AddMsgToQue((uint8_t*)MsgCmdBuf, strlen(MsgCmdBuf));
+	}
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_ChkGpsPkg(char *pStr)
+{
+	char *pBuf;
+	uint8_t i, ChkSum1, ChkSum2;
+
+	//
+	pBuf = pStr;
+	//
+	StopChar(pBuf, '*');
+
+	//
+	ChkSum2 = 0x00;
+	//
+	for(i = 1; i < strlen(pBuf); i++)
+		ChkSum2 ^= pBuf[i];
+	//
+	ChkSum2 &= 0xFF;
+
+	//
+	pBuf += strlen(pBuf) + 1;
+
+	//
+	if(strlen(pBuf) != 2)
+		return FALSE;
+
+	ChkSum1 = strtoul(pBuf, NULL, 16);
+
+	//
+	if(ChkSum2 == ChkSum1)
+		return TRUE;
+	else
+		return FALSE;
+
+}
+
+//============================================================================//
+// Recommended minimum specific GPS/Transit data
+//============================================================================//
+static bool SIM5320_ChkGpsData(char *pStr)
+{
+	//static char GPS_FIX=0;
+	//
+	GPS_DATA_t GPS_TEMP;
+	//
+	char TEMP[10];
+	//
+	static uint8_t GPS_ErrCnt = 0;
+
+	// $GPGGA,<1>,<2>,<3>,<4>,<5>,<6>,<7>,<8>,<9>,<10>,<11>,<12>,<13>,<14>,<15>
+	if(strncmp(pStr, NMEA_HEAD_GPGGA, strlen(NMEA_HEAD_GPGGA)) == 0)
+	{
+		//
+		if(g_Setting.DebugMode == DBG_GPS)
+		{
+			//
+			RTOSprintf("%s\r\n", pStr);
+		}
+
+		//
+		if(SIM5320_ChkGpsPkg(pStr) == FALSE)
+		{
+#if 0
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_PACKAGE_ERROR);
+#endif
+
+			//
+			return TRUE;
+		}
+
+		//
+		memcpy(&GPS_TEMP, &GSM_GpsData, sizeof(GPS_DATA_t));
+
+		// $GPGSA,
+		pStr += strlen(NMEA_HEAD_GPGGA);
+
+		// <1>, Time Stamp
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			//
+			memcpy(&GPS_TEMP.UTC, &GSM_GpsData.UTC, sizeof(UTC_t));
+			//
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 2);
+			GPS_TEMP.UTC.Hour = atoi(TEMP);
+			//
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 2, 2);
+			GPS_TEMP.UTC.Min = atoi(TEMP);
+			//
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 4, 2);
+			GPS_TEMP.UTC.Sec = atoi(TEMP);
+		}
+		//
+		pStr += strlen(pStr) + 1;
+
+		// <2>, current Latitude
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			// dd
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 2);
+			GPS_TEMP.Latitude.dd = atoi(TEMP);
+			// mm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 2, 2);
+			GPS_TEMP.Latitude.mm = atoi(TEMP);
+			//.mmmm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 5, 4);
+			GPS_TEMP.Latitude.mmmm = atoi(TEMP);
+			// ss
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 9, 2);
+			GPS_TEMP.Latitude.ss = atoi(TEMP);
+		}
+		// ddmm.mmmmss,
+		pStr += strlen(pStr) + 1;
+
+		// <3>, North/South
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.Latitude.cIndicator = *pStr;
+		// N,
+		pStr += strlen(pStr) + 1;
+
+		// <4>, current Longitude
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			// ddd
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 3);
+			GPS_TEMP.Longitude.ddd = atoi(TEMP);
+			// mm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 3, 2);
+			GPS_TEMP.Longitude.mm = atoi(TEMP);
+			//.mmmm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 6, 4);
+			GPS_TEMP.Longitude.mmmm = atoi(TEMP);
+			// ss
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 9, 2);
+			GPS_TEMP.Longitude.ss = atoi(TEMP);
+		}
+		// dddmm.mmmmss,
+		pStr += strlen(pStr) + 1;
+
+		// <5>, East/West
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.Longitude.cIndicator = *pStr;
+		// W,
+		pStr += strlen(pStr) + 1;
+
+		// <6>, GPS quality indicator
+		StopChar(pStr, ',');
+
+		// 1,
+		pStr += strlen(pStr) + 1;
+
+		// <7>, Number of satellites in use
+		StopChar(pStr, ',');
+		//
+		GPS_TEMP.StlNum = 0;
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.StlNum = atoi(pStr);
+		// 4,
+		pStr += strlen(pStr) + 1;
+
+		// HDOP
+		StopChar(pStr, ',');
+		//
+		GPS_TEMP.HDOP = 0;
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.HDOP = (float)atof(pStr) * 10;
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		if(GPS_TEMP.Fixed == TRUE)
+		{
+			//
+			GpsCoordinate_t CurrLocation;
+			//
+			double LocationDistDiff;
+
+			//
+			if(g_SysInfo.CellLocate.dLatitude
+			        || g_SysInfo.CellLocate.dLongitude)
+			{
+				//
+				CurrLocation.dLatitude = Coordinate_LatitudeDMMtoDD(&GPS_TEMP.Latitude);
+				//
+				CurrLocation.dLongitude = Coordinate_LongitudeDMMtoDD(&GPS_TEMP.Longitude);
+				//
+				LocationDistDiff = GPS_CalcDist_2D(&CurrLocation, &g_SysInfo.CellLocate);
+
+				//
+				if(LocationDistDiff > MIN_CELL_LOCATION_DIST)
+				{
+					//
+					if(GSM_GpsData.Fixed == TRUE)
+					{
+						//
+						RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_POSITION_ERROR);
+
+						//
+						if(LocationDistDiff > MAX_CELL_LOCATION_DIST)
+						{
+							//
+							GPS_Reset(START_COLD, RESET_DELAY_SHORT);
+						}
+					}
+
+					//
+					GPS_TEMP.Fixed = FALSE;
+				}
+			}
+
+			//
+			if((memcmp(&GPS_TEMP.Latitude, &GSM_GpsData.Latitude, sizeof(GPS_LAT_t)) == 0
+			        && memcmp(&GPS_TEMP.Longitude, &GSM_GpsData.Longitude, sizeof(GPS_LON_t)) == 0)
+			        || memcmp(&GPS_TEMP.UTC, &GSM_GpsData.UTC, sizeof(UTC_t)) == 0)
+			{
+				//
+				if(GPS_ErrCnt < COUNT_AT_CMD_ERROR)
+				{
+					//
+					GPS_ErrCnt++;
+				}
+				else
+				{
+					//
+					if(GSM_GpsData.Fixed == TRUE)
+					{
+						//
+						RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_NMEA_ERROR);
+						//
+						GPS_Reset(START_COLD, RESET_DELAY_SHORT);
+					}
+
+					//
+					GPS_TEMP.Fixed = FALSE;
+				}
+			}
+			else
+			{
+				//
+				GPS_ErrCnt = 0;
+			}
+		}
+
+		//
+		bGSM_GpsData = FALSE;
+		//
+		memcpy(&GSM_GpsData, &GPS_TEMP, sizeof(GPS_DATA_t));
+
+		//
+		return TRUE;
+	}
+
+	// $GPRMC,<1>,<2>,<3>,<4>,<5>,<6>,<7>,<8>,<9>,<10>,<11>
+	if(strncmp(pStr, NMEA_HEAD_GPRMC, strlen(NMEA_HEAD_GPRMC)) == 0)
+	{
+		//
+		if(g_Setting.DebugMode == DBG_GPS)
+		{
+			//
+			RTOSprintf("%s\r\n", pStr);
+		}
+
+		//
+		if(SIM5320_ChkGpsPkg(pStr) == FALSE)
+		{
+#if 0
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_PACKAGE_ERROR);
+#endif
+
+			//
+			return TRUE;
+		}
+
+		//
+		memcpy(&GPS_TEMP, &GSM_GpsData, sizeof(GPS_DATA_t));
+
+		// $GPRMC,
+		pStr += strlen(NMEA_HEAD_GPRMC);
+
+		// <1>, Time Stamp
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			//
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 2);
+			GPS_TEMP.UTC.Hour = atoi(TEMP);
+			//
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 2, 2);
+			GPS_TEMP.UTC.Min = atoi(TEMP);
+			//
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 4, 2);
+			GPS_TEMP.UTC.Sec = atoi(TEMP);
+		}
+		//
+		pStr += strlen(pStr) + 1;
+
+		// <2>, validity - A-ok, V-invalid
+		StopChar(pStr, ',');
+
+		//
+		pStr += strlen(pStr) + 1;
+
+		// <3>, current Latitude
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			// dd
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 2);
+			GPS_TEMP.Latitude.dd = atoi(TEMP);
+			// mm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 2, 2);
+			GPS_TEMP.Latitude.mm = atoi(TEMP);
+			//.mmmm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 5, 4);
+			GPS_TEMP.Latitude.mmmm = atoi(TEMP);
+			// ss
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 9, 2);
+			GPS_TEMP.Latitude.ss = atoi(TEMP);
+		}
+		// ddmm.mmmmss,
+		pStr += strlen(pStr) + 1;
+
+		// <4>, North/South
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.Latitude.cIndicator = *pStr;
+		// N,
+		pStr += strlen(pStr) + 1;
+
+		// <5>, current Longitude
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			// ddd
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 3);
+			GPS_TEMP.Longitude.ddd = atoi(TEMP);
+			// mm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 3, 2);
+			GPS_TEMP.Longitude.mm = atoi(TEMP);
+			//.mmmm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 6, 4);
+			GPS_TEMP.Longitude.mmmm = atoi(TEMP);
+			// ss
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 10, 2);
+			GPS_TEMP.Longitude.ss = atoi(TEMP);
+		}
+		// dddmm.mmmmss,
+		pStr += strlen(pStr) + 1;
+
+		// <6>, East/West
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.Longitude.cIndicator = *pStr;
+		// W,
+		pStr += strlen(pStr) + 1;
+
+		// <7>, Speed in knots
+		StopChar(pStr, ',');
+		// GPS speed from knot to meter
+		if(strlen(pStr) > 0)
+			GPS_TEMP.Speed = KNOT_2_M(atof(pStr));
+		//
+		pStr += strlen(pStr) + 1;
+
+		// <8>, True course
+		StopChar(pStr, ',');
+		//
+		GPS_TEMP.Course = 0;
+		//
+		if(strlen(pStr) > 0)
+			GPS_TEMP.Course = atof(pStr);
+		//
+		pStr += strlen(pStr) + 1;
+
+		// <9>, Date Stamp
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) > 0)
+		{
+			// dd
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr, 2);
+			GPS_TEMP.UTC.Day = atoi(TEMP);
+			// mm
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 2, 2);
+			GPS_TEMP.UTC.Mon = atoi(TEMP);
+			// yy
+			memset(TEMP, 0x00, sizeof(TEMP));
+			strncpy(TEMP, pStr + 4, 2);
+			GPS_TEMP.UTC.Year = atoi(TEMP);
+		}
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		if(GPS_TEMP.Fixed == TRUE)
+		{
+			//
+			GpsCoordinate_t CurrLocation;
+			//
+			double LocationDistDiff;
+
+			//
+			if(g_SysInfo.CellLocate.dLatitude
+			        || g_SysInfo.CellLocate.dLongitude)
+			{
+				//
+				CurrLocation.dLatitude = Coordinate_LatitudeDMMtoDD(&GPS_TEMP.Latitude);
+				//
+				CurrLocation.dLongitude = Coordinate_LongitudeDMMtoDD(&GPS_TEMP.Longitude);
+				//
+				LocationDistDiff = GPS_CalcDist_2D(&CurrLocation, &g_SysInfo.CellLocate);
+
+				//
+				if(LocationDistDiff > MIN_CELL_LOCATION_DIST)
+				{
+					//
+					if(GSM_GpsData.Fixed == TRUE)
+					{
+						//
+						RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_POSITION_ERROR);
+
+						//
+						if(LocationDistDiff > MAX_CELL_LOCATION_DIST)
+						{
+							//
+							///GPS_Reset(START_COLD, RESET_DELAY_SHORT);
+						}
+					}
+
+					//
+					GPS_TEMP.Fixed = FALSE;
+				}
+			}
+
+			//
+			if((memcmp(&GPS_TEMP.Latitude, &GSM_GpsData.Latitude, sizeof(GPS_LAT_t)) == 0
+			        && memcmp(&GPS_TEMP.Longitude, &GSM_GpsData.Longitude, sizeof(GPS_LON_t)) == 0)
+			        || memcmp(&GPS_TEMP.UTC, &GSM_GpsData.UTC, sizeof(UTC_t)) == 0)
+			{
+				//
+				if(GPS_ErrCnt < COUNT_AT_CMD_ERROR)
+				{
+					//
+					GPS_ErrCnt++;
+				}
+				else
+				{
+					//
+					if(GSM_GpsData.Fixed == TRUE)
+					{
+						//
+						RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_NMEA_ERROR);
+						//
+						GPS_Reset(START_COLD, RESET_DELAY_SHORT);
+					}
+
+					//
+					GPS_TEMP.Fixed = FALSE;
+				}
+			}
+			else
+			{
+				//
+				GPS_ErrCnt = 0;
+			}
+		}
+
+		//
+		memcpy(&GSM_GpsData, &GPS_TEMP, sizeof(GPS_DATA_t));
+		//
+		bGSM_GpsData = TRUE;
+
+		//
+		return TRUE;
+	}
+
+
+
+	//
+	return FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_CmdChk(uint8_t *CmdPkg, uint16_t PkgLen)
+{
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+	// 	CPTI 有測到已下記憶體未設靜態會記憶體衝突
+	static uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+#else
+	//
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+#endif
+
+	static char Net_Err=0,Send_Err=0;
+
+	char *pStr;
+	char BufStr[20];  //Heinz
+
+	//
+	memcpy(Buf, CmdPkg, PkgLen);
+	//
+	pStr = (char*)Buf;
+
+	//
+	if(strncmp(pStr, STR_CMGR, strlen(STR_CMGR)) == 0)
+	{
+		//
+		pStr += strlen(STR_CMGR) + 1;
+		//
+		SIM5320_GetMessage(pStr);
+		//
+		return;
+	}
+
+	// +RECEIVE,0,15:
+	if(strncmp(pStr, STR_RECEIVE, strlen(STR_RECEIVE)) == 0)
+	{
+		uint8_t SocketNum;
+		uint8_t DataLen;
+		GSM_SOCKET_DATA_t SocketData;
+
+		//
+		StopChar(pStr, ',');
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, ',');
+		SocketNum = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, ':');
+		DataLen = atoi(pStr);
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '\n');
+		pStr += strlen(pStr) + 1;
+
+		//
+		SocketData.SocketNum = SocketNum;
+		//
+		SocketData.Data = (uint8_t*)pStr;
+		//
+		SocketData.u16DataLen = DataLen;
+		//
+		SIM5320_ReceiveData(SocketData);
+
+		//
+		return;
+	}
+
+	//
+	StopChar(pStr, '\n');
+	//
+	StopChar(pStr, '\r');
+
+	//
+	if(SIM5320_ChkGpsData(pStr) == TRUE)
+		return;
+
+	//
+	if(strncmp(pStr, STR_MODULE_START, strlen(STR_MODULE_START)) == 0)
+	{
+		//
+		bGSM_PowerOn = TRUE;
+		//
+		gGSM_CurrCmd = AT_CMD_BEGIN;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_OK, strlen(STR_RESPONSE_OK)) == 0
+	        || *pStr == STR_GREATER_THAN)
+	{
+		//
+		gCMD_STATE = CMD_OK;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_ERROR, strlen(STR_RESPONSE_ERROR)) == 0)
+	{
+		//
+		gCMD_STATE = CMD_ERROR;
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_NO_CARRIER, strlen(STR_RESPONSE_NO_CARRIER)) == 0
+	        || strncmp(pStr, STR_RESPONSE_BUSY, strlen(STR_RESPONSE_BUSY)) == 0
+	        || strncmp(pStr, STR_RESPONSE_NO_ANSWER, strlen(STR_RESPONSE_NO_ANSWER)) == 0)
+	{
+		//
+		bGSM_Dialling = FALSE;
+
+		//
+		if(gGSM_CurrCmd == AT_CALL_DIAL)
+		{
+			//
+			SIM5320_CmdFinish();
+		}
+
+		//
+		return;
+	}
+
+	//
+	if(strncmp(pStr, STR_RESPONSE_RING, strlen(STR_RESPONSE_RING)) == 0)
+	{
+		//
+		SIM5320_ChkCallStatus(RESET); //Heinz
+		//
+		return;
+	}
+
+	//
+	if( (strncmp(pStr, STR_NET_NOT_CREA, strlen(STR_NET_NOT_CREA)) == 0) ||
+	        (strncmp(pStr, STR_NET_CLOSE_FAIL, strlen(STR_NET_CLOSE_FAIL)) == 0) ||
+	        (strncmp(pStr, STR_NET_NOT_OPEN, strlen(STR_NET_NOT_OPEN)) == 0) )  //Heinz
+	{
+		Net_Err++;
+		//
+		if(	 Net_Err >= 2 )
+		{
+
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+			//
+			if(g_Setting.GSM_SET.tServerIP[0].u16Port ==10224)
+				g_Setting.GSM_SET.tServerIP[0].u16Port = 10227;
+			else
+				g_Setting.GSM_SET.tServerIP[0].u16Port = 10224;
+			Delay_mS(500);
+			//
+#endif
+
+			//
+			Net_Err = 0;
+			sprintf(BufStr, "$AS+RESET=GPRS\r\n" ); //Heinz GPRS
+			Protocl_ChkCmdPkg(BufStr, NULL);
+
+		}
+		return;
+	}
+
+	//
+	if( (strncmp(pStr, STR_CIPSEND, strlen(STR_CIPSEND)) == 0) )
+	{
+		Send_Err++;
+		//
+		if(	 Send_Err >= 2 )
+		{
+			/*
+			#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+						//
+						if(g_Setting.GSM_SET.tServerIP[0].u16Port ==10224)
+							g_Setting.GSM_SET.tServerIP[0].u16Port = 10227;
+						else
+							g_Setting.GSM_SET.tServerIP[0].u16Port = 10224;
+						//
+						Delay_mS(500);
+						//
+			#endif
+			*/
+			//
+			Send_Err = 0;
+			sprintf(BufStr, "$AS+RESET=GPRS\r\n" ); //Heinz GPRS
+			Protocl_ChkCmdPkg(BufStr, NULL);
+
+		}
+		return;
+	}
+	//
+	if(strncmp(pStr, STR_CME_ERROR, strlen(STR_CME_ERROR)) == 0)
+	{
+		//
+		gCMD_STATE = CMD_ERROR;
+		//
+		return;
+	}
+	//
+	if(strncmp(pStr, STR_CDNSGIP, strlen(STR_CDNSGIP)) == 0)
+	{
+		uint8_t i;
+
+		//
+		pStr += strlen(STR_CDNSGIP) + 1;
+
+		//
+		StopChar(pStr, ',');
+		//
+		if(atoi(pStr) == 0)
+			return;
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, ',');
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		StopChar(pStr, '"');
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		for(i = 0; i < 4; i++)
+		{
+			//
+			StopChar(pStr, '.');
+			//
+			if(strlen(pStr) == 0)
+				return;
+			//
+			g_Setting.GSM_SET.tServerIP[ucGSM_SocketInit].u32ADDR._U8[3 - i] = atoi(pStr);
+			//
+			pStr += strlen(pStr) + 1;
+		}
+		//
+		g_Setting.GSM_SET.tServerIP[ucGSM_SocketInit].u16Port = g_Setting.TempSet.tServerName[ucGSM_SocketInit].u16Port;
+
+		//
+		SIM5320_NetConnect(ucGSM_SocketInit);
+
+		//
+		return;
+	}
+
+	// +CASSISTLOC:25.040194,121.426641,150715,055228
+	if(strncmp(pStr, STR_CASSISTLOC, strlen(STR_CASSISTLOC)) == 0)
+	{
+		//
+		GpsCoordinate_t CellLocate;
+
+		// +CASSISTLOC:
+		pStr += strlen(STR_CASSISTLOC);
+
+		//
+		if(strlen(pStr) == 2)
+		{
+			//
+			if(atoi(pStr) == 4)
+			{
+				//
+//				g_SysInfo.CellLocate.dLatitude = 0;
+				//
+//				g_SysInfo.CellLocate.dLongitude = 0;
+			}
+
+			//
+			return;
+		}
+
+		// 25.0368460,
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) == 0)
+			return;
+		//
+		CellLocate.dLatitude = atof(pStr);
+		//
+		pStr += strlen(pStr) + 1;
+
+		// 121.4240880,
+		StopChar(pStr, ',');
+		//
+		if(strlen(pStr) == 0)
+			return;
+		//
+		CellLocate.dLongitude = atof(pStr);
+		//
+		pStr += strlen(pStr) + 1;
+
+		//
+		g_SysInfo.CellLocate = CellLocate;
+
+		//
+		return;
+	}
+
+#if ENABLE_MULTI_IP
+	//
+	if(strncmp(pStr, STR_CONNECT_OK, strlen(STR_CONNECT_OK)) == 0)
+	{
+		//Heinz
+//		Reset_5320 = 0;
+		//
+		SocketState[ucGSM_SocketInit].CONN = TRUE;
+
+		//
+		if(ucGSM_SocketInit == SOCKET_BANK_DEF)
+		{
+			//
+			ucGSM_SocketInit = SOCKET_BANK_EXT;
+			//
+			SIM5320_NetConnInit(ucGSM_SocketInit);
+		}
+
+		//
+		return;
+	}
+
+#else // ENABLE_MULTI_IP
+	//
+	if(strncmp(pStr, STR_CONNECT_OK, strlen(STR_CONNECT_OK)) == 0)
+	{
+		//Heinz
+//		Reset_5320 = 0;
+		//
+		SocketState[ucGSM_SocketInit].CONN = TRUE;
+		//
+		return;
+	}
+
+#endif // ENABLE_MULTI_IP
+
+	//
+	if(strncmp(pStr, STR_PDP_DEACT, strlen(STR_PDP_DEACT)) == 0
+	        || strncmp(strstr(pStr, STR_TCP_BUSY), STR_TCP_BUSY, strlen(STR_TCP_BUSY)) == 0
+	        || strncmp(pStr, STR_IPCLOSE, strlen(STR_IPCLOSE)) == 0
+	        || strncmp(pStr, STR_NET_CLOSE, strlen(STR_NET_CLOSE)) == 0)
+	{
+		//
+		RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_RELEASE);
+		//
+		SIM5320_ReSendData();
+		//
+		if(SIM5320_GetNetStatus() == TRUE)
+		{
+			//
+			SIM5320_ReConnect();
+		}
+
+		//
+		return;
+	}
+
+	//
+	if(strncmp(strstr(pStr, STR_SEND_OK), STR_SEND_OK, strlen(STR_SEND_OK)) == 0)
+	{
+		//
+		Net_Err = 0;  //Heinz
+		//
+		Send_Err = 0;	//Heinz
+		//
+//		Reset_5320 = 0; //Heinz
+		//
+		bGSM_WriteSocket = FALSE;
+		//
+		memset(&gGSM_DataSend, 0x00, sizeof(DATA_SEND_t));
+		//
+		return;
+	}
+
+	//
+	if(strncmp(strstr(pStr, STR_SEND_FAIL), STR_SEND_FAIL, strlen(STR_SEND_FAIL)) == 0)
+	{
+		//
+		SIM5320_ReSendData();
+		//
+		return;
+	}
+
+	// +CMTI: "ME",1
+	if(strncmp(pStr, STR_CMTI, strlen(STR_CMTI)) == 0)
+	{
+		uint16_t MsgIdx;
+
+		//
+		pStr += strlen(STR_CMTI) + 1;
+
+		//
+		StopChar(pStr, ',');
+		pStr += strlen(pStr) + 1;
+
+		//
+		MsgIdx = atoi(pStr);
+
+		//
+		pStr = (char*)Buf;
+		//
+		sprintf(pStr, "%d,AT+CMGR=%d", AT_SMS_READ, MsgIdx);
+		//
+		DataSend_AddCmdToQue((uint8_t*)pStr, strlen(pStr));
+
+		//
+		return;
+	}
+
+	// +CSQ: 20,99
+	if(strncmp(pStr, STR_CSQ, strlen(STR_CSQ)) == 0)
+	{
+		//
+		pStr += strlen(STR_CSQ) + 1;
+
+		//
+		StopChar(pStr, ',');
+		//
+		u8GSM_CSQ = atoi(pStr);
+
+		//
+		return;
+	}
+
+	// +CGPS: 0
+	if(strncmp(pStr, STR_GPS_STOP, strlen(STR_GPS_STOP)) == 0)
+	{
+		//
+		bGSM_GpsPower = FALSE;
+		//
+		RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GPS_POWER_OFF);
+		//
+		return;
+	}
+
+	// +CNSMOD: 4
+	if(strncmp(pStr, STR_CNSMOD, strlen(STR_CNSMOD)) == 0)
+	{
+		//
+		pStr += strlen(STR_CNSMOD) + 1;
+		//
+		ucGSM_NetMode = atoi(pStr);
+		//
+		return;
+	}
+
+	// +CFTPGETFILE:
+	if(strncmp(pStr, STR_CFTPGETFILE, strlen(STR_CFTPGETFILE)) == 0)
+	{
+		//
+		pStr += strlen(STR_CFTPGETFILE) + 1;
+
+		//
+		if(atoi(pStr) == 0)
+		{
+			uint8_t Buf[64];
+			char *pStr;
+
+			//
+			pStr = (char*)Buf;
+			//
+			sprintf(pStr, "%d,AT+FSRENAME=%s_%03d_%03d.dfu,%s",
+			        AT_FS_REN_FILE,
+			        STR_PRODUCT,
+			        HW_VER,
+			        CUSTOMER_TYPE,
+			        FILENAME_UPGRADE_DFU);
+			//
+			DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+			//
+			SIM5320_TransmitUpgradeFile();
+		}
+		else
+		{
+			//
+			SIM5320_RetrieveUpgradeFile();
+		}
+
+		//
+		SIM5320_CmdFinish();
+		//
+		return;
+	}
+
+	// +CFTPPUTFILE:
+	if(strncmp(pStr, STR_CFTPPUTFILE, strlen(STR_CFTPPUTFILE)) == 0)
+	{
+		//
+		pStr += strlen(STR_CFTPPUTFILE) + 1;
+
+		//
+		if(BackupFileSize || BackupFileOffset)
+		{
+			//
+			if(atoi(pStr) == 0)
+			{
+				//
+				SIM5320_StoreBackupFile(STORE_FINISH);
+			}
+			else
+			{
+				//
+				SIM5320_StoreBackupFile(STORE_RETRY);
+			}
+		}
+
+		//
+		SIM5320_CmdFinish();
+		//
+		return;
+	}
+
+	// +FSATTRI:
+	if(strncmp(pStr, STR_FSATTRI, strlen(STR_FSATTRI)) == 0)
+	{
+		//
+		pStr += strlen(STR_FSATTRI) + 1;
+
+		//
+		StopChar(pStr, ',');
+		//
+		UpgradeFileSize = atoi(pStr);
+
+		//
+		SD_Delete(FILENAME_UPGRADE_DFU);
+
+		//
+		return;
+	}
+
+	// 根據 AT command 取得 GSM module 特定資料
+	switch(gGSM_CurrCmd)
+	{
+
+		//
+		case AT_REQUEST_IMSI:
+			//
+			if(strlen(pStr) == MAX_IMSI_STR_SIZE)
+			{
+				//
+				strcpy(g_SysInfo.MobileInfo.IMSI, pStr);
+			}
+			break;
+		//
+		case AT_REQUEST_IMEI:
+			//
+			if(strlen(pStr) == MAX_IMEI_STR_SIZE)
+			{
+				//
+				strcpy(g_SysInfo.MobileInfo.IMEI, pStr);
+			}
+			break;
+
+		//
+		default:
+			break;
+	}
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_GetCmd(void)
+{
+	uint8_t *pData, DataLen;
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	uint8_t BufLen;
+	char *pStr;
+
+	//
+	if(SIM5320_GetCmdPkg() == FALSE)
+	{
+		//
+		return;
+	}
+
+	//
+	memset(Buf, 0x00, sizeof(Buf));
+	//
+	BufLen = 0;
+	//
+	pStr = (char*)Buf;
+
+	//
+	while(ucGSM_QueRI != ucGSM_QueWI)
+	{
+		//
+		pData = gGSM_CmdQue[ucGSM_QueRI].Data;
+		//
+		DataLen = gGSM_CmdQue[ucGSM_QueRI].DataLen;
+
+		//
+		memcpy(&Buf[BufLen], pData, DataLen);
+		//
+		BufLen += DataLen;
+		//
+		gGSM_CmdQue[ucGSM_QueRI].State = QUE_EMPTY;
+
+		//
+		ucGSM_QueRI++;
+		//
+		if(ucGSM_QueRI >= MAX_DATA_QUEUE_NUM)
+			ucGSM_QueRI = 0;
+
+		//
+		if(DataLen == OFFSET_SIZE(DATA_QUEUE_t, Data)
+		        && pData[DataLen - 1] != '\n' )
+		{
+			//
+			continue;
+		}
+
+		//
+		if((strncmp(pStr, STR_CMGR, strlen(STR_CMGR)) == 0 && CountChar(pStr, '\n') < 2)
+		        || (strncmp(pStr, STR_RECEIVE, strlen(STR_RECEIVE)) == 0 && CountChar(pStr, '\n') < 2))
+		{
+			//
+			continue;
+		}
+
+		//
+		if(g_Setting.DebugMode == DBG_GSM)
+		{
+			//
+			SET_SendBuffer(Buf, BufLen);
+		}
+
+		//
+		SIM5320_CmdChk(Buf, BufLen);
+
+		//
+		memset(Buf, 0x00, sizeof(Buf));
+		//
+		BufLen = 0;
+
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_Process(void)
+{
+#if ENABLE_IAP
+	//
+	if(bGSM_TxUpgradeFile == TRUE)
+	{
+		//
+		SIM5320_ChkNetStatus(RESET);
+		//
+		SIM5320_GetUpgradeFile();
+		//
+		return TRUE;
+	}
+#endif
+
+	//
+	if(bGSM_RxUpgradeFile == TRUE)
+	{
+		//
+		SIM5320_ChkNetStatus(RESET);
+		//
+		SIM5320_SendBackupFile();
+		//
+		return TRUE;
+	}
+
+	//
+	SIM5320_CmdProc();
+	//
+	SIM5320_GetCmd();
+
+	//
+	SIM5320_ChkNetStatus(SET);
+	//
+	SIM5320_ChkProcIdle(SET);
+	//
+	SIM5320_ChkCallStatus(SET);
+	//
+	SIM5320_ChkSendStatus();
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+uint8_t TID_GsmProc = TIMER_INVALID_ID;
+
+//============================================================================//
+//
+//============================================================================//
+static void SetTID_GsmProc(void)
+{
+	//
+	if(TID_GsmProc != TIMER_INVALID_ID)
+		return;
+
+	//
+	TID_GsmProc = SWTIM_SetTimer(TIMER_GSM_PROC, TIMER_CONTINUE, SIM5320_Process);
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void ClrTID_GsmProc(void)
+{
+	//
+	if(TID_GsmProc == TIMER_INVALID_ID)
+		return;
+
+	//
+	SWTIM_ClrTimer(TID_GsmProc);
+	//
+	TID_GsmProc = TIMER_INVALID_ID;
+}
+
+//============================================================================//
+//
+//============================================================================//
+uint8_t SIM5320_GetSocketNum(uint8_t BankNum)
+{
+	//
+	if(BankNum >= MAX_SOCKET_BANK)
+		BankNum = MAX_SOCKET_BANK;
+
+	//
+	return SocketState[BankNum].NUM;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetPowerStatus(void)
+{
+	//
+	return bGSM_PowerOn;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_ChkCmdBusy(void)
+{
+	if(gGSM_CurrCmd == AT_CMD_BREAK
+	        && gGSM_NextCmd == AT_CMD_BREAK)
+	{
+		//
+		return FALSE;
+	}
+	else
+	{
+		//
+		return TRUE;
+	}
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetOperatorStatus(void)
+{
+	//
+	return bGSM_Operator;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetNetStatus(void)
+{
+	static bool NetStatus;
+
+#if ENABLE_MULTI_IP
+	//
+	if(SocketState[SOCKET_BANK_DEF].CONN == TRUE
+	        && SocketState[SOCKET_BANK_EXT].CONN == TRUE)
+	{
+		//
+		if(NetStatus == FALSE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_CONNECT);
+		}
+		//
+		NetStatus = TRUE;
+	}
+	else
+	{
+		//
+		if(NetStatus == TRUE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_DISCONN);
+		}
+		//
+		NetStatus = FALSE;
+	}
+#else
+	//
+	if(SocketState[SOCKET_BANK_DEF].CONN == TRUE)
+	{
+		//
+		if(NetStatus == FALSE)
+		{
+			//
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_CONNECT);
+		}
+		//
+		NetStatus = TRUE;
+	}
+	else
+	{
+		//
+		if(NetStatus == TRUE)
+		{
+			//
+
+			RTOSprintf("> [SYS]%04X\r\n", SYS_STATE_GSM_NET_DISCONN);
+		}
+		//
+		NetStatus = FALSE;
+	}
+#endif
+
+	//
+	return NetStatus;
+}
+
+//============================================================================//
+//
+//============================================================================//
+GSM_NET_MODE_t SIM5320_GetNetMode(void)
+{
+	GSM_NET_MODE_t GSM_NET_MODE = MODE_NULL;
+
+	//
+	if(ucGSM_NetMode == 2 || ucGSM_NetMode == 3)
+	{
+		//
+		GSM_NET_MODE = MODE_GPRS;
+	}
+
+	//
+	if(ucGSM_NetMode >= 4)
+	{
+		//
+		GSM_NET_MODE = MODE_3G;
+	}
+
+	//
+	return GSM_NET_MODE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetDialStatus(void)
+{
+	//
+	return bGSM_Dialling;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetCallStatus(void)
+{
+	//
+	return bGSM_Calling;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetSendStatus(void)
+{
+	//
+	return bGSM_WriteSocket;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetSQ(uint8_t *pGSM_SQ)
+{
+	//
+	if(u8GSM_CSQ == 99)
+		return FALSE;
+
+	//
+	*pGSM_SQ = u8GSM_CSQ;
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+#define	RANGE_FULL_LEVEL		100
+
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+// 	CPTI 嫌原音量太小 所以改以下做法
+#define	RANGE_SPK_LEVEL_MAX		65535
+#else
+//
+#define	RANGE_SPK_LEVEL_MAX		8
+#endif
+
+//
+#define	RANGE_MIC_LEVEL_MAX		0
+
+//============================================================================//
+//
+//============================================================================//
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+static uint16_t SIM5320_GetSpkGain(void)
+#else
+static uint8_t SIM5320_GetSpkGain(void)
+#endif
+{
+	//
+	return (uint16_t)g_Setting.GSM_SET.LevelSpkGain * RANGE_SPK_LEVEL_MAX / RANGE_FULL_LEVEL;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_SetSpeakerGain(void)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+#if CUSTOMER_TYPE == CUSTOMER_CPTI
+	// 	CPTI 嫌原音量太小 所以改以下做法
+	sprintf(pStr, "%d,AT+CRXGAIN=%d",
+	        AT_SPK_VOLUME_SET,
+	        SIM5320_GetSpkGain());
+#else
+	//
+	sprintf(pStr, "%d,AT+CLVL=%d",
+	        AT_SPK_VOLUME_SET,
+	        SIM5320_GetSpkGain());
+#endif
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_SetMicrophoneGain(void)
+{
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_CallDialNum(char *pNum)
+{
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,ATD%s;", AT_CALL_DIAL, pNum);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_CallAnswer(void)
+{
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA	//Heinz
+	SIM5320_BuildCmd("ATA");
+	//
+	SIM5320_SendCmd();
+
+	bGSM_Calling = FALSE;
+	//
+	bGSM_Dialling = TRUE;
+#else
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,ATA", AT_CALL_ANSWER);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+#endif
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_CallHangUp(void)
+{
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA	//Heinz
+	SIM5320_BuildCmd("AT+CHUP");
+	//
+	SIM5320_SendCmd();
+	//
+	bGSM_Dialling = FALSE;
+#else
+	uint8_t Buf[32];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,AT+CHUP", AT_CALL_HOOK);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+#endif
+
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_SendMessage(GSM_MSG_DATA_t MsgData)
+{
+	char szTEMP[32];
+
+	//
+	memcpy(gGSM_MsgSend.Buf, MsgData.Data, MsgData.u16DataLen);
+	//
+	gGSM_MsgSend.u16BufLen = MsgData.u16DataLen;
+
+	//
+	sprintf(szTEMP, "AT+CMGS=\"%s\"", MsgData.PhoneNum);
+	//
+	SIM5320_BuildCmd(szTEMP);
+
+	//
+	gGSM_NextCmd = AT_SEND_MSG;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_SendMessageEvent(char *pStr)
+{
+	//
+	char EventMsg[UART_MAX_BUFFER_SIZE];
+	//
+	char EventName[24];
+	char EventMobile[24];
+	char EventTime[24];
+	char EventSpeed[16];
+	char EventCourse[16];
+	char EventAddr[100];
+	char EventData[UART_MAX_BUFFER_SIZE];
+
+	//
+	strcpy(EventMsg, pStr);
+	//
+	pStr = EventMsg;
+
+	// 事件名稱
+	StopChar(pStr, ',');
+	//
+	GSM_GetSmsEvent(pStr, EventName);
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 手機門號
+	StopChar(pStr, ',');
+	//
+	if(strlen(pStr) == 0)
+	{
+		//
+		strcpy(EventMobile, g_Setting.GSM_SET.PhoneBank[0].Number);
+		//
+		if(strlen(EventMobile) == 0)
+			return FALSE;
+	}
+	else
+	{
+		//
+		strcpy(EventMobile, pStr);
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 事件時間
+	StopChar(pStr, ',');
+	//
+	{
+		time_t rawtime;
+		struct tm * timeinfo;
+		char TEMP[6];
+
+		//
+		time(&rawtime);
+		//
+		rawtime += g_Setting.i32TimeZoneOffset;
+		//
+		timeinfo = localtime(&rawtime);
+		//
+		strncpy(TEMP, pStr, 2);
+		timeinfo->tm_hour = atoi(TEMP);
+		//
+		strncpy(TEMP, pStr + 2, 2);
+		timeinfo->tm_min = atoi(TEMP);
+		//
+		strncpy(TEMP, pStr + 4, 2);
+		timeinfo->tm_sec = atoi(TEMP);
+		//
+		rawtime = mktime(timeinfo);
+
+		//
+		strftime(EventTime, sizeof(EventTime), "%Y-%m-%d %H:%M:%S", localtime(&rawtime));
+	}
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 事件速度
+	StopChar(pStr, ',');
+	//
+	sprintf(EventSpeed, "%dkm/hr", atoi(pStr));
+	//
+	pStr += strlen(pStr) + 1;
+
+	// 事件方向
+	StopChar(pStr, ',');
+	//
+	if(pStr[3] == '1')
+		strcpy(EventCourse, STR_NORTH);
+	else if(pStr[3] == '7')
+		strcpy(EventCourse, STR_NORTH_EAST);
+	else if(pStr[3] == '2')
+		strcpy(EventCourse, STR_EAST);
+	else if(pStr[3] == '8')
+		strcpy(EventCourse, STR_SOUTH_EAST);
+	else if(pStr[3] == '3')
+		strcpy(EventCourse, STR_SOUTH);
+	else if(pStr[3] == '9')
+		strcpy(EventCourse, STR_SOUTH_WEST);
+	else if(pStr[3] == '0')
+		strcpy(EventCourse, STR_WEST);
+	else if(pStr[3] == '6')
+		strcpy(EventCourse, STR_NORTH_WEST);
+	//
+	pStr += strlen(pStr) + 1;
+
+	// GEO名稱
+	StopChar(pStr, ',');
+	pStr += strlen(pStr) + 1;
+
+	// 事件地址
+	strcpy(EventAddr, pStr);
+
+#if CUSTOMER_TYPE == CUSTOMER_POPE
+	//
+	sprintf(EventData, "%s,%s %s\n%s\n%s\n%s,%s\nWe Track24/7\x1A",
+	        EventMobile,
+	        g_Setting.szBus_ID,
+	        EventName,
+	        EventTime,
+	        EventAddr,
+	        EventCourse,
+	        EventSpeed);
+#else
+	//
+	sprintf(EventData, "%s,%s %s\n%s\n%s\n%s,%s\x1A",
+	        EventMobile,
+	        g_Setting.szBus_ID,
+	        EventName,
+	        EventTime,
+	        EventAddr,
+	        EventCourse,
+	        EventSpeed);
+#endif
+
+	//
+	DataSend_AddMsgToQue((uint8_t*)EventData, strlen(EventData));
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_BuildCmdData(GSM_CMD_DATA_t CmdData)
+{
+	//
+	SIM5320_BuildCmd((char*)CmdData.Data);
+	//
+	gGSM_NextCmd = (AT_CMD_t)CmdData.CmdNum;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_BuildTestCmd(char *CMD)
+{
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+	//
+	sprintf(pStr, "%d,%s", AT_CMD_TEST, CMD);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_RetrieveUpgradeFile(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CFTPGETFILE=\"/%s/%s_%03d_%03d.dfu\",0",
+	        AT_FTP_GET_FILE,
+	        STR_DIRECTORY_UPGRADE,
+	        STR_PRODUCT,
+	        HW_VER,
+	        CUSTOMER_TYPE);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_UpgradeFirmware(void)
+{
+	//
+	if(SIM5320_GetNetStatus() == FALSE)
+		return FALSE;
+
+	//
+	SIM5320_DeleteFile(FILENAME_ALL_FILE);
+	//
+	SIM5320_RetrieveUpgradeFile();
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_SystemUpgrade(void)
+{
+	//
+	if(UpgradeFileSize || UpgradeFileOffset)
+		return FALSE;
+	//
+	if(BackupFileSize || BackupFileOffset)
+		return FALSE;
+
+	//
+	SWTIM_SetTimer(S_2_mS(MINUTE_2_SECOND(1)), TIMER_ONESHOT, SIM5320_UpgradeFirmware);
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+static bool SIM5320_BackupDatalog(void)
+{
+	//
+	if(SIM5320_GetNetStatus() == FALSE)
+		return FALSE;
+
+	//
+	SIM5320_DeleteFile(FILENAME_ALL_FILE);
+	//
+	SIM5320_ReceiveBackupFile();
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_SystemBackup(time_t BackupTime)
+{
+	//
+	if(UpgradeFileSize || UpgradeFileOffset)
+		return FALSE;
+	//
+	if(BackupFileSize || BackupFileOffset)
+		return FALSE;
+
+	//
+	if(BackupTime == 0)
+	{
+		//
+		sprintf(BackupFileName, "%s", FILENAME_DATALOG_BIN);
+	}
+	else
+	{
+		//
+		strftime(BackupFileName, sizeof(BackupFileName), "%Y%m%d.DTR", localtime(&BackupTime));
+	}
+
+	//
+	BackupFileSize = SD_GetFileSize(BackupFileName);
+	//
+	if(BackupFileSize == 0)
+		return FALSE;
+
+	//
+	SWTIM_SetTimer(S_2_mS(MINUTE_2_SECOND(1)), TIMER_ONESHOT, SIM5320_BackupDatalog);
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_SystemPhoto(time_t PhotoTime)
+{
+	//
+	return FALSE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+//
+void GPS_ClrReg(void);
+//
+static void SIM5320_GpsClrReg(void)
+{
+	//
+	GPS_ClrReg();
+
+	//
+	bGSM_GpsPower = FALSE;
+	//
+	bGSM_GpsData = FALSE;
+	//
+	memset(&GSM_GpsData, 0x00, sizeof(GPS_DATA_t));
+	//
+	GSM_GpsData.Latitude.cIndicator = 'N';
+	//
+	GSM_GpsData.Longitude.cIndicator = 'E';
+}
+
+//============================================================================//
+//
+//============================================================================//
+static void SIM5320_GpsInfoCfg(FunctionalState STATE)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	if(STATE == ENABLE)
+	{
+		//
+		sprintf(pStr, "%d,%s", AT_GPS_INFO_CONFIG, STR_GPS_INFO_START);
+	}
+	else
+	{
+		//
+		sprintf(pStr, "%d,%s", AT_GPS_INFO_CONFIG, STR_GPS_INFO_STOP);
+	}
+
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GpsColdStart(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	if(bGSM_GpsPower == TRUE)
+		return FALSE;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CGPSCOLD", AT_GPS_TURN_ON);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GpsHotStart(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	if(bGSM_GpsPower == TRUE)
+		return FALSE;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CGPSHOT", AT_GPS_TURN_ON);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GpsClear(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CGPSDEL", AT_GPS_INFO_CLEAR);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GpsOn(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CGPS=1,2", AT_GPS_TURN_ON);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GpsStart(void)
+{
+	//
+	if(bGSM_GpsPower == TRUE)
+		return FALSE;
+
+	//
+	SIM5320_GpsClear();
+	//
+	SIM5320_GpsOn();
+
+	//
+	return TRUE;
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GpsStop(void)
+{
+	uint8_t Buf[64];
+	char *pStr;
+
+	//
+	pStr = (char*)Buf;
+
+	//
+	sprintf(pStr, "%d,AT+CGPS=0", AT_GPS_TURN_OFF);
+	//
+	DataSend_AddCmdToQue(Buf, strlen(pStr));
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GpsTurnOn(GPS_START_t GpsStart)
+{
+	//
+	if(bGSM_TxUpgradeFile == TRUE
+	        || bGSM_RxUpgradeFile == TRUE)
+		return;
+
+#if ENABLE_ASSIST_GPS
+	//
+	SWTIM_SetTimer(TIMER_GSM_PROC, TIMER_ONESHOT, SIM5320_GpsStart);
+#else
+	//
+	if(GpsStart == START_COLD)
+	{
+		//
+		SWTIM_SetTimer(TIMER_GSM_PROC, TIMER_ONESHOT, SIM5320_GpsColdStart);
+	}
+
+	//
+	if(GpsStart == START_HOT)
+	{
+		//
+		SWTIM_SetTimer(TIMER_GSM_PROC, TIMER_ONESHOT, SIM5320_GpsHotStart);
+	}
+#endif
+
+}
+
+//============================================================================//
+//
+//============================================================================//
+void SIM5320_GpsTurnOff(void)
+{
+	//
+	if(bGSM_TxUpgradeFile == TRUE
+	        || bGSM_RxUpgradeFile == TRUE)
+		return;
+
+	//
+	SIM5320_GpsStop();
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetGpsPower(void)
+{
+	//
+	return bGSM_GpsPower;
+}
+
+//============================================================================//
+//
+//============================================================================//
+bool SIM5320_GetGpsData(GPS_DATA_t *GPS_AllData)
+{
+	//
+	if(bGSM_GpsData == TRUE)
+	{
+		//
+		GSM_GpsData.CurrLocation = g_SysInfo.Location;
+		//
+		*GPS_AllData = GSM_GpsData;
+
+		//
+		return TRUE;
+	}
+
+	//
+	return FALSE;
+}
+
+//============================================================================//
+#endif // ENABLE_GSM_SIM5320

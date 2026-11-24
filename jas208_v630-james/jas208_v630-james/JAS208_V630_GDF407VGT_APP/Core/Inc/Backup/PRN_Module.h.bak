@@ -1,0 +1,95 @@
+#ifndef _PRN_MODULE_H_
+#define _PRN_MODULE_H_
+//============================================================================//
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include <time.h>
+
+#include "Config.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#if ENABLE_PRINTER
+#define PRINTER_COMPORT_DEF		  DB9_COMPORT_DEF
+
+// 0x1B 0x40 : 重置列表機
+#define STR_PRINT_HEAD			    "\x1B\x40\r\n"
+
+#define STR_PRINT_END		  	    "\r\r\r\r\r\n"
+
+#if ENABLE_SCANNER
+#define SCANNER_COMPORT_DEF		  DB9_COMPORT_DEF
+
+#define	TIMER_SCAN_PROC			    100
+
+#define	MAX_SCAN_PKG_TIMEOUT	  (500 / TIMER_SCAN_PROC)
+
+#define BARCODE_SIZE_MAX		    20
+#endif
+
+#if ENABLE_DVR
+#define DVR_COMPORT_DEF		DB9_COMPORT_DEF		//Heinz
+
+#if 0
+#undef DVR_COMPORT_DEF
+#define DVR_COMPORT_DEF		EXT_COMPORT_DEF
+#endif
+
+#define	TIMER_DVR_CONN_PROC		S_2_mS(1)
+
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+#undef TIMER_DVR_CONN_PROC
+#define	TIMER_DVR_CONN_PROC		500  //	 //Heinz   //200
+#endif
+#endif
+
+#if ENABLE_DMD
+#define DMD_COMPORT_DEF		DB9_COMPORT_DEF
+
+// 	正常至少多久會送一次訊號
+#define	NORMAL_SINGLE_TIME	        (10)
+
+// 沒裝置 NORMAL_SINGLE_TIME 分鐘 叫5聲
+#define DMD_BUZZER_ENABLE		(0)
+
+#define	TIMER_DMD_PROC			100
+
+#define	MAX_DMD_PKG_TIMEOUT	(500 / TIMER_DMD_PROC)
+
+//  時間到以後過了 10秒還是沒有訊號才判定失敗
+#define	DMD_NORMAL_TIME	    (MINUTE_2_SECOND(NORMAL_SINGLE_TIME)+10)
+#endif
+
+#if ENABLE_LDWS
+#define LDWS_COMPORT_DEF		DB9_COMPORT_DEF
+
+#define	TIMER_LDWS_PROC			100
+#define	MAX_LDWS_PKG_TIMEOUT	(500 / TIMER_LDWS_PROC)
+
+#define LDWS_DEVICE_HEAD		"$AS+C2270="
+#endif
+
+#if ENABLE_EUPFIN_RS232
+#define	TIMER_RS232_PROC		    100
+
+#define	MAX_RS232_PKG_TIMEOUT	  (500 / TIMER_RS232_PROC)
+#endif
+
+#endif
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+void PRN_PrintTest(void);
+void PRN_PrintStd(time_t *rawtime);
+void PRN_PrintExt1(time_t *rawtime);
+void PRN_PrintExt2(time_t *rawtime);
+void PRN_PrintString(char* StrBuf);
+
+
+//============================================================================//
+#endif /* _PRN_DRIVER_H_ */

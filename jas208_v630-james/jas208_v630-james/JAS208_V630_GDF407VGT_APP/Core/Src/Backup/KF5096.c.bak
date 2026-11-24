@@ -1,0 +1,71 @@
+//============================================================================//
+// Includes
+//============================================================================//
+/*
+#include "KF5096.h"
+
+#include "stm32fxxx_hal_user.h"
+#include "Default.h"
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+bool bPulseOut = FALSE;
+
+uint8_t TimeCntInt = 0;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+#if ENABLE_KF5096
+uint8_t TIM2_GetIntervalCount(uint32_t uS);
+
+void KF5096_Init(void)
+{
+	HwCfg_PBInit(KF5096_INT_OUT, FALSE);
+
+	HwCfg_PBSet(KF5096_INT_OUT);
+}
+
+void KF5096_PulseOut(void)
+{
+	bPulseOut = TRUE;
+}
+
+void KF5096_Check(void)
+{
+	if(g_SysInfo.u16Speed_Hz <= 0)
+	{
+		HwCfg_PBClr(KF5096_INT_OUT);
+
+		return;
+	}
+
+	if(bPulseOut == FALSE)
+	{
+		if(TimeCntInt)
+		{
+			TimeCntInt--;
+
+			return;
+		}
+
+		HwCfg_PBSet(KF5096_INT_OUT);
+
+		return;
+	}
+
+	if(HwCfg_PBGetState(SPEED_IN) == 0)
+		return;
+
+	HwCfg_PBClr(KF5096_INT_OUT);
+
+	TimeCntInt = TIM2_GetIntervalCount(g_Setting.KF5096.HiDuty);
+
+	bPulseOut = FALSE;
+}
+#endif
+*/

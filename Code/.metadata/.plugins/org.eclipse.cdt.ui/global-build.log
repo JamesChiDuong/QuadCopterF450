@@ -1,0 +1,17 @@
+22:26:05 **** Incremental Build of configuration Debug for project 1. Control BLDC ****
+make -j8 all 
+arm-none-eabi-gcc "../Core/Src/USER_System.c" -mcpu=cortex-m4 -std=gnu11 -g3 -DDEBUG -DUSE_HAL_DRIVER -DSTM32F429xx -c -I../Core/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc -I../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy -I../Middlewares/Third_Party/FreeRTOS/Source/include -I../Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS -I../Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM4F -I../Drivers/CMSIS/Device/ST/STM32F4xx/Include -I../Drivers/CMSIS/Include -O0 -ffunction-sections -fdata-sections -Wall -fstack-usage -MMD -MP -MF"Core/Src/USER_System.d" -MT"Core/Src/USER_System.o" --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -o "Core/Src/USER_System.o"
+arm-none-eabi-gcc -o "1. Control BLDC.elf" @"objects.list"   -mcpu=cortex-m4 -T"D:\ChiDuong\QuadCorter Project\Code\1. Control BLDC\STM32F429ZITX_FLASH.ld" --specs=nosys.specs -Wl,-Map="1. Control BLDC.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -Wl,--start-group -lc -lm -Wl,--end-group
+Finished building target: 1. Control BLDC.elf
+ 
+arm-none-eabi-objdump -h -S  1.\ Control\ BLDC.elf  > "1. Control BLDC.list"
+arm-none-eabi-objcopy  -O binary  1.\ Control\ BLDC.elf  "1. Control BLDC.bin"
+arm-none-eabi-size   1.\ Control\ BLDC.elf 
+   text	   data	    bss	    dec	    hex	filename
+  58484	    500	  19984	  78968	  13478	1. Control BLDC.elf
+Finished building: default.size.stdout
+ 
+Finished building: 1. Control BLDC.bin
+ 
+Finished building: 1. Control BLDC.list
+ 

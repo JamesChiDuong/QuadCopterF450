@@ -1,0 +1,305 @@
+//============================================================================//
+// Includes
+//============================================================================//
+#include "DataSend.h"
+
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Default.h"
+#include "diskio.h"
+#include "ff.h"
+#include "GSM_Driver.h"
+#include "SD_Module.h"
+#include "TTIA.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#define SEND_BUFFER_SIZE_MAX	         GSM_MAX_BUFFER_SIZE
+
+#define	FILENAME_SEND_PKG_TMP	         "SEND_PKG.TMP"
+
+#define	FILENAME_SEND_MSG_TMP	         "SEND_MSG.TMP"
+
+#define	FILENAME_SEND_CMD_TMP	         "SEND_CMD.TMP"
+
+#define SEND_INDEX_END_ID		           0x55AA
+
+#define	TIMER_DATASEND_PROC		         100
+
+#define	COUNT_SEND_PKG			           (S_2_mS(10) / TIMER_DATASEND_PROC)
+
+#define NEW_QUEUE_SIZE_PKG		         60000
+
+#define NEW_QUEUE_SIZE_MSG		         1000
+
+#define NEW_QUEUE_SIZE_CMD		         1000
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+typedef enum
+{
+	TYPE_CMD = 0,
+
+	TYPE_MSG,
+
+	TYPE_PKG,
+
+	TYPE_NULL,
+
+} SEND_TYPE_t;
+
+#pragma pack(1)
+typedef struct
+{
+	SEND_TYPE_t TYPE;
+
+	uint8_t Buf[GSM_MAX_BUFFER_SIZE];
+
+	uint16_t BufLen;
+
+} SEND_DATA_t;
+
+typedef struct
+{
+	uint16_t Count;
+
+	uint16_t Index;
+
+	uint16_t End;
+
+} SEND_INDEX_t;
+#pragma pack()
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+SEND_DATA_t gSendData;
+
+SEND_INDEX_t gSendIdx_PKG;
+
+SEND_INDEX_t gSendIdx_MSG;
+
+SEND_INDEX_t gSendIdx_CMD;
+
+uint8_t gSendCmd[UART_BASE_BUFFER_SIZE * 8];
+
+uint16_t   u16QIsend = 0;
+
+char Re_SendData[512]= {'0'};
+
+bool Download_Flg;
+
+bool Fota_Flg;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+static void DataSend_NewQueue(SEND_TYPE_t TYPE)
+{
+	char FileName[128];
+	SEND_INDEX_t *pIdx;
+	uint16_t IdxMax;
+
+
+	switch(TYPE)
+	{
+		case TYPE_PKG:
+			strcpy(FileName, FILENAME_SEND_PKG_TMP);
+
+			pIdx = &gSendIdx_PKG;
+
+			//RTOSprintf("\r\n> PKG_INDEX write = %d ...",gSendIdx_PKG.Index); //Heinz
+
+			IdxMax = NEW_QUEUE_SIZE_PKG;
+
+			break;
+
+		case TYPE_MSG:
+			strcpy(FileName, FILENAME_SEND_MSG_TMP);
+
+			pIdx = &gSendIdx_MSG;
+
+			IdxMax = NEW_QUEUE_SIZE_MSG;
+
+			break;
+
+		default:
+			return;
+	}
+
+	memset((uint8_t*)pIdx, 0x00, sizeof(SEND_INDEX_t));
+
+	pIdx->End = SEND_INDEX_END_ID;
+
+	SD_WriteBuffToFile(FileName, (uint8_t*)pIdx, sizeof(SEND_INDEX_t));
+
+	memset((uint8_t*)&gSendData, 0x00, sizeof(SEND_DATA_t));
+
+	SD_WriteBuffToAddr(FileName, (uint8_t*)&gSendData, sizeof(SEND_DATA_t),
+	                   sizeof(SEND_INDEX_t) + IdxMax * sizeof(SEND_DATA_t));
+}
+
+void DataSend_Init(void)
+{
+	bool RESULT = FALSE;
+	char FileName[128];
+	SEND_TYPE_t TYPE;
+	SEND_INDEX_t *pIdx;
+
+
+	for(TYPE = (SEND_TYPE_t)0; TYPE < TYPE_NULL; TYPE++)
+	{
+		switch(TYPE)
+		{
+			case TYPE_PKG:
+				strcpy(FileName, FILENAME_SEND_PKG_TMP);
+
+				pIdx = &gSendIdx_PKG;
+
+				break;
+
+			case TYPE_MSG:
+				strcpy(FileName, FILENAME_SEND_MSG_TMP);
+
+				pIdx = &gSendIdx_MSG;
+
+				break;
+
+			default:
+				continue;
+		}
+
+		RESULT = SD_ReadAddrToBuff(FileName, (uint8_t*)pIdx, sizeof(SEND_INDEX_t), 0);
+
+		if(RESULT == TRUE
+		        && pIdx->End == SEND_INDEX_END_ID)
+			continue;
+
+		DataSend_NewQueue(TYPE);
+
+		Delay_mS(500);
+	}
+}
+
+void DataSend_ClrDataQue(void)
+{
+	DataSend_NewQueue(TYPE_PKG);
+}
+
+void DataSend_ClrMsgQue(void)
+{
+	DataSend_NewQueue(TYPE_MSG);
+}
+
+void DataSend_ClrCmdQue(void)
+{
+	memset(gSendCmd, 0x00, sizeof(gSendCmd));
+}
+
+void DataSend_Queue(SEND_TYPE_t TYPE, uint8_t *Buf, uint16_t BufLen)
+{
+	char FileName[128];
+	SEND_INDEX_t *pIdx;
+
+
+	if(TYPE == TYPE_CMD)
+	{
+		char *pStr;
+
+
+		do
+		{
+			pStr = (char*)gSendCmd;
+
+			if(strlen(pStr) + BufLen < sizeof(gSendCmd))
+				break;
+
+			StopChar(pStr, '$');
+
+			pStr += strlen(pStr) + 1;
+
+			strcpy((char*)gSendCmd, pStr);
+
+			pStr = (char*)gSendCmd;
+
+		}
+		while(strlen(pStr));
+
+		sprintf((char*)gSendCmd, "%s%s$", (char*)gSendCmd, (char*)Buf);
+
+		return;
+	}
+
+	if(BufLen > SEND_BUFFER_SIZE_MAX)
+		BufLen = SEND_BUFFER_SIZE_MAX;
+
+	memset((uint8_t*)&gSendData, 0x00, sizeof(SEND_DATA_t));
+
+	gSendData.TYPE = TYPE;
+
+	memcpy(gSendData.Buf, Buf, BufLen);
+
+	gSendData.BufLen = BufLen;
+
+	switch(TYPE)
+	{
+		case TYPE_PKG:
+			strcpy(FileName, FILENAME_SEND_PKG_TMP);
+
+			pIdx = &gSendIdx_PKG;
+
+#if NET_SEND_MODE == NET_SEND_MODE_REAL
+			pIdx->Count = 0;
+#endif
+
+			break;
+
+		case TYPE_MSG:
+			strcpy(FileName, FILENAME_SEND_MSG_TMP);
+
+			pIdx = &gSendIdx_MSG;
+
+			break;
+
+		default:
+			return;
+	}
+
+	if(SD_WriteBuffToAddr(FileName, (uint8_t *)&gSendData, sizeof(SEND_DATA_t),
+	                      sizeof(SEND_INDEX_t) + pIdx->Count * sizeof(SEND_DATA_t)) == FALSE)
+		return;
+
+	pIdx->Count++;
+
+	SD_WriteBuffToAddr(FileName, (uint8_t *)pIdx, sizeof(SEND_INDEX_t), 0);
+}
+
+void DataSend_AddDataToQue(uint8_t *Data, uint16_t DataLen)
+{
+#if ENABLE_GSM_NET
+	DataSend_Queue(TYPE_PKG, Data, DataLen);
+#endif
+}
+
+void DataSend_AddMsgToQue(uint8_t *Msg, uint16_t MsgLen)
+{
+#if ENABLE_GSM_NET
+	DataSend_Queue(TYPE_MSG, Msg, MsgLen);
+#endif
+}
+
+void DataSend_AddCmdToQue(uint8_t *Cmd, uint16_t CmdLen)
+{
+#if ENABLE_GSM_NET
+	DataSend_Queue(TYPE_CMD, Cmd, CmdLen);
+#endif
+}

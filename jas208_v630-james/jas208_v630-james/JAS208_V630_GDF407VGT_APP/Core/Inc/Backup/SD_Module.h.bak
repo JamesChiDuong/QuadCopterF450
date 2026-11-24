@@ -1,0 +1,155 @@
+#ifndef _SD_MODULE_H_
+#define _SD_MODULE_H_
+//============================================================================//
+
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "ff.h"
+//#include "SD_Driver.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#define SD_BLOCK_SIZE              0x200
+
+#define MSG_SD_DISK_INVALID		     "\r\n> SD card is INVALID."
+#define MSG_SD_OPEN_DIR_ERROR		   "\r\n> SD open dir ERROR."
+
+#define SD_BUFFER_SIZE             2048
+
+#define SD_ERROR_CNT_MAX           5U
+
+#define SD_RESET_CNT_MAX           3U
+
+#define SD_REPORT_ERR_TIMEOUT      S_2_mS(120)
+
+
+//============================================================================//
+// User TypeDef Variables
+//============================================================================//
+typedef enum
+{
+	SD_NULL = 0U, // 0
+	
+  SD_OPEN, // 1
+	
+	SD_CLOSE, // 2
+	
+	SD_READ, // 3
+	
+	SD_WRITE, // 4
+	
+	SD_LSEEK, // 5
+	
+	SD_OPENDIR, // 6
+	
+	SD_CLOSEDIR, // 7
+	
+	SD_READDIR, // 8
+	
+	SD_MKDIR, // 9
+	
+	SD_UNLINK, // 10
+	
+	SD_RENAME, // 11
+	
+	SD_MOUNT, // 12
+	
+	SD_MKFS, // 13
+	
+	SD_TELL, // 14
+	
+	SD_SIZE, // 15
+	
+	SD_DISK_INITIALIZE, // 16
+	
+	SD_DISK_STATUS, // 17	
+	
+	SD_GET_INFO, // 18
+	
+	SD_GET_STATUS, // 19
+	
+	SD_RESET // 20
+	
+}SD_FunctionTypeDef;
+
+#pragma pack(1)
+typedef struct
+{
+  bool bInUse;
+	
+	SD_FunctionTypeDef sdCmd;
+	
+	uint32_t u32Arg[5];
+	
+	uint32_t *pu32RetVal;
+	
+}SD_RequestTypeDef;
+#pragma pack()
+
+//============================================================================//
+// User Externs
+//============================================================================//
+//extern DIR dirSD_Handle;
+
+//extern char cSD_FilePath[128];
+
+//extern uint8_t u8SD_Buf[SD_BUFFER_SIZE];
+
+extern SD_RequestTypeDef sdRequest;
+
+extern uint8_t u8SD_RetryCnt, u8SD_ErrCnt;
+
+extern bool bSD_ReportErrFlag;
+
+extern uint32_t u32SD_ReportErrLastTick;
+
+//extern uint8_t u8PublicDataBuf[8192]; // 8 kBytes
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+void SD_PWR_Enable(void);
+void SD_PWR_Disable(void);
+void SD_ShowInfo(void);
+bool SD_FS_Check(bool bInit);
+bool SD_FS_GetStatus(void);
+bool SD_Init(void);
+bool SD_Deinit(void);
+void SD_Reset(void);
+bool SD_CheckDirExist(char *pcDirName);
+bool SD_MakeDir(char *pcDirName);
+bool SD_RemoveDir(char *pcDirName);
+bool SD_CheckFileExist(char *pcFileName);
+bool SD_FindFileName(char *pcFindName, char *pcReturnName);
+uint32_t SD_GetFileSize(char *pcFileName);
+bool SD_FileList(void);
+bool SD_FileListDir(char *pcDirName);
+bool SD_ClearUp(char *pcFileNames, uint8_t u8KeepTime);
+bool SD_ClearUpDir(char *pcDir, char *pcFileNames, uint8_t u8KeepTime);
+bool SD_Delete(char *pcNames);
+bool SD_DelExcept(char *pcNames);
+bool SD_Format(void);
+bool SD_RemoveFile(char *pcFilename);
+bool SD_Rename(char *pcOldName, char *pcNewName);
+bool SD_AddBuffToFile(char *pcFileName, uint8_t *pu8Buf, uint16_t u16BufLen);
+bool SD_AddStrToFile(char *pcFileName, char *pcString);
+bool SD_ReadAddrToBuff(char *pcFileName, uint8_t *pu8Buf,
+                       uint16_t u16BufLen, uint32_t u32Addr);
+bool SD_ReadFileToBuff(char *pcFileName, uint8_t *pu8Buf, uint16_t u16BufLen);
+bool SD_WriteBuffToAddr(char *pcFileName, uint8_t *pu8Buf,
+                        uint16_t u16BufLen, uint32_t u32Addr);
+bool SD_WriteBuffToFile(char *pcFileName, uint8_t *pu8Buf, uint16_t u16BufLen);
+bool SD_CreateFile(char *pcFileName, uint32_t u32Addr, bool bClearFlag);
+
+void SD_RequestInit(void);
+FRESULT SD_RequestDo(SD_FunctionTypeDef sdCmd, uint8_t u8ArgNum,...);
+void SD_RequestHandle(void);
+
+
+//============================================================================//
+#endif /* _SD_MODULE_H_ */

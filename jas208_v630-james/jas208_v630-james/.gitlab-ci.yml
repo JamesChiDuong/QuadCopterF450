@@ -1,0 +1,34 @@
+image: ubuntu:14.04
+
+stages:
+  - test
+
+check_app:
+  stage: test 
+  script:
+    - apt-get update
+    - apt-get install -y git cmake g++ gcovr
+    - git submodule update --init --recursive
+    - cd CI/CI_APP
+    - cp $CI_PROJECT_DIR/JAS208_V630_GDF407VGT_APP/Core/Inc/Config.h ./src
+    - cp $CI_PROJECT_DIR/JAS208_V630_GDF407VGT_APP/Core/Inc/HW_Config.h ./src
+    - cp $CI_PROJECT_DIR/JAS208_V630_GDF407VGT_APP/Core/Inc/Version.h ./src
+    - cmake .
+    - make -j
+    - ./unit_tests
+    - gcovr -r ./src/
+    
+check_boot:
+  stage: test 
+  script:
+    - apt-get update
+    - apt-get install -y git cmake g++ gcovr
+    - git submodule update --init --recursive
+    - cd CI/CI_BOOT
+    - cp $CI_PROJECT_DIR/JAS208_V630_GDF407VGT_BOOT/Core/Inc/Config.h ./src
+    - cp $CI_PROJECT_DIR/JAS208_V630_GDF407VGT_BOOT/Core/Inc/HW_Config.h ./src
+    - cp $CI_PROJECT_DIR/JAS208_V630_GDF407VGT_BOOT/Core/Inc/Version.h ./src
+    - cmake .
+    - make -j
+    - ./unit_tests
+    - gcovr -r ./src/

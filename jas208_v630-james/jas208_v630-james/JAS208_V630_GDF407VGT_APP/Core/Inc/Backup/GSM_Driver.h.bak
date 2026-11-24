@@ -1,0 +1,709 @@
+#ifndef _GSM_DRIVER_H_
+#define _GSM_DRIVER_H_
+//============================================================================//
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "CommFunc.h"
+#include "Config.h"
+#include "DataLog.h"
+#include "DataType.h"
+//#include "GSM_QtEC21.h"
+#if ENABLE_GSM_SIM908
+#include "GSM_SIM908.h"
+#elif ENABLE_GSM_SIM968
+#include "GSM_SIM908.h"
+#elif ENABLE_GSM_SIM5320
+#include "GSM_SIM5320.h"
+#elif ENABLE_GSM_QTEC21
+#include "GSM_QtEC21.h"
+#endif
+#include "HW_Config.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#if ENABLE_GSM_NET
+#define	STR_PASS_ADMIN			            "5948" // Network pass admin
+
+#define	STR_PASS_USER			              "1111" // Network pass user
+
+// Server Jasslin information
+#define SERVER_JASS_IP_ADDR             "210.65.89.237"
+
+#define SERVER_JASS_IP_ADDR_BYTE3       210U
+#define SERVER_JASS_IP_ADDR_BYTE2       65U
+#define SERVER_JASS_IP_ADDR_BYTE1       89U
+#define SERVER_JASS_IP_ADDR_BYTE0       237U
+
+#define SERVER_JASS_DOMAIN_NAME         "NONE"
+
+#define SERVER_JASS_PORT                6666U
+
+#define SERVER_JASS_ENABLE_CHK          1U
+#define SERVER_JASS_ENABLE_LOG          1U
+#define SERVER_JASS_ENABLE_EVENT        1U
+
+#define SERVER_JASS_HEADER_CHK          "$CHK"
+#define SERVER_JASS_HEADER_LOG          "$LOG"
+#define SERVER_JASS_HEADER_EVENT        "$DATA"
+
+//#define SERVER_JASS_SEND_NORMAL         DATALOG_UPLOAD_MAX_10
+//#define SERVER_JASS_SEND_NORMAL         DATALOG_UPLOAD_MAX_15
+//#define SERVER_JASS_SEND_NORMAL         DATALOG_UPLOAD_MAX_20
+#define SERVER_JASS_SEND_NORMAL         DATALOG_UPLOAD_MAX_30
+//#define SERVER_JASS_SEND_NORMAL         DATALOG_UPLOAD_MAX_60
+
+// Server VDRS information
+#define SERVER_VDRS_IP_ADDR             "60.251.157.47"
+
+#define SERVER_VDRS_IP_ADDR_BYTE3       60U
+#define SERVER_VDRS_IP_ADDR_BYTE2       251U
+#define SERVER_VDRS_IP_ADDR_BYTE1       157U
+#define SERVER_VDRS_IP_ADDR_BYTE0       47U
+
+#define SERVER_VDRS_DOMAIN_NAME         "NONE"
+
+#define SERVER_VDRS_PORT                8208U
+
+#define SERVER_VDRS_ENABLE_CHK          1U
+#define SERVER_VDRS_ENABLE_LOG          1U
+#define SERVER_VDRS_ENABLE_EVENT        1U
+
+#define SERVER_VDRS_HEADER_CHK          "$CHK1"
+#define SERVER_VDRS_HEADER_LOG          "$LOG40"
+#define SERVER_VDRS_HEADER_EVENT        "$DATA1"
+
+//#define SERVER_VDRS_SEND_NORMAL         DATALOG_UPLOAD_MAX_10
+//#define SERVER_VDRS_SEND_NORMAL         DATALOG_UPLOAD_MAX_15
+//#define SERVER_VDRS_SEND_NORMAL         DATALOG_UPLOAD_MAX_20
+#define SERVER_VDRS_SEND_NORMAL         DATALOG_UPLOAD_MAX_30
+//#define SERVER_VDRS_SEND_NORMAL         DATALOG_UPLOAD_MAX_60
+
+// Server Government information
+#define SERVER_GOV_IP_ADDR              "223.200.80.120" 
+
+#define SERVER_GOV_IP_ADDR_BYTE3        223U
+#define SERVER_GOV_IP_ADDR_BYTE2        200U
+#define SERVER_GOV_IP_ADDR_BYTE1        80U
+#define SERVER_GOV_IP_ADDR_BYTE0        120U
+
+#define SERVER_GOV_DOMAIN_NAME          "NONE"
+
+#define SERVER_GOV_PORT                 9030U
+
+#define SERVER_GOV_ENABLE_CHK           0U
+#define SERVER_GOV_ENABLE_LOG           1U
+#define SERVER_GOV_ENABLE_EVENT         0U
+
+#define SERVER_GOV_HEADER_CHK           "NONE"
+#define SERVER_GOV_HEADER_LOG           "$LOG"
+#define SERVER_GOV_HEADER_EVENT         "NONE"
+
+//#define SERVER_GOV_SEND_NORMAL          DATALOG_UPLOAD_MAX_10
+//#define SERVER_GOV_SEND_NORMAL          DATALOG_UPLOAD_MAX_15
+//#define SERVER_GOV_SEND_NORMAL          DATALOG_UPLOAD_MAX_20
+#define SERVER_GOV_SEND_NORMAL          DATALOG_UPLOAD_MAX_30
+//#define SERVER_GOV_SEND_NORMAL          DATALOG_UPLOAD_MAX_60
+
+// Default server information
+#if GSM_SERVER_DEF == GSM_SERVER_JASS
+#define SERVER_1_IP_ADDR                SERVER_JASS_IP_ADDR
+
+#define SERVER_1_IP_ADDR_BYTE3          SERVER_JASS_IP_ADDR_BYTE3
+#define SERVER_1_IP_ADDR_BYTE2          SERVER_JASS_IP_ADDR_BYTE2
+#define SERVER_1_IP_ADDR_BYTE1          SERVER_JASS_IP_ADDR_BYTE1
+#define SERVER_1_IP_ADDR_BYTE0          SERVER_JASS_IP_ADDR_BYTE0
+
+#define SERVER_1_DOMAIN_NAME            SERVER_JASS_DOMAIN_NAME
+
+#define SERVER_1_PORT                   SERVER_JASS_PORT
+
+#define SERVER_1_ENABLE_CHK             SERVER_JASS_ENABLE_CHK
+#define SERVER_1_ENABLE_LOG             SERVER_JASS_ENABLE_LOG
+#define SERVER_1_ENABLE_EVENT           SERVER_JASS_ENABLE_EVENT
+
+#define SERVER_1_HEADER_CHK             SERVER_JASS_HEADER_CHK
+#define SERVER_1_HEADER_LOG             SERVER_JASS_HEADER_LOG
+#define SERVER_1_HEADER_EVENT           SERVER_JASS_HEADER_EVENT
+
+#define SERVER_1_SEND_NORMAL            SERVER_JASS_SEND_NORMAL
+#elif GSM_SERVER_DEF == GSM_SERVER_VDRS
+#define SERVER_1_IP_ADDR                SERVER_VDRS_IP_ADDR
+
+#define SERVER_1_IP_ADDR_BYTE3          SERVER_VDRS_IP_ADDR_BYTE3
+#define SERVER_1_IP_ADDR_BYTE2          SERVER_VDRS_IP_ADDR_BYTE2
+#define SERVER_1_IP_ADDR_BYTE1          SERVER_VDRS_IP_ADDR_BYTE1
+#define SERVER_1_IP_ADDR_BYTE0          SERVER_VDRS_IP_ADDR_BYTE0
+
+#define SERVER_1_DOMAIN_NAME            SERVER_VDRS_DOMAIN_NAME
+
+#define SERVER_1_PORT                   SERVER_VDRS_PORT
+
+#define SERVER_1_ENABLE_CHK             SERVER_VDRS_ENABLE_CHK
+#define SERVER_1_ENABLE_LOG             SERVER_VDRS_ENABLE_LOG
+#define SERVER_1_ENABLE_EVENT           SERVER_VDRS_ENABLE_EVENT
+
+#define SERVER_1_HEADER_CHK             SERVER_VDRS_HEADER_CHK
+#define SERVER_1_HEADER_LOG             SERVER_VDRS_HEADER_LOG
+#define SERVER_1_HEADER_EVENT           SERVER_VDRS_HEADER_EVENT
+
+#define SERVER_1_SEND_NORMAL            SERVER_VDRS_SEND_NORMAL
+#elif GSM_SERVER_DEF == GSM_SERVER_GOV
+#define SERVER_1_IP_ADDR                SERVER_GOV_IP_ADDR
+
+#define SERVER_1_IP_ADDR_BYTE3          SERVER_GOV_IP_ADDR_BYTE3
+#define SERVER_1_IP_ADDR_BYTE2          SERVER_GOV_IP_ADDR_BYTE2
+#define SERVER_1_IP_ADDR_BYTE1          SERVER_GOV_IP_ADDR_BYTE1
+#define SERVER_1_IP_ADDR_BYTE0          SERVER_GOV_IP_ADDR_BYTE0
+
+#define SERVER_1_DOMAIN_NAME            SERVER_GOV_DOMAIN_NAME
+
+#define SERVER_1_PORT                   SERVER_GOV_PORT
+
+#define SERVER_1_ENABLE_CHK             SERVER_GOV_ENABLE_CHK
+#define SERVER_1_ENABLE_LOG             SERVER_GOV_ENABLE_LOG
+#define SERVER_1_ENABLE_EVENT           SERVER_GOV_ENABLE_EVENT
+
+#define SERVER_1_HEADER_CHK             SERVER_GOV_HEADER_CHK
+#define SERVER_1_HEADER_LOG             SERVER_GOV_HEADER_LOG
+#define SERVER_1_HEADER_EVENT           SERVER_GOV_HEADER_EVENT
+
+#define SERVER_1_SEND_NORMAL            SERVER_GOV_SEND_NORMAL
+#else
+#define SERVER_1_IP_ADDR                ""
+
+#define SERVER_1_IP_ADDR_BYTE3          0U
+#define SERVER_1_IP_ADDR_BYTE2          0U
+#define SERVER_1_IP_ADDR_BYTE1          0U
+#define SERVER_1_IP_ADDR_BYTE0          0U
+
+#define SERVER_1_DOMAIN_NAME            ""
+
+#define SERVER_1_PORT                   0U
+
+#define SERVER_1_ENABLE_CHK             0U
+#define SERVER_1_ENABLE_LOG             0U
+#define SERVER_1_ENABLE_EVENT           0U
+
+#define SERVER_1_HEADER_CHK             ""
+#define SERVER_1_HEADER_LOG             ""
+#define SERVER_1_HEADER_EVENT           ""
+
+#define SERVER_1_SEND_NORMAL            DATALOG_UPLOAD_MAX_30
+#endif
+
+#if ENABLE_MULTI_SERVER
+// Extended server information
+#if GSM_SERVER_EXT == GSM_SERVER_JASS
+#define SERVER_2_IP_ADDR                SERVER_JASS_IP_ADDR
+
+#define SERVER_2_IP_ADDR_BYTE3          SERVER_JASS_IP_ADDR_BYTE3
+#define SERVER_2_IP_ADDR_BYTE2          SERVER_JASS_IP_ADDR_BYTE2
+#define SERVER_2_IP_ADDR_BYTE1          SERVER_JASS_IP_ADDR_BYTE1
+#define SERVER_2_IP_ADDR_BYTE0          SERVER_JASS_IP_ADDR_BYTE0
+
+#define SERVER_2_DOMAIN_NAME            SERVER_JASS_DOMAIN_NAME
+
+#define SERVER_2_PORT                   SERVER_JASS_PORT
+
+#define SERVER_2_ENABLE_CHK             SERVER_JASS_ENABLE_CHK
+#define SERVER_2_ENABLE_LOG             SERVER_JASS_ENABLE_LOG
+#define SERVER_2_ENABLE_EVENT           SERVER_JASS_ENABLE_EVENT
+
+#define SERVER_2_HEADER_CHK             SERVER_JASS_HEADER_CHK
+#define SERVER_2_HEADER_LOG             SERVER_JASS_HEADER_LOG
+#define SERVER_2_HEADER_EVENT           SERVER_JASS_HEADER_EVENT
+
+#define SERVER_2_SEND_NORMAL            SERVER_JASS_SEND_NORMAL
+#elif GSM_SERVER_EXT == GSM_SERVER_VDRS
+#define SERVER_2_IP_ADDR                SERVER_VDRS_IP_ADDR
+
+#define SERVER_2_IP_ADDR_BYTE3          SERVER_VDRS_IP_ADDR_BYTE3
+#define SERVER_2_IP_ADDR_BYTE2          SERVER_VDRS_IP_ADDR_BYTE2
+#define SERVER_2_IP_ADDR_BYTE1          SERVER_VDRS_IP_ADDR_BYTE1
+#define SERVER_2_IP_ADDR_BYTE0          SERVER_VDRS_IP_ADDR_BYTE0
+
+#define SERVER_2_DOMAIN_NAME            SERVER_VDRS_DOMAIN_NAME
+
+#define SERVER_2_PORT                   SERVER_VDRS_PORT
+
+#define SERVER_2_ENABLE_CHK             SERVER_VDRS_ENABLE_CHK
+#define SERVER_2_ENABLE_LOG             SERVER_VDRS_ENABLE_LOG
+#define SERVER_2_ENABLE_EVENT           SERVER_VDRS_ENABLE_EVENT
+
+#define SERVER_2_HEADER_CHK             SERVER_VDRS_HEADER_CHK
+#define SERVER_2_HEADER_LOG             SERVER_VDRS_HEADER_LOG
+#define SERVER_2_HEADER_EVENT           SERVER_VDRS_HEADER_EVENT
+
+#define SERVER_2_SEND_NORMAL            SERVER_VDRS_SEND_NORMAL
+#elif GSM_SERVER_EXT == GSM_SERVER_GOV
+#define SERVER_2_IP_ADDR                SERVER_GOV_IP_ADDR
+
+#define SERVER_2_IP_ADDR_BYTE3          SERVER_GOV_IP_ADDR_BYTE3
+#define SERVER_2_IP_ADDR_BYTE2          SERVER_GOV_IP_ADDR_BYTE2
+#define SERVER_2_IP_ADDR_BYTE1          SERVER_GOV_IP_ADDR_BYTE1
+#define SERVER_2_IP_ADDR_BYTE0          SERVER_GOV_IP_ADDR_BYTE0
+
+#define SERVER_2_DOMAIN_NAME            SERVER_GOV_DOMAIN_NAME
+
+#define SERVER_2_PORT                   SERVER_GOV_PORT
+
+#define SERVER_2_ENABLE_CHK             SERVER_GOV_ENABLE_CHK
+#define SERVER_2_ENABLE_LOG             SERVER_GOV_ENABLE_LOG
+#define SERVER_2_ENABLE_EVENT           SERVER_GOV_ENABLE_EVENT
+
+#define SERVER_2_HEADER_CHK             SERVER_GOV_HEADER_CHK
+#define SERVER_2_HEADER_LOG             SERVER_GOV_HEADER_LOG
+#define SERVER_2_HEADER_EVENT           SERVER_GOV_HEADER_EVENT
+
+#define SERVER_2_SEND_NORMAL            SERVER_GOV_SEND_NORMAL
+#else
+#define SERVER_2_IP_ADDR                ""
+
+#define SERVER_2_IP_ADDR_BYTE3          0U
+#define SERVER_2_IP_ADDR_BYTE2          0U
+#define SERVER_2_IP_ADDR_BYTE1          0U
+#define SERVER_2_IP_ADDR_BYTE0          0U
+
+#define SERVER_2_DOMAIN_NAME            ""
+
+#define SERVER_2_PORT                   0U
+
+#define SERVER_2_ENABLE_CHK             0U
+#define SERVER_2_ENABLE_LOG             0U
+#define SERVER_2_ENABLE_EVENT           0U
+
+#define SERVER_2_HEADER_CHK             ""
+#define SERVER_2_HEADER_LOG             ""
+#define SERVER_2_HEADER_EVENT           ""
+
+#define SERVER_2_SEND_NORMAL            DATALOG_UPLOAD_MAX_30
+#endif
+#endif
+
+// Local port
+#define TCP_LOCAL_PORT                  0U
+
+// APN
+#define TCP_APN_NAME                    "internet"
+
+#define TCP_USER_NAME                   ""
+
+#define TCP_USER_PW                     ""
+
+
+// FTP functions config
+#define FTP_SERVER_DOMAIN_NAME          "ftp.jasslin.com" // FTP server domain name
+
+#define FTP_SERVER_IP_ADDR              "60.251.157.49" // FTP server IP address
+
+#define FTP_SERVER_PORT                 21 // FTP server port
+
+#define FTP_SERVER_DIR                  "/OTA/" // Firmware upgrade directory
+
+#define FTP_ACC_USERNAME                "user" // FTP user account name
+
+#define FTP_ACC_PASSWORD                "user" // FTP user account password
+
+#define FTP_ACC_USERNAME_ADMIN          "jasslin" // FTP admin account name
+
+#define FTP_ACC_PASSWORD_ADMIN          "jasslin" // FTP admin account password
+
+//#define FTP_UPGRADE_FILE                "JAS106U_051_052_107.dfu"
+
+#define PHONE_NUMBER_DEFAULT            "0978046944" // Default phone number
+
+#define GSM_SEND_LOG_RETRY_MAX          2U // Maximum send log retry
+
+#define SEND_PKG_TEMP_FILE              "SEND_PKG_TEMP.tmp" // Temporary file to store TCP packets
+
+#define SEND_FILE_TEMP_FILE             "SEND_FILE_TEMP.tmp" // Temporary file to store files
+
+#define TEMP_PKG_SIZE                   1024U // Size of a temporary packet
+
+#define GSM_PACKET_NUM_MAX              1500U // Store maximum 3000 files for resend
+
+#define GSM_FUNCTION_RETRY_MAX          3U // Maximum normal GSM function retry
+
+#define TCP_PDP_ACTIV_RETRY_MAX         3U // Maximum TCP/IP PDP context activate retry
+
+#define TCP_OPEN_CONN_RETRY_MAX         3U // Maximum TCP/IP opening connection retry
+
+#define TCP_CONNECT_RETRY_MAX           3U // Maximum TCP/IP connecting process retry 
+
+#define STOP_TCP_CONNECT_TIMEOUT        60U // Waiting time to retry to connect to TCP server again
+
+#define TCP_CONNECT_STOP_MAX            15U // Maximum TCP/IP connecting stop
+
+#define FTP_UPLOAD_TIMEOUT              500U // Timeout for FTP file upload function
+
+#define FTP_DOWNLOAD_TIMEOUT            90U // Timeout for FTP file download function
+
+#define FOTA_RETRY_MAX                  3U // Maximum FOTA retry
+
+#define FILE_UPLOAD_RETRY_MAX           2U // Maximum FTP file upload retry
+
+#define FTP_ACCESS_RETRY_MAX            3U // Maximum FTP server access retry
+
+#define STOP_FTP_ACCESS_TIMEOUT         300U // Waiting time to retry to access FTP server again
+
+#define FTP_ACCESS_STOP_MAX             2U // Maximum FTP access stop
+
+#define CMD_ID_MAX                      70U // Highest ID of commands
+#endif
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+#if ENABLE_GSM_NET
+// GSM events
+typedef enum
+{
+	GSM_EVENT_NULL = 0,
+
+	GSM_EVENT_INIT,
+
+	GSM_EVENT_PROCESS,
+
+
+	GSM_EVENT_ME_FUNC_READY,
+
+	GSM_EVENT_SIM_READY,
+
+	GSM_EVENT_SIM_NOT_READY,
+	
+	GSM_EVENT_SIM_NOT_INSERTED,
+
+	GSM_EVENT_QUSIM_OK,
+
+	GSM_EVENT_SMS_READY,
+
+	GSM_EVENT_PHONEBOOK_READY,
+	
+	GSM_EVENT_POWERED_DOWN,
+
+
+	GSM_EVENT_RECV_MSG,
+
+	GSM_EVENT_RECV_CALL,
+
+	GSM_EVENT_RECV_PACKET,
+
+	GSM_EVENT_CONN_CLOSED,
+
+	GSM_EVENT_PDP_DEACT,
+
+	GSM_EVENT_NO_CARRIER,
+
+
+	GSM_EVENT_SENDSMS_SUCCESS,
+
+	GSM_EVENT_SENDSMS_ERROR,
+
+	GSM_EVENT_SENDSMS_NO_RESPONSE,
+
+
+	GSM_EVENT_OPEN_SUCCESS,
+
+	GSM_EVENT_OPEN_ERROR,
+
+	GSM_EVENT_OPEN_NO_RESPONSE,
+
+
+	GSM_EVENT_CLOSE_SUCCESS,
+
+	GSM_EVENT_CLOSE_ERROR,
+
+	GSM_EVENT_CLOSE_NO_RESPONSE,
+
+
+	GSM_EVENT_LOGIN_SUCCESS,
+
+	GSM_EVENT_LOGIN_ERROR,
+
+	GSM_EVENT_LOGIN_NO_RESPONSE,
+
+
+	GSM_EVENT_SETDIR_SUCCESS,
+
+	GSM_EVENT_SETDIR_ERROR,
+
+	GSM_EVENT_SETDIR_NO_RESPONSE,
+
+
+  GSM_EVENT_UPLOAD_SUCCESS,
+	
+	GSM_EVENT_UPLOAD_ERROR,
+	
+	GSM_EVENT_UPLOAD_NO_RESPONSE,
+	
+
+	GSM_EVENT_DOWNLOAD_CONNECT,
+
+	GSM_EVENT_DOWNLOAD_SUCCESS,
+
+	GSM_EVENT_DOWNLOAD_ERROR,
+
+	GSM_EVENT_DOWNLOAD_NO_RESPONSE,
+
+
+	GSM_EVENT_GETSIZE_SUCCESS,
+
+	GSM_EVENT_GETSIZE_ERROR,
+
+	GSM_EVENT_GETSIZE_NO_RESPONSE,
+
+
+	GSM_EVENT_GETDATE_SUCCESS,
+
+	GSM_EVENT_GETDATE_ERROR,
+
+	GSM_EVENT_GETDATE_NO_RESPONSE,
+
+
+	GSM_EVENT_TRANSLEN_SUCCESS,
+
+	GSM_EVENT_TRANSLEN_ERROR,
+
+	GSM_EVENT_TRANSLEN_NO_RESPONSE,
+	
+	
+	GSM_EVENT_FILEDEL_SUCCESS,
+
+	GSM_EVENT_FILEDEL_ERROR,
+
+	GSM_EVENT_FILEDEL_NO_RESPONSE,
+	
+
+	GSM_EVENT_LOGOUT_SUCCESS,
+
+	GSM_EVENT_LOGOUT_ERROR,
+
+	GSM_EVENT_LOGOUT_NO_RESPONSE
+
+} GSM_EventTypeDef;
+
+// GSM command packet source
+typedef enum
+{
+	GSM_CMD_SRC_NULL = 0U,
+
+	GSM_CMD_SRC_SMS,
+
+	GSM_CMD_SRC_TCP_1,
+
+  #if ENABLE_MULTI_SERVER
+	GSM_CMD_SRC_TCP_2
+  #endif
+
+} GSM_CmdSrcTypeDef;
+
+// GSM FTP function result
+typedef enum 
+{
+  GSM_FTP_OK = 0U,
+	
+	GSM_FTP_NET_ERR,
+	
+	GSM_FTP_OTHER_ERR,
+	
+	GSM_FTP_FINISH
+	
+} GSM_FTP_ResTypeDef;
+
+// Message command components
+#pragma pack(1)
+typedef struct
+{
+	char *pcShort;
+
+	char *pcSET;
+
+} MsgCmdTypeDef;
+#pragma pack()
+#endif
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+#if ENABLE_GSM_NET
+extern QtEC21_CmdBuildTypeDef qtec21_BlockCmdInstance, qtec21_NonBlockCmdInstance;
+
+extern QTEC21_CMD_TypeDef gsmCurrNonBlockCmd;
+
+extern GSM_CmdSrcTypeDef gsmCmdSrc;
+
+extern ProcStepTypeDef procGSM_TCP_Step[MAX_SOCKET_BANK];
+
+extern ProcStepTypeDef procGSM_FOTA_Step;
+
+extern ProcStepTypeDef procGSM_FTP_Upload_Step;
+
+//extern uint8_t u8FTP_PDP_ID;
+
+extern GSM_MsgDataTypeDef gsmMsgInstance;
+
+extern GSM_SocketDataTypeDef gsmTCP_CHK[MAX_SOCKET_BANK];
+extern GSM_SocketDataTypeDef gsmTCP_DATA[MAX_SOCKET_BANK];
+extern GSM_SocketDataTypeDef gsmTCP_LOG[MAX_SOCKET_BANK];
+
+//extern uint8_t u8FileTransRetryCnt;
+
+//extern uint32_t u32GetFileSize;
+#endif
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+#if ENABLE_GSM_NET
+// Processing functions
+void GSM_Task_Proc(void);
+void GSM_RX_Proc(void);
+void GSM_TX_Proc(void);
+void GSM_LOG_Proc(uint8_t u8Dst);
+void GSM_BlockCallBackHandle(void);
+void GSM_NonBlockCallBackHandle(void);
+void GSM_BlockCmdInit(void);
+void GSM_NonBlockCmdInit(void);
+void GSM_CheckTempFile(void);
+void GSM_SMS_CheckUnread(void);
+
+// Basic functions
+void GSM_Reset(void);
+void GSM_ResetWithCheckFTP(void);
+void GSM_TurnOffCmd(void);
+bool GSM_ReadGMI(void);
+bool GSM_GetIMEI(char *pcIMEI);
+bool GSM_SaveConfigProf(uint8_t u8ConfigID);
+bool GSM_SetConfigProf(uint8_t u8ConfigID);
+bool GSM_ConfigEcho(bool bOption);
+bool GSM_ConnCodeFormat(uint8_t u8Option);
+bool GSM_SetErrFormat(uint8_t u8Option);
+bool GSM_TECharSet(char* pcCharSet);
+bool GSM_URC_Outport(char *pcOutPort);
+
+// Serial interface function
+bool GSM_COM_SetDTR(uint8_t u8Option);
+bool GSM_COM_SetBaudRate(uint32_t u32BaudRate);
+
+// Status control function
+bool GSM_Stat_ConfigRI(char *pcOption);
+
+// SIM functions
+bool GSM_GetIMSI(char *pcIMSI);
+bool GSM_SIM_QueryUSIM(void);
+
+// Network functions
+bool GSM_Net_QueryCS(void);
+bool GSM_Net_GetCSQ(uint8_t *pu8RSSI, uint8_t *pu8Ber);
+
+// Data mode to command mode
+bool GSM_Dat_2_Cmd(void);
+
+// Messaging functions
+bool GSM_SMS_SelectServ(uint8_t u8Type);
+bool GSM_SMS_SetFormat(uint8_t u8Type);
+bool GSM_SMS_SCA(char* pcSCA, uint16_t u16Type);
+bool GSM_SMS_SetStorage(char *pcMem1, char *pcMem2, char *pcMem3);
+bool GSM_SMS_Del(uint16_t u16Idx, uint8_t u8DelFlag);
+bool GSM_SMS_GetList(char* pcStat, uint8_t* pu8Buf);
+bool GSM_SMS_Read(uint8_t u8Idx, uint8_t* pu8Buf);
+bool GSM_SMS_Send(GSM_MsgDataTypeDef *pgsmMsgData);
+bool GSM_SMS_ReportConfig(uint8_t u8Mode, uint8_t u8Mt, uint8_t u8Bm,
+                          uint8_t u8Ds, uint8_t u8Bfr);
+bool GSM_SMS_SetParam(uint8_t u8Mode);
+
+// Call functions
+bool GSM_Call_Ans(void);
+GSM_StatusTypeDef GSM_Call_Dial(char* pcPhoneNbr);
+bool GSM_Call_Disconn(void);
+bool GSM_Call_Cmd_2_Dat(void);
+bool GSM_Call_ConnWaitTime(uint8_t u8Time);
+bool GSM_Call_GetList(uint8_t* pu8Buf);
+
+// Packet domain functions
+bool GSM_PD_QueryPS(void);
+
+// TCP/IP functions
+TCP_StatusTypeDef GSM_TCP_Connect_Proc(uint8_t u8ConnDst);
+bool GSM_TCP_ConfigPDP(uint8_t u8PDP_ID, char *pcAPN, char *pcUser_1_Name, char *pcPwd);
+bool GSM_TCP_ActivPDP(uint8_t u8PDP_ID);
+bool GSM_TCP_GetIP(uint8_t u8PDP_ID, char* pcIP_Addr);
+bool GSM_TCP_DeactivPDP(uint8_t u8PDP_ID);
+void GSM_TCP_OpenConn(uint8_t u8PDP_ID, uint8_t u8ConnID, GSM_SocketConnTypeDef *pgsmConnHandle);
+//void GSM_TCP_CloseConn(uint8_t u8PDP_ID, uint16_t u16TimeOut);
+bool GSM_TCP_CloseConn(uint8_t u8PDP_ID, uint16_t u16TimeOut);
+bool GSM_TCP_IsConnect(bool bQueryType, uint8_t u8ID, bool* bIsConnect);
+MsgSendStatusTypeDef GSM_TCP_Send(GSM_SocketDataTypeDef *pgsmSocketData);
+bool GSM_TCP_SendingStatus(uint8_t u8SocketID, uint16_t* pu16NACK_Bytes);
+bool GSM_TCP_RecvDataLen(uint8_t u8SocketID, uint16_t* pu16RecvBytesNum);
+bool GSM_TCP_GetRecvData(uint8_t u8SocketID, uint8_t * pu8Buf, uint16_t u16Len,
+                         uint16_t * u16ReadLen);
+bool GSM_TCP_Cmd_2_Dat(uint8_t u8SocketID);
+bool GSM_SaveTempPkg(uint8_t *pu8Buf, uint16_t u16Len, uint8_t u8Dst);
+bool GSM_GetTempPkg(uint8_t *pu8Buf, uint16_t *pu16ReadLen, uint8_t *pu8Dst);
+MsgSendStatusTypeDef GSM_TCP_SendCHK(uint8_t u8Dst);
+bool GSM_TCP_SendEVENT_Direct(char *pcEventCode, char *pcEventMsg, uint8_t u8SocketID);
+void GSM_TCP_SendLOG(DatalogUploadTypeDef *pUPLOAD, uint8_t u8SocketBank);
+void GSM_TCP_ReportEvent(char *pcEventCode, char *pcEventMsg);
+void GSM_TCP_ReSendLOG(DatalogUploadTypeDef *pUPLOAD, uint8_t u8SocketBank);
+void GSM_TCP_ReSendEVENT(DatalogEventlogTypeDef stMyDatalogEvent, uint8_t u8SocketBank);
+
+// FTP functions
+bool GSM_FTP_CfgPDP(uint8_t u8PDP_ID);
+bool GSM_FTP_CfgAcc(char *pcUser_1_Name, char *pcPwd);
+bool GSM_FTP_CfgFileType(void);
+bool GSM_FTP_CfgTransMode(void);
+bool GSM_FTP_CfgTimeout(uint16_t u16TimeOut);
+bool GSM_FTP_CfgSSL_Type(bool bSSL_Type);
+bool GSM_FTP_CfgSSL_ID(uint8_t u8SSL_ID);
+bool GSM_FTP_SSL_Ver(uint8_t u8SSL_ID, uint8_t u8SSL_Ver);
+bool GSM_FTP_SSL_Cipher(uint8_t u8SSL_ID, char *pcCipher);
+bool GSM_FTP_SSL_CA(uint8_t u8SSL_ID, char *pcSSL_CA_Path);
+bool GSM_FTP_SSL_SecLV(uint8_t u8SSL_ID, uint8_t u8SSL_SecLV);
+bool GSM_FTP_Login(char *pcHostName, uint16_t u16Port);
+bool GSM_FTP_SetDir(char *pcDirPath);
+bool GSM_FTP_UploadFile(char *pcLocalName, char *pcFileName);
+bool GSM_FTP_UploadDirect(uint8_t *pu8DatBuf, char *pcUploadFile, uint32_t u32UploadPos, 
+	                        uint16_t u16UploadLen, bool bUploadFinish);
+bool GSM_FTP_DownloadFile(char *pcFileName, char *pcLocalDest, uint32_t u32FilePtr);
+bool GSM_FTP_FileSize(char *pcFileName);
+bool GSM_FTP_FileDate(char *pcFileName);
+bool GSM_FTP_TransLen(void);
+bool GSM_FTP_FileDel(char *pcFileName);
+bool GSM_FTP_Logout(void);
+
+// File operation functions
+bool GSM_FileUpload(char *pcFileName, char *pcLocalName);
+bool GSM_FileOpen(char *pcFileName, uint32_t *pu32FileHandle, uint8_t u8Mode);
+bool GSM_FileSeek(uint32_t u32FileHandle, uint32_t u32FilePtr);
+bool GSM_FileRead(uint32_t u32FileHandle, uint32_t u32ReadLen, uint32_t *pu32ActualLen,
+                  char *pcReadContent);
+bool GSM_FileWrite(uint32_t u32FileHandle, uint8_t *pu8DatBuf, uint16_t u16WriteLen);
+bool GSM_FileClose(uint32_t u32FileHandle);
+bool GSM_FileDelete(char *cFileName);
+
+// Download firmware file on the FTP server
+TCP_StatusTypeDef GSM_FOTA_Proc(void);
+
+// Upload file to FTP server
+bool GSM_FTP_FileUploadRequest(char *pcSrcFile, char *pcDstFile, char *pcSrcDir, 
+	                             char *pcDstDir, bool bUploadMode);
+bool GSM_FTP_FileUploadInit(void);
+void GSM_FTP_IncUploadIdx(void);
+void GSM_FTP_DecUploadIdx(void);
+TCP_StatusTypeDef GSM_FTP_Upload_Proc(void);
+#endif
+
+
+//============================================================================//
+#endif /* _GSM_DRIVER_H_ */

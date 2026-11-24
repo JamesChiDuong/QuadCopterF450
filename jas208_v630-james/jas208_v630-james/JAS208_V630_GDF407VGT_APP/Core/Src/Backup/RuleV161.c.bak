@@ -1,0 +1,7178 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "RuleV161.h"
+
+#include <string.h>
+#include <stdlib.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Default.h"
+#include "diskio.h"
+#include "EXTIO.h"
+#include "ff.h"
+#include "GPS_Driver.h"
+#include "LCD_Key.h"
+#include "main.h"
+#include "MX25L_Driver.h"
+#include "PCF_Driver.h"
+#include "PRN_Driver.h"
+#include "SD_Module.h"
+#include "USB_Module.h"
+//#include "user_diskio.h"
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+#define MOVE_DATA_MAX_SIZE 2048U
+
+DetailSpeedTypeDef u8DetailSpeed;
+PositionDataTypeDef PositionData;
+NormalStepTypeDef g_Make24HrStep;
+PowerOffEventTypeDef stPwrOffEvent;
+
+uint8_t u8SpeedDateBCD[7] = {0};
+uint8_t u8OneMinAvgSpeed = 0;
+uint8_t u8HourDataCnt = 0;
+uint8_t u8HalfSecSpeed[2] = {0};
+
+uint32_t u32TickBuf = 0;
+uint32_t u32STime = 0;
+uint32_t u32STime2 = 0;
+
+//time_t ttTimeTag;
+
+char cSrcFileName[50], cDstFileName[50];
+
+char cPC_HourFileName[50] = {0};
+
+bool bDoPosFlag = FALSE;
+
+bool bHourDataFlag = FALSE;
+
+bool bDLRS232Flag = FALSE;
+
+//bool bOneSecFlag = FALSE;
+
+bool bHalfSecFlag = FALSE;
+
+//bool bDoVDRFlag = FALSE;
+ 
+bool bDoVDR_HourFlag = FALSE, bDoVDR_DayFlag = FALSE;
+
+bool bDoHourVDRFlag = FALSE;
+
+bool bDoneHourVDRFile = FALSE;
+
+//bool bKeepDayDataFlag = FALSE;
+
+bool bPreWoringFlag = FALSE;
+
+bool bIsDelVDRFileFlag = FALSE;
+
+const uint8_t u8Company[36] = {	0xB1, 0xB6, 0xA5, 0x40, 0xAA, 0x4C, 0xAC, 0xEC, 0xA7, 0xDE,
+                                0xAA, 0xD1, 0xA5, 0xF7, 0xA6, 0xB3, 0xAD, 0xAD, 0xA4, 0xBD,
+                                0xA5, 0x71, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                              };
+const uint8_t u8Address[36] = { 0xB7, 0x73, 0xA5, 0x5F, 0xA5, 0xAB, 0xAE, 0xF5, 0xA4, 0x73,
+                                0xB0, 0xCF, 0xA9, 0xFA, 0xA7, 0xD3, 0xB8, 0xF4, 0xA4, 0x54,
+                                0xAC, 0x71, 0xA4, 0xAD, 0xA4, 0x40, 0xA4, 0xAD, 0xB8, 0xB9,
+                                0xA4, 0x4B, 0xBC, 0xD3, 0x00, 0x00
+                              };
+const uint8_t u8DeviceNum[8] = DEVICE_TYPE;
+//const uint8_t u8FwNum[4] = "0003";
+//const uint8_t u8FwDateBCD[7] = {0x20, 0x19, 0x08, 0x26, 0x08, 0x29, 0x59};
+const uint8_t u8MakeYear[4] = "2019";
+const uint8_t u8CertNum[8] = "JS300001";
+const uint16_t u16BlockCnt = 5;
+
+const uint8_t u8Table5Name[18] = {0xA8, 0xC6, 0xA5, 0xF3, 0xA4, 0xCE, 0xAC, 0x47, 0xBB,
+                                  0xD9, 0xB8, 0xEA, 0xAE, 0xC6, 0x00, 0x00, 0x00, 0x00
+                                 };
+
+const uint8_t u8Table6Name[18] = {0xB8, 0xD4, 0xB2, 0xD3, 0xA8, 0xAE, 0xB3, 0x74, 0xB8,
+                                  0xEA, 0xAE, 0xC6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                                 };
+
+const uint8_t u8Table7Name[18] = {0xA7, 0xDE, 0xB3, 0x4E, 0xB8, 0xEA, 0xAE, 0xC6, 0x00,
+                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                                 };
+
+const uint8_t u8Table8Name[18] = {0xBE, 0x72, 0xBE, 0x70, 0xAC, 0xA1, 0xB0, 0xCA, 0xC3,
+                                  0xFE, 0xAB, 0xAC, 0xB8, 0xEA, 0xAE, 0xC6, 0x00, 0x00
+                                 };
+
+const uint8_t u8Table9Name[18] = {0xA9, 0x77, 0xA6, 0xEC, 0xB8, 0xEA, 0xAE, 0xC6, 0x00,
+                                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                                 };
+
+const uint8_t u8Table10Name[18] = {0xA8, 0xE4, 0xA5, 0x4C, 0xC2, 0x58, 0xA5, 0x52, 0xB8,
+                                  0xEA, 0xAE, 0xC6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+                                 };
+
+const uint8_t u8Table11Name[18] = {0xBA, 0xF4, 0xB8, 0xF4, 0xA6, 0x5E, 0xB6, 0xC7, 0xA8,
+                                  0xC6, 0xAC, 0xF6, 0xBF, 0xFD, 0x00, 0x00, 0x00, 0x00
+                                 };
+/*
+const uint8_t u8DayTable[32] = {0xFF, 0xFF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+                                0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14,
+                                0x15, 0x16, 0x17, 0x18, 0x19, 0x20, 0x21, 0x22,
+                                0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x30
+                               };
+*/
+																 
+uint8_t u8SpeedBufTemp[60][2] = {0}, u8SpeedBuf[60][2] = {0};
+
+uint16_t u16DS_DayIdx = 0, u16PosDayIdx = 0, 
+         u16DrvIdx = 0, u16DrvDayIdx = 0,
+         u16RecExtIdx = 0, u16RecExtDayIdx = 0;
+
+char cIndexedFileName[MAX_INDEXED_FILE_NUM][30];
+
+//#if ENABLE_INDEX_BUFFER
+//bool bFileIdxIsSaved = FALSE;
+//#endif
+
+//SD_DetailSpeedTypeDef sdDetailSpeedBuf;
+//SD_PositionShortTypeDef sdPositionShortBuf;
+//SD_PositionLongTypeDef sdPositionLongBuf;
+SD_1MinTaskTypeDef sd1MinBuf;
+SD_RecordDriveTypeDef sdRecDrvBuf;
+SD_RecordExtendTypeDef sdRecExtBuf;
+
+ProcStepTypeDef procSD_1M_Step = PROC_STEP_NULL;
+ProcStepTypeDef procRecExtStep = PROC_STEP_NULL;
+ProcStepTypeDef procCreateHourData = PROC_STEP_NULL;
+
+uint8_t u8SD_1MinRetryCnt = 0;
+uint8_t u8SD_RecExtRetryCnt = 0;
+
+bool bSD_SaveDatRequest = FALSE;
+
+uint8_t u8TestVDRCnt = 0;
+
+uint8_t u8VDR_Buf[2048];
+
+time_t ttLastLogTime;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Check the existance of record files and initialize files that do not exist.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_CheckRecordFile(void)
+{
+	bool bRes;
+	TechnicalDataTypeDef stTechnical;
+	uint8_t u8BCDTime[7], u8Buf, u8Header[2];
+
+	
+	LOGprintf("\r\n> ### V16.1 Check Record File ###");
+
+	RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_CHECK_RECORD_FILE);
+
+	//Table 5-1
+
+	bRes = SD_CheckFileExist(FILENAME_BREAKDOWN_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_BREAKDOWN_TMP, SHORTHEAD + (BYTEMAX * BREAKDOWNLENS), TRUE);
+	}
+
+	//Table 5-2
+	bRes = SD_CheckFileExist(FILENAME_EVENT_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_EVENT_TMP, SHORTHEAD + (BYTEMAX * EVENTLENS), TRUE);
+	}
+
+	// Table 6
+	bRes = SD_CheckFileExist(FILENAME_DETAILSPEED_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_DETAILSPEED_TMP, HEADLENS + (DATELENS * DSPEEDMAX), FALSE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_DETAILSPEED_TMP, 0);
+		#endif
+	}
+
+	// Table 6 Day
+	/*
+	bRes = SD_CheckFileExist(FILENAME_DETAILSPEED_DAY_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_DETAILSPEED_DAY_TMP, HEADLENS, TRUE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_DETAILSPEED_DAY_TMP, 0);
+		#endif
+
+		u16DS_DayIdx = 0;
+	}
+	*/
+
+	//Table 7
+	bRes = SD_CheckFileExist(FILENAME_TECHNICAL_TMP);
+
+	if(bRes == FALSE)
+	{
+		memset(&stTechnical, '\0', sizeof(TechnicalDataTypeDef));
+
+		strncpy((char *)stTechnical.u8Company, (char *)u8Company, sizeof(u8Company));
+		strncpy((char *)stTechnical.u8Address, (char *)u8Address, sizeof(u8Address));
+		strncpy((char *)stTechnical.u8DeviceNum, (char *)u8DeviceNum, sizeof(u8DeviceNum));
+		//strncpy((char *)stTechnical.u8FwNum, (char *)u8FwNum, sizeof(u8FwNum));
+		//strncpy((char *)stTechnical.u8FwDateBCD, (char *)u8FwDateBCD, sizeof(u8FwDateBCD));
+		
+		memset(u8BCDTime, '\0', sizeof(u8BCDTime));
+		
+		sprintf((char *)u8BCDTime, "%04d", VERSION_BUILD);
+		
+		strncpy((char *)stTechnical.u8FwNum, (char *)u8BCDTime, 4);
+		
+		u8BCDTime[0] = 0x20;
+		
+		u8Buf = FIRMWARE_DATE[2];
+		u8BCDTime[1] = ((u8Buf << 4) & 0xF0) | (FIRMWARE_DATE[3] & 0x0F);
+		u8Buf = FIRMWARE_DATE[4];
+		u8BCDTime[2] = ((u8Buf << 4) & 0xF0) | (FIRMWARE_DATE[5] & 0x0F);
+		u8Buf = FIRMWARE_DATE[6];
+		u8BCDTime[3] = ((u8Buf << 4) & 0xF0) | (FIRMWARE_DATE[7] & 0x0F);
+		
+		u8BCDTime[4] = 0x00;
+		u8BCDTime[5] = 0x00;
+		u8BCDTime[6] = 0x00;
+		
+		strncpy((char *)stTechnical.u8FwDateBCD, (char *)u8BCDTime, sizeof(u8BCDTime));
+		strncpy((char *)stTechnical.u8MakeYear, (char *)u8MakeYear, sizeof(u8MakeYear));
+		strncpy((char *)stTechnical.u8CertNum, (char *)u8CertNum, sizeof(u8CertNum));
+		strncpy((char *)stTechnical.u8BusID, (char *)g_Setting.tBusInfo.cBus_ID, sizeof(g_Setting.tBusInfo.cBus_ID));
+
+		SD_WriteBuffToFile(FILENAME_TECHNICAL_TMP, (uint8_t*)&stTechnical.u8Company, sizeof(TechnicalDataTypeDef));
+	}
+
+	// Table 7-1
+	bRes = SD_CheckFileExist(FILENAME_CALIBRATION_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_CALIBRATION_TMP, HEADLENS + (CALIBRATIONLENS * CALMAX), TRUE);
+	}
+
+	// Table 7-2
+	bRes = SD_CheckFileExist(FILENAME_ADJUST_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_ADJUST_TMP, SHORTHEAD + (ADJUSTLENS * BYTEMAX), TRUE);
+	}
+
+	//Table 7-3
+	bRes = SD_CheckFileExist(FILENAME_DRIVING_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_DRIVING_TMP, SHORTHEAD + (DRIVERTIMELENS * BYTEMAX), TRUE);
+	}
+
+	//Table 7-4
+	bRes = SD_CheckFileExist(FILENAME_REST_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_REST_TMP, SHORTHEAD + (RESTLENS * BYTEMAX), TRUE);
+	}
+
+	// Table 8
+	bRes = SD_CheckFileExist(FILENAME_DRIVE_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_DRIVE_TMP, HEADLENS + (DRIVINGLENS * WORDMAX), FALSE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_DRIVE_TMP, 0);
+		#endif
+
+		u16DrvIdx = 0;
+	}
+
+	// Table 8 Day
+	/*
+	bRes = SD_CheckFileExist(FILENAME_DRIVE_DAY_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_DRIVE_DAY_TMP, HEADLENS, TRUE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_DRIVE_DAY_TMP, 0);
+		#endif
+
+		u16DrvDayIdx = 0;
+	}
+	*/
+
+	// Table 9
+	bRes = SD_CheckFileExist(FILENAME_POSITION_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_POSITION_TMP, HEADLENS + (POSLENS * POSMAX), FALSE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_POSITION_TMP, 0);
+		#endif
+	}
+
+	// Table 9 Day
+	/*
+	bRes = SD_CheckFileExist(FILENAME_POSITION_DAY_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_POSITION_DAY_TMP, (HEADLENS + POSLENS), TRUE);
+
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, 0);
+		#endif
+		
+		u16PosDayIdx = 0;
+	}
+	*/
+	
+	// Table 10
+	bRes = SD_CheckFileExist(FILENAME_EXTERNAL_TMP);
+
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_EXTERNAL_TMP, HEADLENS + (EXTLENS * WORDMAX), FALSE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_EXTERNAL_TMP, 0);
+		#endif
+		
+		u16RecExtIdx = 0;
+	}
+	
+	// Table 10 Day
+	/*
+	bRes = SD_CheckFileExist(FILENAME_EXTERNAL_DAY_TMP);
+	
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_EXTERNAL_DAY_TMP, HEADLENS, TRUE);
+		
+		#if ENABLE_INDEX_BUFFER
+		V161_SaveFileIdx(FILENAME_EXTERNAL_DAY_TMP, 0);
+		#endif
+		
+		u16RecExtDayIdx = 0;
+	}
+	*/
+	
+	// Min-VDR Record file
+	bRes = SD_CheckFileExist(FILENAME_MIN_VDR_TMP);
+	
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_MIN_VDR_TMP, HEADLENS, TRUE);
+		
+		u8Header[0] = 0xBB;
+		u8Header[1] = 0x00;
+		SD_WriteBuffToAddr(FILENAME_MIN_VDR_TMP, u8Header, HEADLENS, 0);
+		
+		//V161_WriteTechnicalToVDR();
+		V161_RecordTechnical(1);
+		
+	}
+	
+	//Folder VDR
+	bRes = SD_CheckDirExist("VDR");
+	
+	if(bRes == FALSE)
+	{
+		SD_MakeDir("VDR");
+	}
+
+	//Folder DTR
+	bRes = SD_CheckDirExist("DTR");
+	
+	if(bRes == FALSE)
+	{
+		SD_MakeDir("DTR");
+	}
+}
+
+//============================================================================//
+// @brief  Initialize detail speed file handling.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_DetailSpeedInit(void)
+{
+	LOGprintf("\r\n> ### V161 DetailSpeed Init ###");
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&u8DetailSpeed.u16BlockIndex, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_DETAILSPEED_TMP, &u8DetailSpeed.u16BlockIndex);
+	#endif
+
+	u8DetailSpeed.u8Index = 0;
+
+	g_Setting.tDrvInfo[0].u8DrvStatus = 0;
+
+	g_Setting.tDrvInfo[1].u8DrvStatus = 0;
+}
+
+//============================================================================//
+// @brief  Initialize position file handling.
+// @param  None.
+// @retval None
+//============================================================================//
+void V161_PositionInit(void)
+{
+	LOGprintf("\r\n> ### V161 Position Init ###");
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_POSITION_TMP, (uint8_t *)&PositionData.u16BlockIndex, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_POSITION_TMP, &PositionData.u16BlockIndex);
+	#endif
+
+	PositionData.u8Index = 0;
+}
+
+#if 0
+//============================================================================//
+// @brief  Make VDR file for the whole current day.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool V161_MoveDataProc(void)
+{
+	bool bRes;
+	char cFileName[50] = {0};
+	uint8_t	CheckSum = 0, u8BCDTime[7], u8Buf;
+	uint8_t u8Len1 = 0, u8Len2 = 0, u8Len3 = 0;
+	uint16_t u16Len1 = 0, i, j;
+	uint32_t u32FileSize, u32DataSize = 0, u32GetSize = 0;
+
+	DataBlockTypeDef stTableData;
+	BreakdownDataTypeDef stBreakDown;
+	EventDataTypeDef stEvent;
+	DetailSpeedTypeDef stDetailSpeed;
+	CalibrationDataTypeDef stCalibration;
+	AdjustDataTypeDef stAdjust;
+	DrivingTimeTypeDef stDrivingTime;
+	RestDataTypeDef stRestTime;
+	DriveDataTypeDef stDriving;
+	PositionDataTypeDef stPositionData;
+	ExternalDataTypeDef stExternal;
+	
+	time_t ttFileTime;
+	//Gary Test Time
+	uint32_t u32TickTime;
+
+
+	LOGprintf("\r\n>================================================");
+
+	LOGprintf("\r\n> ### V161 MoveDataProc ###");
+
+	u32TickTime = HAL_GetTick();
+
+	//RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_MAKE_VDR_START);
+
+	if(bKeepDayDataFlag == TRUE)
+	{
+		ttFileTime = g_SysInfo.ttNow;
+
+		SecToBCDTime(ttFileTime, u8BCDTime);
+
+		sprintf(cFileName, "%s/D%02X%02X%02X%02X_%02X%02X%02X_%s.VDR",
+		        (char *)FOLDERNAME_VDR,
+		        u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3],
+		        u8BCDTime[4], u8BCDTime[5], u8BCDTime[6], g_Setting.tBusInfo.cBus_ID);
+	}
+	else
+	{
+		//ttFileTime = (g_SysInfo.ttNow + MINUTE_2_SECOND(1)) - DAY_2_SECOND(1);
+		ttFileTime = ttLastLogTime;
+
+		SecToBCDTime(ttFileTime, u8BCDTime);
+
+		sprintf(cFileName, "%s/D%02X%02X%02X%02X_235959_%s.VDR",
+		        (char *)FOLDERNAME_VDR,
+		        u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3], g_Setting.tBusInfo.cBus_ID);
+	}
+
+	LOGprintf("\r\n> ### VDR filename: %s ###", cFileName);
+
+	SD_RemoveFile(cFileName);
+
+	if(bKeepDayDataFlag == TRUE)
+	{
+		// Copy Day File
+		V161_CopyDayFile();
+	}
+	else
+	{
+		// Rename Day File
+		V161_RenameDayFile();
+
+		// ReCreate Day File
+		V161_RecreateDayFile();
+	}
+
+	//========================================================================================
+	// Write Block header
+	LOGprintf("\r\n> ### Write VDR Header ###");
+	
+	SD_WriteBuffToFile(cFileName,(uint8_t *)&u16BlockCnt, HEADLENS);
+	
+	//========================================================================================
+
+	LOGprintf("\r\n> ### MAKE_TABLE5_STEP ###");
+
+	u8Len1 = 0;
+
+	SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, &u8Len1, SHORTHEAD);
+
+	u8Len2 = 0;
+
+	SD_ReadFileToBuff(FILENAME_EVENT_TMP, &u8Len2, SHORTHEAD);
+
+	// Make header
+	
+	stTableData.u8Code = 0x00;
+	
+	memcpy(stTableData.u8Name, u8Table5Name, 18);
+	
+	stTableData.u32Lens = SHORTHEAD + (u8Len1 * BREAKDOWNLENS) + SHORTHEAD + (u8Len2 * EVENTLENS);
+	
+	SD_AddBuffToFile(cFileName, &stTableData.u8Code, sizeof(DataBlockTypeDef));
+
+	SD_AddBuffToFile(cFileName, (uint8_t*)&u8Len1, SHORTHEAD);
+
+	if(u8Len1 > 0)
+	{
+		for(i = 0; i < u8Len1; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_BREAKDOWN_TMP, &stBreakDown.u8Code, BREAKDOWNLENS, SHORTHEAD + (i * BREAKDOWNLENS));
+
+			SD_AddBuffToFile(cFileName, &stBreakDown.u8Code, BREAKDOWNLENS);
+		}
+	}
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&u8Len2, SHORTHEAD);
+
+	if(u8Len2 > 0)
+	{
+		for(i = 0; i < u8Len2; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_EVENT_TMP, &stEvent.u8Code, EVENTLENS, SHORTHEAD + (i * EVENTLENS));
+
+			SD_AddBuffToFile(cFileName, &stEvent.u8Code, EVENTLENS);
+		}
+	}
+
+	//========================================================================================
+
+	LOGprintf("\r\n> ### MAKE_TABLE6_STEP ###");
+
+	memset(&stDetailSpeed, 0x00, sizeof(DetailSpeedTypeDef));
+
+	bRes = SD_CheckFileExist(FILENAME_DETAILSPEED_DAY_2_TMP);
+
+	if(bRes == TRUE)
+	{
+		SD_ReadFileToBuff(FILENAME_DETAILSPEED_DAY_2_TMP, (uint8_t *)&stDetailSpeed.u16BlockIndex, HEADLENS);
+	}
+	else
+	{
+		stDetailSpeed.u16BlockIndex = 0;
+	}
+
+	//RTOSprintf("\r\n> ### u8DetailSpeed Lens: %d ###", stDetailSpeed.u16BlockIndex);
+
+	// Make header
+	stTableData.u8Code = 0x01;
+
+	memcpy(stTableData.u8Name, u8Table6Name, 18);
+
+	stTableData.u32Lens = HEADLENS + (stDetailSpeed.u16BlockIndex * DATELENS);
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&stTableData.u8Code, sizeof(DataBlockTypeDef));
+
+	if (stDetailSpeed.u16BlockIndex > 0)
+	{
+		u32FileSize = SD_GetFileSize(FILENAME_DETAILSPEED_DAY_2_TMP);
+
+		u32DataSize = 0;
+
+		u32GetSize = 0;
+
+		do
+		{
+			//RTOSprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+
+			if ((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+			
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+			
+			SD_ReadAddrToBuff(FILENAME_DETAILSPEED_DAY_2_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+			
+			SD_AddBuffToFile(cFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+	}
+	else
+	{
+		u8Buf = 0x00;
+
+		SD_AddBuffToFile(cFileName, &u8Buf, HEADLENS);
+	}
+
+	//========================================================================================
+
+	LOGprintf("\r\n> ### MAKE_TABLE7_STEP ###");
+
+	u16Len1 = 0;
+
+	SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t*)&u16Len1, HEADLENS);
+
+	u8Len1 = 0;
+
+	SD_ReadFileToBuff(FILENAME_ADJUST_TMP, &u8Len1, SHORTHEAD);
+
+	u8Len2 = 0;
+
+	SD_ReadFileToBuff(FILENAME_DRIVING_TMP, &u8Len2, SHORTHEAD);
+
+	u8Len3 = 0;
+
+	SD_ReadFileToBuff(FILENAME_REST_TMP, &u8Len3, SHORTHEAD);
+
+	// Make header
+	stTableData.u8Code = 0x02;
+
+	memcpy(stTableData.u8Name, u8Table7Name, 18);
+
+	stTableData.u32Lens = sizeof(TechnicalDataTypeDef);
+	stTableData.u32Lens += HEADLENS + (u16Len1 * CALIBRATIONLENS);
+	stTableData.u32Lens += SHORTHEAD + (u8Len1 * ADJUSTLENS);
+	stTableData.u32Lens += SHORTHEAD + (u8Len2 * DRIVERTIMELENS);
+	stTableData.u32Lens += SHORTHEAD + (u8Len3 * RESTLENS);
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&stTableData.u8Code, sizeof(DataBlockTypeDef));
+
+	//SD_MakeTwoFilesInOne(FILENAME_TECHNICAL_TMP, filename);
+	u32FileSize = SD_GetFileSize(FILENAME_TECHNICAL_TMP);
+	u32DataSize = 0;
+	u32GetSize = 0;
+
+	do
+	{
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+
+		//RTOSprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d, u32GetSize: %d ###",
+		//		u32FileSize, u32DataSize, u32GetSize);
+
+    osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+	  if(osRes != osOK)
+	  {
+	    RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+	    return; 
+	  }
+
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+		SD_ReadAddrToBuff(FILENAME_TECHNICAL_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+		SD_AddBuffToFile(cFileName, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+
+		u32DataSize += u32GetSize;
+
+	}
+	while(u32DataSize < u32FileSize);
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&u16Len1, HEADLENS);
+
+	if(u16Len1 > 0)
+	{
+		for(i = 0; i < u16Len1; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalibration.u8NameID,
+			                  CALIBRATIONLENS, HEADLENS+(i*CALIBRATIONLENS));
+
+			SD_AddBuffToFile(cFileName, (uint8_t *)&stCalibration.u8NameID, CALIBRATIONLENS);
+		}
+	}
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&u8Len1, SHORTHEAD);
+
+	if(u8Len1 > 0)
+	{
+		for(i = 0; i < u16Len1; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjust.u8BeforeDateBCD,
+			                  ADJUSTLENS, SHORTHEAD+(i*ADJUSTLENS));
+
+			SD_AddBuffToFile(cFileName, (uint8_t *)&stAdjust.u8BeforeDateBCD, ADJUSTLENS);
+		}
+	}
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&u8Len2, SHORTHEAD);
+
+	if(u8Len2 > 0)
+	{
+		for(i = 0; i < u8Len2; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_DRIVING_TMP, (uint8_t *)&stDrivingTime.u8BeforeDateBCD,
+			                  DRIVERTIMELENS, SHORTHEAD + (i * DRIVERTIMELENS));
+
+			SD_AddBuffToFile(cFileName, (uint8_t *)&stDrivingTime.u8BeforeDateBCD, DRIVERTIMELENS);
+		}
+	}
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&u8Len3, SHORTHEAD);
+
+	if(u8Len3 > 0)
+	{
+		for(i = 0; i < u8Len3; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_REST_TMP, (uint8_t *)&stRestTime.u8BeforeDateBCD,
+			                  RESTLENS, SHORTHEAD + (i * RESTLENS));
+
+			SD_AddBuffToFile(cFileName, (uint8_t *)&stRestTime.u8BeforeDateBCD, RESTLENS);
+		}
+	}
+
+	//========================================================================================
+
+	LOGprintf("\r\n> ### MAKE_TABLE8_STEP ###");
+
+	memset(&stDriving, 0x00, sizeof(DriveDataTypeDef));
+
+	bRes = SD_CheckFileExist(FILENAME_DRIVE_DAY_2_TMP);
+
+	if(bRes == TRUE)
+	{
+		SD_ReadFileToBuff(FILENAME_DRIVE_DAY_2_TMP, (uint8_t *)&stDriving.u16BlockIndex, HEADLENS);
+	}
+	else
+	{
+		stDriving.u16BlockIndex = 0;
+	}
+
+	// Make header
+	stTableData.u8Code = 0x03;
+
+	memcpy(stTableData.u8Name, u8Table8Name, 18);
+
+	stTableData.u32Lens = HEADLENS + (stDriving.u16BlockIndex * DRIVINGLENS);
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&stTableData.u8Code, sizeof(DataBlockTypeDef));
+
+	if (stDriving.u16BlockIndex > 0)
+	{
+		u32FileSize = SD_GetFileSize(FILENAME_DRIVE_DAY_2_TMP);
+
+		u32DataSize = 0;
+
+		u32GetSize = 0;
+
+		do
+		{
+			//RTOSprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+
+			if ((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+			
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+			
+			SD_ReadAddrToBuff(FILENAME_DRIVE_DAY_2_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(cFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+	}
+	else
+	{
+		u8Buf = 0x00;
+
+		SD_AddBuffToFile(cFileName, &u8Buf, HEADLENS);
+	}
+
+	//========================================================================================
+
+	LOGprintf("\r\n> ### MAKE_TABLE9_STEP ###");
+
+	u8Buf = 0x00;
+
+	memset(&stPositionData, 0x00, sizeof(PositionDataTypeDef));
+
+	bRes = SD_CheckFileExist(FILENAME_POSITION_DAY_2_TMP);
+
+	if(bRes == TRUE)
+	{
+		SD_ReadFileToBuff(FILENAME_POSITION_DAY_2_TMP, (uint8_t *)&stPositionData.u16BlockIndex, HEADLENS);
+	}
+	else
+	{
+		stPositionData.u16BlockIndex = 0;
+	}
+
+	// Make header
+	stTableData.u8Code = 0x04;
+
+	memcpy(stTableData.u8Name, u8Table9Name, 18);
+
+	stTableData.u32Lens = HEADLENS + (stPositionData.u16BlockIndex * POSLENS);
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&stTableData.u8Code, sizeof(DataBlockTypeDef));
+
+	if(stPositionData.u16BlockIndex > 0)
+	{
+		u32FileSize = SD_GetFileSize(FILENAME_POSITION_DAY_2_TMP);
+
+		u32DataSize = 0;
+
+		u32GetSize = 0;
+
+		do
+		{
+			//LOGprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+
+			if ((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+			
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+			
+			SD_ReadAddrToBuff(FILENAME_POSITION_DAY_2_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(cFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+	}
+	else
+	{
+		u8Buf = 0x00;
+
+		SD_AddBuffToFile(cFileName, &u8Buf, HEADLENS);
+	}
+
+	//========================================================================================
+
+	LOGprintf("\r\n> ### MAKE_TABLE10_STEP ###");
+
+	u8Buf = 0x00;
+
+	memset(&stExternal, 0x00, sizeof(ExternalDataTypeDef));
+
+	bRes = SD_CheckFileExist(FILENAME_EXTERNAL_DAY_2_TMP);
+
+	if(bRes == TRUE)
+	{
+		SD_ReadFileToBuff(FILENAME_EXTERNAL_DAY_2_TMP, (uint8_t *)&stExternal.u16BlockIndex, HEADLENS);
+	}
+	else
+	{
+		stPositionData.u16BlockIndex = 0;
+	}
+
+	// Make header
+	stTableData.u8Code = 0x05;
+
+	memcpy(stTableData.u8Name, u8Table10Name, 18);
+
+	stTableData.u32Lens = HEADLENS + (stExternal.u16BlockIndex * EXTLENS);
+
+	SD_AddBuffToFile(cFileName, (uint8_t *)&stTableData.u8Code, sizeof(DataBlockTypeDef));
+
+	if(stExternal.u16BlockIndex > 0)
+	{
+		u32FileSize = SD_GetFileSize(FILENAME_EXTERNAL_DAY_2_TMP);
+
+		u32DataSize = 0;
+
+		u32GetSize = 0;
+
+		do
+		{
+			//RTOSprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+
+			if ((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+			
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+			
+			SD_ReadAddrToBuff(FILENAME_EXTERNAL_DAY_2_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(cFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+	}
+	else
+	{
+		u8Buf = 0x00;
+
+		SD_AddBuffToFile(cFileName, &u8Buf, HEADLENS);
+	}
+
+	//========================================================================================	
+	
+	LOGprintf("\r\n> ### Make CheckSum ###");
+
+	u32FileSize = SD_GetFileSize(cFileName);
+
+	u32DataSize = 0;
+
+	u32GetSize = 0;
+
+	CheckSum = 0;
+
+	do
+	{
+		//RTOSprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+
+		if ((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+	  if(osRes != osOK)
+	  {
+	    RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+	    return; 
+	  }
+
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+		SD_ReadAddrToBuff(cFileName, u8VDR_Buf, u32GetSize, u32DataSize);
+
+		for(i = 0; i < u32GetSize; i++)
+		{
+			CheckSum = CheckSum ^ u8VDR_Buf[i];
+		}
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+
+	LOGprintf("\r\n> ### CheckSum Make OK!! ###");
+
+	SD_AddBuffToFile(cFileName, &CheckSum, SHORTHEAD);
+
+	if (bKeepDayDataFlag == FALSE)
+	{
+		LOGprintf("\r\n> ### Drive Status Record ###");
+		
+		u8Buf = 0;
+		
+		ttFileTime = System_GetTime();
+		
+		u8Buf = ((ttFileTime - ttLastLogTime) / DAY_2_SECOND(1))+1;
+		//RTOSprintf("\r\n> ### Before Day: %d ###", u8Buf);
+
+		for(j=0; j<u8Buf; j++)
+		{
+			for(i = 0; i < 13; i++)
+			{
+				g_Setting.stDrvRecDay[i].u32WorkTime = g_Setting.stDrvRecDay[i+1].u32WorkTime;
+				g_Setting.stDrvRecDay[i].u32PauseTime = g_Setting.stDrvRecDay[i+1].u32PauseTime;
+				g_Setting.stDrvRecDay[i].u32StandByTime = g_Setting.stDrvRecDay[i+1].u32StandByTime;
+				g_Setting.stDrvRecDay[i].u32RestTime = g_Setting.stDrvRecDay[i+1].u32RestTime;
+
+				g_Setting.stDrvRecDay2[i].u32WorkTime = g_Setting.stDrvRecDay2[i+1].u32WorkTime;
+				g_Setting.stDrvRecDay2[i].u32PauseTime = g_Setting.stDrvRecDay2[i+1].u32PauseTime;
+				g_Setting.stDrvRecDay2[i].u32StandByTime = g_Setting.stDrvRecDay2[i+1].u32StandByTime;
+				g_Setting.stDrvRecDay2[i].u32RestTime = g_Setting.stDrvRecDay2[i+1].u32RestTime;
+			}
+			
+			g_Setting.stDrvRecDay[13].u32WorkTime = 0;
+			g_Setting.stDrvRecDay[13].u32PauseTime = 0;
+			g_Setting.stDrvRecDay[13].u32StandByTime = 0;
+			g_Setting.stDrvRecDay[13].u32RestTime = 0;
+
+			g_Setting.stDrvRecDay2[13].u32WorkTime = 0;
+			g_Setting.stDrvRecDay2[13].u32PauseTime = 0;
+			g_Setting.stDrvRecDay2[13].u32StandByTime = 0;
+			g_Setting.stDrvRecDay2[13].u32RestTime = 0;
+		}
+
+		System_SaveSetting();
+	}
+
+	SD_RemoveFile(FILENAME_DETAILSPEED_DAY_2_TMP);
+	SD_RemoveFile(FILENAME_DRIVE_DAY_2_TMP);
+	SD_RemoveFile(FILENAME_POSITION_DAY_2_TMP);
+	SD_RemoveFile(FILENAME_EXTERNAL_DAY_2_TMP);
+
+	//RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_MAKE_VDR_STOP);
+
+//=================================================================================		
+
+	LOGprintf("\r\n> ### Make VDR OK!! ###");
+
+	LOGprintf("\r\n> ### Make VDR Used: %d ms ###", HAL_GetTick() - u32TickTime);
+
+	if (bKeepDayDataFlag == TRUE)
+	{
+		USB_DownloadFile(cFileName);
+		
+		bKeepDayDataFlag = FALSE;
+	}
+
+	return TRUE;
+}
+#endif
+
+#if 0
+//============================================================================//
+// @brief  Make VDR file for a number of hours.
+// @param  u8GetHour: Number of hour to make the VDR file.
+// @retval None.
+//============================================================================//
+bool V161_CreateHourDataProc(uint8_t u8GetHour)
+{
+	char szHourFileName[100] = {0};
+	uint8_t u8BCDTime2[7] = {0};
+	uint8_t u8Buff = 0, u8Buff2 = 0, u8Buff3 = 0, u8CheckSum = 0;
+	uint16_t u16Buf = 0, u16Buf2 = 0, u16Idx, i;
+	uint32_t u32StartSec = 0, u32Sec = 0, u32EndSec, u32TableLens[6];
+	uint32_t u32FileSize, u32DataSize = 0, u32GetSize = 0;
+	uint16_t u16Idx1, u16Idx2, u16Idx3;
+
+	DetailSpeedTypeDef stDSpeed;
+	DriveDataTypeDef stDriveData;
+	PositionDataTypeDef	stPosData;
+	BreakdownDataTypeDef stBKData;
+	EventDataTypeDef stEData;
+	CalibrationDataTypeDef stCalData;
+	AdjustDataTypeDef stAdjData;
+	DrivingTimeTypeDef stDriData;
+	RestDataTypeDef stRestData;
+	ExternalDataTypeDef stExternal;
+
+	//Gary Test use time
+	//uint32_t u32TickTime = 0;
+	uint32_t u32TickTime_All = 0;
+
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### V161 CreateHourDataProc, Get %d Hour Data ###", u8GetHour);
+
+	u32TickTime_All = HAL_GetTick();
+
+	bDoneHourVDRFile = FALSE;
+
+	for(i = 0; i < 6; i++)
+	{
+		u32TableLens[i] = 0;
+	}
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Make Start & End time ###");
+
+	u32EndSec = System_GetTime();
+
+	u32StartSec = u32EndSec - HOUR_2_SECOND(u8GetHour);
+
+	SecToBCDTime(u32EndSec, u8BCDTime2);
+
+	if(bHourDataFlag == FALSE)
+	{
+		sprintf(szHourFileName, "%s/D%02X%02X%02X%02X_%02X%02X%02X_%s.VDR",
+		        (char *)FOLDERNAME_VDR,
+		        u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+		        u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], g_Setting.tBusInfo.cBus_ID);
+	}
+	else
+	{
+		sprintf(szHourFileName, "%s/D%02X%02X%02X%02X_%02X_%02d_%s.VDR",
+		        (char *)FOLDERNAME_VDR,
+		        u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+		        u8BCDTime2[4], u8HourDataCnt, g_Setting.tBusInfo.cBus_ID);
+
+		memset(cPC_HourFileName, 0x00, sizeof(cPC_HourFileName));
+
+		sprintf(cPC_HourFileName, "%s", szHourFileName);
+	}
+
+	LOGprintf("\r\n> ### HourFileName: %s ###", szHourFileName);
+
+	if(SD_CheckFileExist(szHourFileName))
+		SD_RemoveFile(szHourFileName);
+
+	LOGprintf("\r\n> ### End Time: %02X%02X/%02X/%02X %02X:%02X:%02X  Sec: %d ###",
+	           u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+	           u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], u32EndSec);
+
+	SecToBCDTime(u32StartSec, u8BCDTime2);
+
+	LOGprintf("\r\n> ### Start Time: %02X%02X/%02X/%02X %02X:%02X:%02X Sec: %d ###",
+	           u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+	           u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], u32StartSec);
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add Hearder to Hour VDR ###");
+
+	SD_WriteBuffToFile(szHourFileName, (uint8_t *)&u16BlockCnt, 2);
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add TABLE 5 to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u8Buff = 0x00;
+	
+	SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table5Name, 18);
+
+	u8Buff = 0x00;
+	
+	SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, &u8Buff, SHORTHEAD);
+	u32TableLens[0] += (BREAKDOWNLENS * u8Buff) + SHORTHEAD;
+
+	u8Buff2 = 0x00;
+	
+	SD_ReadFileToBuff(FILENAME_EVENT_TMP, &u8Buff2, SHORTHEAD);
+	u32TableLens[0] += (EVENTLENS * u8Buff2) + SHORTHEAD;
+
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[0], 4);
+
+	SD_AddBuffToFile(szHourFileName, (uint8_t*)&u8Buff, SHORTHEAD);
+	
+	if(u8Buff > 0)
+	{
+		for(i = 0; i < u8Buff; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_BREAKDOWN_TMP, &stBKData.u8Code, BREAKDOWNLENS, SHORTHEAD + (i * BREAKDOWNLENS));
+			
+			SD_AddBuffToFile(szHourFileName, &stBKData.u8Code, BREAKDOWNLENS);
+		}
+	}
+
+	SD_AddBuffToFile(szHourFileName, (uint8_t*)&u8Buff2, SHORTHEAD);
+	
+	if(u8Buff2 > 0)
+	{
+		for(i = 0; i<u8Buff2; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_EVENT_TMP, &stEData.u8Code, EVENTLENS, SHORTHEAD + (i * EVENTLENS));
+			
+			SD_AddBuffToFile(szHourFileName, &stEData.u8Code, EVENTLENS);
+		}
+	}
+
+	//LOGprintf("\r\n> Table 5 used %d ms", (HAL_GetTick() - u32TickTime));
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add TABLE 6 to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u16Idx = 0;
+	u16Buf = 0;
+	u16Buf2 = 0;
+	u8Buff = 0x01;
+	
+	SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table6Name, 18);
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&u16Idx, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_DETAILSPEED_TMP, &u16Idx);
+	#endif
+	
+	if(u16Idx > 1)
+	{
+		u16Buf = u16Idx - 1;
+
+		do
+		{
+			SD_ReadAddrToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&stDSpeed.u8DateBCD,
+			                  DATELENS, HEADLENS + (u16Buf * DATELENS));
+			
+			u32Sec = BCDTimeToSec(stDSpeed.u8DateBCD);
+
+			u16Buf--;
+			u16Buf2++;
+
+			if(u16Buf == 0)
+				break;
+		
+		}while(u32Sec > u32StartSec);
+
+		u16Buf2++;
+	}
+
+	u32TableLens[1] = HEADLENS + (u16Buf2 * DATELENS);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[1], 4);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+
+	if (u16Idx > 0)
+	{
+		u32FileSize = HEADLENS + (u16Idx * DATELENS);
+		
+		u32DataSize = HEADLENS + (u16Buf * DATELENS);
+		
+		u32GetSize = 0;
+
+		do
+		{
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(FILENAME_DETAILSPEED_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+			
+		} while(u32DataSize < u32FileSize);
+	}
+
+	//LOGprintf("\r\n> Table 6 used %d ms", (HAL_GetTick() - u32TickTime));
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add TABLE 7 to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u8Buff = 0x02;
+	
+	SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table7Name, 18);
+
+	u16Buf = 0;
+	
+	SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&u16Buf, HEADLENS);
+
+	u8Buff = 0;
+	
+	SD_ReadFileToBuff(FILENAME_ADJUST_TMP, &u8Buff, SHORTHEAD);
+
+	u8Buff2 = 0;
+	
+	SD_ReadFileToBuff(FILENAME_DRIVING_TMP, &u8Buff2, SHORTHEAD);
+
+	u8Buff3 = 0;
+	
+	SD_ReadFileToBuff(FILENAME_REST_TMP, &u8Buff3, SHORTHEAD);
+
+
+	u32TableLens[2] += sizeof(TechnicalDataTypeDef);
+	u32TableLens[2] += HEADLENS + (u16Buf * CALIBRATIONLENS);
+	u32TableLens[2] += SHORTHEAD + (u8Buff * ADJUSTLENS);
+	u32TableLens[2] += SHORTHEAD + (u8Buff2 * DRIVERTIMELENS);
+	u32TableLens[2] += SHORTHEAD + (u8Buff3 * RESTLENS);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[2], 4);
+
+	u32FileSize = SD_GetFileSize(FILENAME_TECHNICAL_TMP);
+	
+	u32DataSize = 0;
+	u32GetSize = 0;
+
+	do
+	{
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+	  if(osRes != osOK)
+	  {
+	    RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+	    return; 
+	  }
+
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+		
+		SD_ReadAddrToBuff(FILENAME_TECHNICAL_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+		
+		SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+		
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf, HEADLENS);
+	
+	if(u16Buf > 0)
+	{
+		for(i = 0; i < u16Buf; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalData.u8NameID,
+			                  CALIBRATIONLENS, HEADLENS+(i * CALIBRATIONLENS));
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&stCalData.u8NameID, CALIBRATIONLENS);
+		}
+	}
+
+	SD_AddBuffToFile(szHourFileName, &u8Buff, SHORTHEAD);
+	
+	if(u8Buff > 0)
+	{
+		for(i = 0; i < u8Buff; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjData.u8BeforeDateBCD,
+			                  ADJUSTLENS, SHORTHEAD + (i * ADJUSTLENS));
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&stAdjData.u8BeforeDateBCD, ADJUSTLENS);
+		}
+	}
+
+	SD_AddBuffToFile(szHourFileName, &u8Buff2, SHORTHEAD);
+	
+	if(u8Buff2 > 0)
+	{
+		for(i=0; i < u8Buff2; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_DRIVING_TMP, (uint8_t *)&stDriData.u8BeforeDateBCD,
+			                  DRIVERTIMELENS, SHORTHEAD + (i * DRIVERTIMELENS));
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&stDriData.u8BeforeDateBCD, DRIVERTIMELENS);
+		}
+	}
+
+	SD_AddBuffToFile(szHourFileName, &u8Buff3, SHORTHEAD);
+	
+	if(u8Buff3 > 0)
+	{
+		for(i = 0; i < u8Buff3; i++)
+		{
+			SD_ReadAddrToBuff(FILENAME_REST_TMP, (uint8_t *)&stRestData.u8BeforeDateBCD,
+			                  RESTLENS, SHORTHEAD + (i * RESTLENS));
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&stRestData.u8BeforeDateBCD, RESTLENS);
+		}
+	}
+
+	//RTOSprintf("\r\n> Table 7 used %d ms", (HAL_GetTick() - u32TickTime));
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add TABLE 8 to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u16Buf = 0;
+	u16Buf2 = 0;
+	u16Idx = 0;
+
+	u8Buff = 0x03;
+	
+	SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table8Name, 18);
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&u16Idx, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_DRIVE_TMP, &u16Idx);
+	#endif
+	
+	u16DrvIdx = u16Idx;
+
+	if(u16Idx > 1)
+	{
+		u16Idx2 = u16Idx - 1;
+		u16Idx1 = 0;
+
+		do
+		{
+			u16Idx3 = u16Idx1 + ((u16Idx2 - u16Idx1) / 2);
+			
+			SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+			                  DRIVINGLENS, HEADLENS + (u16Idx3 * DRIVINGLENS));
+			
+			u32Sec = BCDTimeToSec(stDriveData.u8DriveDateBCD);
+
+			if(u32Sec > u32StartSec)
+			{
+				u16Idx2 = u16Idx3;
+			}
+			else
+			{
+				u16Idx1 = u16Idx3;
+			}
+
+			if((u16Idx2 - u16Idx1) < 2)
+			{
+				if (u32Sec > u32StartSec)
+				{
+					u16Idx3 -= 2;
+				}
+				
+				break;
+			}
+			
+		}while(u32Sec != u32StartSec);
+	}
+
+	u16Buf2 = u16Idx - u16Idx3;
+	u16Buf = u16Idx3;
+	
+	u32TableLens[3] = HEADLENS + (u16Buf2 * DRIVINGLENS);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[3], 4);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+
+	if(u16Idx > 0)
+	{
+		u32FileSize = HEADLENS + (u16Idx * DRIVINGLENS);
+		u32DataSize = HEADLENS + (u16Buf * DRIVINGLENS);
+		u32GetSize = 0;
+
+		do
+		{
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+			
+		} while(u32DataSize < u32FileSize);
+	}
+
+	//RTOSprintf("\r\n> Table 8 used %d ms", (HAL_GetTick() - u32TickTime));
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add TABLE 9 to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u16Buf = 0;
+	u16Buf2 = 0;
+	u16Idx = 0;
+
+	u8Buff = 0x04;
+	SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table9Name, 18);
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_POSITION_TMP, (uint8_t *)&u16Idx, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_POSITION_TMP, &u16Idx);
+	#endif
+
+	if(u16Idx > 1)
+	{
+		u16Buf = u16Idx - 1;
+
+		do
+		{
+			SD_ReadAddrToBuff(FILENAME_POSITION_TMP, (uint8_t *)&stPosData.u8DateBCD,
+			                  POSLENS, HEADLENS + (u16Buf * POSLENS));
+			
+			u32Sec = BCDTimeToSec(stPosData.u8DateBCD);
+
+			u16Buf--;
+			u16Buf2++;
+
+			if(u16Buf == 0)
+				break;
+
+		} while(u32Sec > u32StartSec);
+
+		u16Buf2++;
+	}
+
+	u32TableLens[4] = HEADLENS + (u16Buf2 * POSLENS);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[4], 4);
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+
+	if (u16Idx > 0)
+	{
+		u32FileSize = HEADLENS + (u16Idx * POSLENS);
+		u32DataSize = HEADLENS + (u16Buf * POSLENS);
+		u32GetSize = 0;
+
+		do
+		{
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(FILENAME_POSITION_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+	}
+
+	//RTOSprintf("\r\n> Table 9 used %d ms", (HAL_GetTick() - u32TickTime));
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add TABLE 10 to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u16Buf = 0;
+	u16Buf2 = 0;
+	u16Idx = 0;
+
+	u8Buff = 0x05;
+	SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table10Name, 18);
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_EXTERNAL_TMP, (uint8_t *)&u16Idx, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_EXTERNAL_TMP, &u16Idx);
+	#endif
+
+	if(u16Idx > 1)
+	{
+		u16Buf = u16Idx - 1;
+
+		do
+		{
+			SD_ReadAddrToBuff(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternal.u8DateBCD,
+			                  EXTLENS, HEADLENS + (u16Buf * EXTLENS));
+			
+			u32Sec = BCDTimeToSec(stPosData.u8DateBCD);
+
+			u16Buf--;
+			u16Buf2++;
+
+			if(u16Buf == 0)
+				break;
+
+		}
+		while(u32Sec > u32StartSec);
+
+		u16Buf2++;
+	}
+
+	u32TableLens[5] = HEADLENS + (u16Buf2 * EXTLENS);
+	
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[5], 4);
+	SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+
+	if (u16Idx > 0)
+	{
+		u32FileSize = HEADLENS + (u16Idx * EXTLENS);
+		u32DataSize = HEADLENS + (u16Buf * EXTLENS);
+		
+		u32GetSize = 0;
+
+		do
+		{
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(FILENAME_EXTERNAL_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+	}
+
+	//LOGprintf("\r\n> Table 9 used %d ms", (HAL_GetTick() - u32TickTime));
+
+	//================================================================================
+
+	LOGprintf("\r\n> ### Add CheckSum to Hour VDR ###");
+
+	//u32TickTime = HAL_GetTick();
+
+	u32FileSize = SD_GetFileSize(szHourFileName);
+	
+	u32DataSize = 0;
+	u32GetSize = 0;
+	u8CheckSum = 0;
+
+	do
+	{
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+	  if(osRes != osOK)
+	  {
+	    RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+	    return; 
+	  }
+
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+		SD_ReadAddrToBuff(szHourFileName, u8VDR_Buf, u32GetSize, u32DataSize);
+	
+		for(i=0; i < u32GetSize; i++)
+		{
+			u8CheckSum = u8CheckSum ^ u8VDR_Buf[i];
+		}
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+
+	SD_AddBuffToFile(szHourFileName, &u8CheckSum, SHORTHEAD);
+
+	//LOGprintf("\r\n> CheckSum used %d ms", (HAL_GetTick() - u32TickTime));
+
+	LOGprintf("\r\n> ### Hour file OK, Used: %d ms ###", (HAL_GetTick() - u32TickTime_All));
+
+	//================================================================================
+
+	//RTOSprintf("\r\n> ### Start USB Download Process ###");
+
+	//strcpy(g_cVDRFileName, szHourFileName);
+
+	if(bDLRS232Flag == FALSE)
+	{
+		LOGprintf("\r\n> ### Download Now ###");
+
+		bIsDelVDRFileFlag = TRUE;
+		
+		//g_bUSBDownloadFlg = TRUE;
+		USB_DownloadFile(szHourFileName);
+	}
+
+	bDLRS232Flag = FALSE;
+
+	bHourDataFlag = FALSE;
+
+	//================================================================================
+	LOGprintf("\r\n> ### V161_CreateHourDataProc OK ###");
+
+	bDoneHourVDRFile = TRUE;
+
+	return TRUE;
+}
+
+#endif
+
+void V161_CreateHourDataProc(uint8_t u8GetHour)
+{
+	static char szHourFileName[100] = {0};
+	uint8_t u8BCDTime2[7] = {0};
+	static uint8_t u8Buff = 0, u8Buff2 = 0, u8Buff3 = 0, u8CheckSum = 0;
+	static uint16_t u16Buf = 0, u16Buf2 = 0, u16Idx;
+	uint16_t  i;
+	static uint32_t u32StartSec = 0, u32Sec = 0, u32EndSec, u32TableLens[6];
+	static uint32_t u32FileSize, u32DataSize = 0, u32GetSize = 0;
+	static uint16_t u16Idx1, u16Idx2, u16Idx3;
+	static DetailSpeedTypeDef stDSpeed;
+	static DriveDataTypeDef stDriveData;
+	static PositionDataTypeDef	stPosData;
+	static BreakdownDataTypeDef stBKData;
+	static EventDataTypeDef stEData;
+	static CalibrationDataTypeDef stCalData;
+	static AdjustDataTypeDef stAdjData;
+	static DrivingTimeTypeDef stDriData;
+	static RestDataTypeDef stRestData;
+	static ExternalDataTypeDef stExternal;
+	static uint32_t u32TickTime_All = 0;
+	osStatus osRes;
+	
+	
+	if(procCreateHourData == PROC_STEP_NULL)
+		return;
+	
+	LOGprintf("\r\n> ### procCreateHourData: %d ###", (int)procCreateHourData);
+	
+	switch((int)procCreateHourData)
+	{
+		case PROC_STEP_1:
+			LOGprintf("\r\n> ### V161 CreateHourDataProc, Get %d Hour Data ###", u8GetHour);
+
+			u32TickTime_All = HAL_GetTick();
+
+			//bDoneHourVDRFile = FALSE;
+
+			for(i = 0; i < 6; i++)
+			{
+				u32TableLens[i] = 0;
+			}
+			
+			procCreateHourData = PROC_STEP_2;
+			
+			break;
+			
+		case PROC_STEP_2:
+			LOGprintf("\r\n> ### Make Start & End time ###");
+
+			u32EndSec = System_GetTime();
+
+			u32StartSec = u32EndSec - HOUR_2_SECOND(u8GetHour);
+
+			SecToBCDTime(u32EndSec, u8BCDTime2);
+
+			if(bHourDataFlag == FALSE)
+			{
+				sprintf(szHourFileName, "%s/D%02X%02X%02X%02X_%02X%02X%02X_%s.VDR",
+				        (char *)FOLDERNAME_VDR,
+				        u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+				        u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], g_Setting.tBusInfo.cBus_ID);
+			}
+			else
+			{
+				sprintf(szHourFileName, "%s/D%02X%02X%02X%02X_%02X_%02d_%s.VDR",
+				        (char *)FOLDERNAME_VDR,
+				        u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+				        u8BCDTime2[4], u8HourDataCnt, g_Setting.tBusInfo.cBus_ID);
+
+				memset(cPC_HourFileName, 0x00, sizeof(cPC_HourFileName));
+
+				sprintf(cPC_HourFileName, "%s", szHourFileName);
+			}
+
+			LOGprintf("\r\n> ### HourFileName: %s ###", szHourFileName);
+			
+			if(SD_CheckFileExist(szHourFileName))
+				SD_RemoveFile(szHourFileName);
+
+			LOGprintf("\r\n> ### End Time: %02X%02X/%02X/%02X %02X:%02X:%02X  Sec: %d ###",
+			           u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+			           u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], u32EndSec);
+			           
+			procCreateHourData = PROC_STEP_3;
+			break;
+			
+		case PROC_STEP_3:
+			SecToBCDTime(u32StartSec, u8BCDTime2);
+
+			LOGprintf("\r\n> ### Start Time: %02X%02X/%02X/%02X %02X:%02X:%02X Sec: %d ###",
+			           u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+			           u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], u32StartSec);
+
+			LOGprintf("\r\n> ### Add Hearder to Hour VDR ###");
+
+			SD_WriteBuffToFile(szHourFileName, (uint8_t *)&u16BlockCnt, 2);
+			
+			procCreateHourData = PROC_STEP_4;
+			
+			break;
+			
+			
+		case PROC_STEP_4:
+			LOGprintf("\r\n> ### Add TABLE 5 to Hour VDR ###");
+
+			u8Buff = 0x00;
+			SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table5Name, 18);
+
+			u8Buff = 0x00;
+			SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, &u8Buff, SHORTHEAD);
+			u32TableLens[0] += (BREAKDOWNLENS * u8Buff) + SHORTHEAD;
+
+			u8Buff2 = 0x00;
+			SD_ReadFileToBuff(FILENAME_EVENT_TMP, &u8Buff2, SHORTHEAD);
+			u32TableLens[0] += (EVENTLENS * u8Buff2) + SHORTHEAD;
+
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[0], 4);
+				
+			procCreateHourData = PROC_STEP_5;
+				
+			break;
+			
+		case PROC_STEP_5:
+			SD_AddBuffToFile(szHourFileName, (uint8_t*)&u8Buff, SHORTHEAD);
+			
+			if(u8Buff > 0)
+			{
+				for(i = 0; i < u8Buff; i++)
+				{
+					SD_ReadAddrToBuff(FILENAME_BREAKDOWN_TMP, &stBKData.u8Code, BREAKDOWNLENS, SHORTHEAD + (i * BREAKDOWNLENS));
+					
+					SD_AddBuffToFile(szHourFileName, &stBKData.u8Code, BREAKDOWNLENS);
+				}
+			}
+			
+			procCreateHourData = PROC_STEP_6;
+			
+			break;
+			
+		case PROC_STEP_6:
+			SD_AddBuffToFile(szHourFileName, (uint8_t*)&u8Buff2, SHORTHEAD);
+			
+			if(u8Buff2 > 0)
+			{
+				for(i = 0; i<u8Buff2; i++)
+				{
+					SD_ReadAddrToBuff(FILENAME_EVENT_TMP, &stEData.u8Code, EVENTLENS, SHORTHEAD + (i * EVENTLENS));
+					
+					SD_AddBuffToFile(szHourFileName, &stEData.u8Code, EVENTLENS);
+				}
+			}
+			
+			procCreateHourData = PROC_STEP_7;
+			
+			break;
+			
+		case PROC_STEP_7:	
+			LOGprintf("\r\n> ### Add TABLE 6 to Hour VDR ###");
+
+			u16Idx = 0;
+			u16Buf = 0;
+			u16Buf2 = 0;
+			u8Buff = 0x01;
+			
+			SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+			
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table6Name, 18);
+
+			#if !ENABLE_INDEX_BUFFER
+			SD_ReadFileToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&u16Idx, HEADLENS);
+			#else
+			V161_GetFileIdx(FILENAME_DETAILSPEED_TMP, &u16Idx);
+			#endif
+			
+			if (u16Idx > 1)
+			{
+				u16Buf = u16Idx - 1;
+				
+				procCreateHourData = PROC_STEP_8;
+			}
+			else
+			{
+				procCreateHourData = PROC_STEP_10;
+			}
+			break;
+			
+		case PROC_STEP_8:
+			SD_ReadAddrToBuff(FILENAME_DETAILSPEED_TMP, (uint8_t *)&stDSpeed.u8DateBCD,
+			                  DATELENS, HEADLENS + (u16Buf * DATELENS));
+			
+			u32Sec = BCDTimeToSec(stDSpeed.u8DateBCD);
+
+			u16Buf--;
+			u16Buf2++;
+
+			if(u16Buf == 0)
+				break;
+				
+			procCreateHourData = PROC_STEP_9;
+				
+			break;
+			
+		
+		case PROC_STEP_9:
+			if(u32Sec > u32StartSec)
+			{
+				procCreateHourData = PROC_STEP_8;
+			}
+			else
+			{
+				u16Buf2++;
+				
+				procCreateHourData = PROC_STEP_10;
+			}
+			break;
+		
+		case PROC_STEP_10:
+			u32TableLens[1] = HEADLENS + (u16Buf2 * DATELENS);
+			
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[1], 4);
+			
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+			
+			procCreateHourData = PROC_STEP_11;
+			
+			break;
+			
+		case PROC_STEP_11:
+			if(u16Idx > 0)
+			{
+				u32FileSize = HEADLENS + (u16Idx * DATELENS);
+				
+				u32DataSize = HEADLENS + (u16Buf * DATELENS);
+				
+				u32GetSize = 0;
+				
+				procCreateHourData = PROC_STEP_12;
+			}
+			else
+			{
+				procCreateHourData = PROC_STEP_14;
+			}
+			break;
+		
+		case PROC_STEP_12:
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(FILENAME_DETAILSPEED_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+			
+			procCreateHourData = PROC_STEP_13;
+			
+			break;
+			
+		case PROC_STEP_13:
+			if(u32DataSize < u32FileSize)
+			{
+				procCreateHourData = PROC_STEP_12;
+			}
+			else
+			{
+				procCreateHourData = PROC_STEP_14;
+			}
+			break;
+			
+		case PROC_STEP_14:
+			LOGprintf("\r\n> ### Add TABLE 7 to Hour VDR ###");
+
+			u8Buff = 0x02;
+			SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+			SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table7Name, 18);
+
+			u16Buf = 0;
+			SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&u16Buf, HEADLENS);
+
+			u8Buff = 0;
+			SD_ReadFileToBuff(FILENAME_ADJUST_TMP, &u8Buff, SHORTHEAD);
+
+			u8Buff2 = 0;
+			SD_ReadFileToBuff(FILENAME_DRIVING_TMP, &u8Buff2, SHORTHEAD);
+
+			u8Buff3 = 0;
+			SD_ReadFileToBuff(FILENAME_REST_TMP, &u8Buff3, SHORTHEAD);
+			
+			procCreateHourData = PROC_STEP_15;
+			break;
+			
+			case PROC_STEP_15:
+				u32TableLens[2] += sizeof(TechnicalDataTypeDef);
+				u32TableLens[2] += HEADLENS + (u16Buf * CALIBRATIONLENS);
+				u32TableLens[2] += SHORTHEAD + (u8Buff * ADJUSTLENS);
+				u32TableLens[2] += SHORTHEAD + (u8Buff2 * DRIVERTIMELENS);
+				u32TableLens[2] += SHORTHEAD + (u8Buff3 * RESTLENS);
+				
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[2], 4);
+
+				u32FileSize = SD_GetFileSize(FILENAME_TECHNICAL_TMP);
+				
+				u32DataSize = 0;
+				u32GetSize = 0;
+				
+				procCreateHourData = PROC_STEP_16;
+				break;
+				
+			case PROC_STEP_16:
+				if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+				{
+					u32GetSize = MOVE_DATA_MAX_SIZE;
+				}
+				else
+				{
+					u32GetSize = u32FileSize - u32DataSize;
+				}
+				
+				osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+				if(osRes != osOK)
+				{
+					RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+			
+					return; 
+				}
+
+				memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+				
+				SD_ReadAddrToBuff(FILENAME_TECHNICAL_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+				
+				SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+				
+				osMutexRelease(mutex_data_buf1_user);
+				
+				u32DataSize += u32GetSize;
+				
+				procCreateHourData = PROC_STEP_17;
+				break;
+				
+			case PROC_STEP_17:
+				if(u32DataSize < u32FileSize)
+				{
+					procCreateHourData = PROC_STEP_16;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_18;
+				}
+				break;
+				
+			case PROC_STEP_18:
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf, HEADLENS);
+				
+				if(u16Buf > 0)
+				{
+					for(i = 0; i < u16Buf; i++)
+					{
+						SD_ReadAddrToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalData.u8NameID,
+						                  CALIBRATIONLENS, HEADLENS+(i * CALIBRATIONLENS));
+						SD_AddBuffToFile(szHourFileName, (uint8_t *)&stCalData.u8NameID, CALIBRATIONLENS);
+					}
+				}
+				
+				procCreateHourData = PROC_STEP_19;
+				break;
+				
+			case PROC_STEP_19:
+				SD_AddBuffToFile(szHourFileName, &u8Buff, SHORTHEAD);
+				
+				if(u8Buff > 0)
+				{
+					for(i = 0; i < u8Buff; i++)
+					{
+						SD_ReadAddrToBuff(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjData.u8BeforeDateBCD,
+						                  ADJUSTLENS, SHORTHEAD + (i * ADJUSTLENS));
+						SD_AddBuffToFile(szHourFileName, (uint8_t *)&stAdjData.u8BeforeDateBCD, ADJUSTLENS);
+					}
+				}
+				
+				procCreateHourData = PROC_STEP_20;
+				break;
+				
+			case PROC_STEP_20:
+				SD_AddBuffToFile(szHourFileName, &u8Buff2, SHORTHEAD);
+				
+				if(u8Buff2 > 0)
+				{
+					for(i=0; i < u8Buff2; i++)
+					{
+						SD_ReadAddrToBuff(FILENAME_DRIVING_TMP, (uint8_t *)&stDriData.u8BeforeDateBCD,
+						                  DRIVERTIMELENS, SHORTHEAD + (i * DRIVERTIMELENS));
+						SD_AddBuffToFile(szHourFileName, (uint8_t *)&stDriData.u8BeforeDateBCD, DRIVERTIMELENS);
+					}
+				}
+				
+				procCreateHourData = PROC_STEP_21;
+				break;
+				
+			case PROC_STEP_21:
+				SD_AddBuffToFile(szHourFileName, &u8Buff3, SHORTHEAD);
+				
+				if(u8Buff3 > 0)
+				{
+					for(i = 0; i < u8Buff3; i++)
+					{
+						SD_ReadAddrToBuff(FILENAME_REST_TMP, (uint8_t *)&stRestData.u8BeforeDateBCD,
+						                  RESTLENS, SHORTHEAD + (i * RESTLENS));
+						SD_AddBuffToFile(szHourFileName, (uint8_t *)&stRestData.u8BeforeDateBCD, RESTLENS);
+					}
+				}
+				
+				procCreateHourData = PROC_STEP_22;
+				break;
+				
+			case PROC_STEP_22:
+				LOGprintf("\r\n> ### Add TABLE 8 to Hour VDR ###");
+
+				u16Buf = 0;
+				u16Buf2 = 0;
+				u16Idx = 0;
+
+				u8Buff = 0x03;
+				
+				SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table8Name, 18);
+
+				#if !ENABLE_INDEX_BUFFER
+				SD_ReadFileToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&u16Idx, HEADLENS);
+				#else
+				V161_GetFileIdx(FILENAME_DRIVE_TMP, &u16Idx);
+				#endif
+				
+				u16DrvIdx = u16Idx;
+				
+				if(u16Idx > 1)
+				{
+					u16Idx2 = u16Idx - 1;
+					u16Idx1 = 0;
+					procCreateHourData = PROC_STEP_23;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_25;
+				}
+				break;
+				
+			case PROC_STEP_23:
+				u16Idx3 = u16Idx1 + ((u16Idx2 - u16Idx1) / 2);
+				
+				SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+				                  DRIVINGLENS, HEADLENS + (u16Idx3 * DRIVINGLENS));
+				
+				u32Sec = BCDTimeToSec(stDriveData.u8DriveDateBCD);
+
+				if (u32Sec > u32StartSec)
+				{
+					u16Idx2 = u16Idx3;
+				}
+				else
+				{
+					u16Idx1 = u16Idx3;
+				}
+
+				procCreateHourData = PROC_STEP_24;
+				
+				if ((u16Idx2 - u16Idx1) < 2)
+				{
+					if (u32Sec > u32StartSec)
+					{
+						u16Idx3 -= 2;
+					}
+					
+					procCreateHourData = PROC_STEP_25;
+				}
+				break;
+				
+			case PROC_STEP_24:
+				if(u32Sec != u32StartSec)
+				{
+					procCreateHourData = PROC_STEP_23;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_25;
+				}
+				break;
+				
+			case PROC_STEP_25:
+				u16Buf2 = u16Idx - u16Idx3;
+				u16Buf = u16Idx3;
+				
+				u32TableLens[3] = HEADLENS + (u16Buf2 * DRIVINGLENS);
+				
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[3], 4);
+				
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+				
+				if(u16Idx > 0)
+				{
+					u32FileSize = HEADLENS + (u16Idx * DRIVINGLENS);
+					u32DataSize = HEADLENS + (u16Buf * DRIVINGLENS);
+					u32GetSize = 0;
+					procCreateHourData = PROC_STEP_26;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_28;
+				}
+				
+				break;
+				
+			case PROC_STEP_26:
+				if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+				{
+					u32GetSize = MOVE_DATA_MAX_SIZE;
+				}
+				else
+				{
+					u32GetSize = u32FileSize - u32DataSize;
+				}
+				
+				osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+				if(osRes != osOK)
+				{
+					RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+			
+					return; 
+				}
+
+				memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+				SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+				SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+				
+				osMutexRelease(mutex_data_buf1_user);
+
+				u32DataSize += u32GetSize;
+				
+				procCreateHourData = PROC_STEP_27;
+				
+				break;
+				
+			case PROC_STEP_27:
+				if(u32DataSize < u32FileSize)
+				{
+					procCreateHourData = PROC_STEP_26;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_28;
+				}
+				break;
+				
+			case PROC_STEP_28:
+				LOGprintf("\r\n> ### Add TABLE 9 to Hour VDR ###");
+
+				u16Buf = 0;
+				u16Buf2 = 0;
+				u16Idx = 0;
+
+				u8Buff = 0x04;
+				SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table9Name, 18);
+
+				#if !ENABLE_INDEX_BUFFER
+				SD_ReadFileToBuff(FILENAME_POSITION_TMP, (uint8_t *)&u16Idx, HEADLENS);
+				#else
+				V161_GetFileIdx(FILENAME_POSITION_TMP, &u16Idx);
+				#endif
+				
+				if(u16Idx > 1)
+				{
+					u16Buf = u16Idx - 1;
+					procCreateHourData = PROC_STEP_29;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_31;
+				}
+				break;
+			
+			case PROC_STEP_29:
+				SD_ReadAddrToBuff(FILENAME_POSITION_TMP, (uint8_t *)&stPosData.u8DateBCD,
+				                  POSLENS, HEADLENS + (u16Buf * POSLENS));
+				
+				u32Sec = BCDTimeToSec(stPosData.u8DateBCD);
+
+				u16Buf--;
+				u16Buf2++;
+
+				if(u16Buf == 0)
+					break;
+					
+				procCreateHourData = PROC_STEP_30;
+				break;
+				
+			case PROC_STEP_30:
+				if(u32Sec > u32StartSec)
+				{
+					procCreateHourData = PROC_STEP_29;
+				}
+				else
+				{
+					u16Buf2++;
+					procCreateHourData = PROC_STEP_31;
+				}
+				break;
+				
+			case PROC_STEP_31:
+				u32TableLens[4] = HEADLENS + (u16Buf2 * POSLENS);
+				
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[4], 4);
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+				
+				if (u16Idx > 0)
+				{
+					u32FileSize = HEADLENS + (u16Idx * POSLENS);
+					u32DataSize = HEADLENS + (u16Buf * POSLENS);
+					u32GetSize = 0;
+					procCreateHourData = PROC_STEP_32;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_34;
+				}
+				break;
+				
+			case PROC_STEP_32:
+				if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+				{
+					u32GetSize = MOVE_DATA_MAX_SIZE;
+				}
+				else
+				{
+					u32GetSize = u32FileSize - u32DataSize;
+				}
+				
+				osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+				if(osRes != osOK)
+				{
+					RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+			
+					return; 
+				}
+
+				memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+				SD_ReadAddrToBuff(FILENAME_POSITION_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+				SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+				
+				osMutexRelease(mutex_data_buf1_user);
+
+				u32DataSize += u32GetSize;
+				
+				procCreateHourData = PROC_STEP_33;
+				
+				break;
+				
+			case PROC_STEP_33:
+				if(u32DataSize < u32FileSize)
+				{
+					procCreateHourData = PROC_STEP_32;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_34;
+				}
+				break;
+				
+			case PROC_STEP_34:
+				LOGprintf("\r\n> ### Add TABLE 10 to Hour VDR ###");
+
+				u16Buf = 0;
+				u16Buf2 = 0;
+				u16Idx = 0;
+
+				u8Buff = 0x05;
+				SD_AddBuffToFile(szHourFileName, &u8Buff, 1);
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u8Table10Name, 18);
+
+				#if !ENABLE_INDEX_BUFFER
+				SD_ReadFileToBuff(FILENAME_EXTERNAL_TMP, (uint8_t *)&u16Idx, HEADLENS);
+				#else
+				V161_GetFileIdx(FILENAME_EXTERNAL_TMP, &u16Idx);
+				#endif
+				
+				if(u16Idx > 1)
+				{
+					u16Buf = u16Idx - 1;
+					procCreateHourData = PROC_STEP_35;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_37;
+				}
+				
+				break;
+				
+			case PROC_STEP_35:
+				SD_ReadAddrToBuff(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternal.u8DateBCD,
+				                  EXTLENS, HEADLENS + (u16Buf * EXTLENS));
+				
+				u32Sec = BCDTimeToSec(stPosData.u8DateBCD);
+
+				u16Buf--;
+				u16Buf2++;
+
+				if(u16Buf == 0)
+					break;
+					
+				procCreateHourData = PROC_STEP_36;
+					
+				break;
+			
+			case PROC_STEP_36:
+				if(u32Sec > u32StartSec)
+				{
+					procCreateHourData = PROC_STEP_35;
+				}
+				else
+				{
+					u16Buf2++;
+					procCreateHourData = PROC_STEP_37;
+				}
+				break;
+				
+			case PROC_STEP_37:
+				u32TableLens[5] = HEADLENS + (u16Buf2 * EXTLENS);
+				
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u32TableLens[5], 4);
+				SD_AddBuffToFile(szHourFileName, (uint8_t *)&u16Buf2, HEADLENS);
+				
+				procCreateHourData = PROC_STEP_38;
+				break;
+				
+			case PROC_STEP_38:
+				if (u16Idx > 0)
+				{
+					u32FileSize = HEADLENS + (u16Idx * EXTLENS);
+					u32DataSize = HEADLENS + (u16Buf * EXTLENS);
+					u32GetSize = 0;
+					
+					procCreateHourData = PROC_STEP_39;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_41;
+				}
+				break;
+				
+			case PROC_STEP_39:
+				if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+				{
+					u32GetSize = MOVE_DATA_MAX_SIZE;
+				}
+				else
+				{
+					u32GetSize = u32FileSize - u32DataSize;
+				}
+				
+				osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+				if(osRes != osOK)
+				{
+					RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+			
+					return; 
+				}
+
+				memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+				SD_ReadAddrToBuff(FILENAME_EXTERNAL_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+				SD_AddBuffToFile(szHourFileName, u8VDR_Buf, u32GetSize);
+				
+				osMutexRelease(mutex_data_buf1_user);
+
+				u32DataSize += u32GetSize;
+				
+				procCreateHourData = PROC_STEP_40;
+				break;
+				
+			case PROC_STEP_40:
+				if(u32DataSize < u32FileSize)
+				{
+					procCreateHourData = PROC_STEP_39;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_41;
+				}
+				break;
+				
+			case PROC_STEP_41:
+				LOGprintf("\r\n> ### Add CheckSum to Hour VDR ###");
+
+				u32FileSize = SD_GetFileSize(szHourFileName);
+				
+				u32DataSize = 0;
+				u32GetSize = 0;
+				u8CheckSum = 0;
+				
+				procCreateHourData = PROC_STEP_42;
+				break;
+				
+			case PROC_STEP_42:
+				if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+				{
+					u32GetSize = MOVE_DATA_MAX_SIZE;
+				}
+				else
+				{
+					u32GetSize = u32FileSize - u32DataSize;
+				}
+				
+				osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+				if(osRes != osOK)
+				{
+					RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+			
+					return; 
+				}
+
+				memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+				SD_ReadAddrToBuff(szHourFileName, u8VDR_Buf, u32GetSize, u32DataSize);
+			
+				for(i=0; i < u32GetSize; i++)
+				{
+					u8CheckSum = u8CheckSum ^ u8VDR_Buf[i];
+				}
+				
+				osMutexRelease(mutex_data_buf1_user);
+
+				u32DataSize += u32GetSize;
+				
+				procCreateHourData = PROC_STEP_43;
+				
+				break;
+				
+			case PROC_STEP_43:
+				if(u32DataSize < u32FileSize)
+				{
+					procCreateHourData = PROC_STEP_42;
+				}
+				else
+				{
+					procCreateHourData = PROC_STEP_44;
+				}
+				break;
+				
+			case PROC_STEP_44:
+				SD_AddBuffToFile(szHourFileName, &u8CheckSum, SHORTHEAD);
+
+				LOGprintf("\r\n> ### Hour file OK, Used: %d ms ###", (HAL_GetTick() - u32TickTime_All));
+				
+				//RTOSprintf("\r\n> ### Start USB Download Process ###");
+
+				//strcpy(g_cVDRFileName, szHourFileName);
+
+				if(bDLRS232Flag == FALSE)
+				{
+					LOGprintf("\r\n> ### Download Now ###");
+
+					bIsDelVDRFileFlag = TRUE;
+					
+					//g_bUSBDownloadFlg = TRUE;
+					USB_DownloadFile(szHourFileName);
+				}
+				
+				procCreateHourData = PROC_STEP_45;
+				break;
+				
+			case PROC_STEP_45:
+				bDLRS232Flag = FALSE;
+
+				bHourDataFlag = FALSE;
+
+				LOGprintf("\r\n> ### V161_CreateHourDataProc OK ###");
+
+				//bDoneHourVDRFile = TRUE;
+				bDoneHourVDRFile = FALSE;
+				
+				procCreateHourData = PROC_STEP_NULL;
+				break;
+
+			default:
+				procCreateHourData = PROC_STEP_NULL;
+				break;
+	}
+}
+
+#if 0
+//============================================================================//
+// @brief  Rename record day file.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_RenameDayFile(void)
+{
+	#if ENABLE_INDEX_BUFFER
+	uint16_t u16Index;
+	#endif
+	char *pOld, *pNew, cBufStr[100], cBufStr2[100];
+	
+
+
+	LOGprintf("\r\n> ### V161 Rename Day File ###");
+
+	RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_RENAME_DAY_FILE);
+	
+	#if ENABLE_INDEX_BUFFER
+		u16Index = 0;
+		V161_GetFileIdx(FILENAME_DETAILSPEED_DAY_TMP, &u16Index);
+		SD_WriteBuffToFile(FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+
+	pNew = cBufStr;
+
+	pOld = cBufStr2;
+
+	sprintf(pOld, "%s", FILENAME_DETAILSPEED_DAY_TMP);
+
+	sprintf(pNew, "%s", FILENAME_DETAILSPEED_DAY_2_TMP);
+
+	SD_RemoveFile(pNew);
+
+	SD_Rename(pOld, pNew);
+	
+	#if ENABLE_INDEX_BUFFER
+		u16Index = 0;
+		V161_GetFileIdx(FILENAME_DRIVE_DAY_TMP, &u16Index);
+		SD_WriteBuffToFile(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+
+	sprintf(pOld, "%s", FILENAME_DRIVE_DAY_TMP);
+
+	sprintf(pNew, "%s", FILENAME_DRIVE_DAY_2_TMP);
+
+	SD_RemoveFile(pNew);
+
+	SD_Rename(pOld, pNew);
+	
+	#if ENABLE_INDEX_BUFFER
+		u16Index = 0;
+		V161_GetFileIdx(FILENAME_POSITION_DAY_TMP, &u16Index);
+		SD_WriteBuffToFile(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+
+	sprintf(pOld, "%s", FILENAME_POSITION_DAY_TMP);
+
+	sprintf(pNew, "%s", FILENAME_POSITION_DAY_2_TMP);
+
+	SD_RemoveFile(pNew);
+
+	SD_Rename(pOld, pNew);
+	
+	#if ENABLE_INDEX_BUFFER
+		u16Index = 0;
+		V161_GetFileIdx(FILENAME_EXTERNAL_DAY_TMP, &u16Index);
+		SD_WriteBuffToFile(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+	
+	sprintf(pOld, "%s", FILENAME_EXTERNAL_DAY_TMP);
+
+	sprintf(pNew, "%s", FILENAME_EXTERNAL_DAY_2_TMP);
+
+	SD_RemoveFile(pNew);
+
+	SD_Rename(pOld, pNew);
+}
+
+//============================================================================//
+// @brief  Recreate record day file.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_RecreateDayFile(void)
+{
+	LOGprintf("\r\n> ### V161 Recreate Day File ###");
+
+	RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_RECREATE_DAY_FILE);
+
+	SD_RemoveFile(FILENAME_DETAILSPEED_DAY_TMP);
+
+	SD_CreateFile(FILENAME_DETAILSPEED_DAY_TMP, HEADLENS, TRUE);
+	
+	#if ENABLE_INDEX_BUFFER
+	V161_SaveFileIdx(FILENAME_DETAILSPEED_DAY_TMP, 0);
+	#endif
+
+	u16DS_DayIdx = 0;
+
+	SD_RemoveFile(FILENAME_DRIVE_DAY_TMP);
+
+	SD_CreateFile(FILENAME_DRIVE_DAY_TMP, HEADLENS, TRUE);
+
+	#if ENABLE_INDEX_BUFFER
+	V161_SaveFileIdx(FILENAME_DRIVE_DAY_TMP, 0);
+	#endif
+	
+	u16DrvDayIdx = 0;
+
+	SD_RemoveFile(FILENAME_POSITION_DAY_TMP);
+
+	SD_CreateFile(FILENAME_POSITION_DAY_TMP, (HEADLENS + POSLENS), TRUE);
+	
+	#if ENABLE_INDEX_BUFFER
+	V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, 0);
+	#endif
+
+	u16PosDayIdx = 0;
+
+	PositionData.u8Index = 0;
+	
+	SD_RemoveFile(FILENAME_EXTERNAL_DAY_TMP);
+
+	SD_CreateFile(FILENAME_EXTERNAL_DAY_TMP, HEADLENS, TRUE);
+	
+	#if ENABLE_INDEX_BUFFER
+	V161_SaveFileIdx(FILENAME_EXTERNAL_DAY_TMP, 0);
+	#endif
+	
+	u16RecExtDayIdx = 0;
+}
+
+//============================================================================//
+// @brief  Make copies of day files.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_CopyDayFile(void)
+{
+	#if ENABLE_INDEX_BUFFER
+		uint16_t u16Index;
+	#endif
+	
+	uint32_t u32FileSize, u32DataSize = 0, u32GetSize = 0;
+
+	
+	LOGprintf("\r\n> ### V161_Copy Day File ###");
+
+	//LOGprintf("\r\n> FILENAME_DETAILSPEED_DAY_TMP Copy");
+	
+	#if ENABLE_INDEX_BUFFER
+	u16Index = 0;
+	V161_GetFileIdx(FILENAME_DETAILSPEED_DAY_TMP, &u16Index);
+	SD_WriteBuffToFile(FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+	
+	u32FileSize = SD_GetFileSize(FILENAME_DETAILSPEED_DAY_TMP);
+	
+	u32DataSize = 0;
+	
+	u32GetSize = 0;
+	
+	do
+	{
+		//LOGprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+		
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+		if(osRes != osOK)
+		{
+			RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+			return; 
+		}
+		
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+		
+		SD_ReadAddrToBuff(FILENAME_DETAILSPEED_DAY_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+		
+		SD_AddBuffToFile(FILENAME_DETAILSPEED_DAY_2_TMP, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+		
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+
+	//LOGprintf("\r\n> FILENAME_DRIVE_DAY_TMP Copy");
+	
+	#if ENABLE_INDEX_BUFFER
+	u16Index = 0;
+	V161_GetFileIdx(FILENAME_DRIVE_DAY_TMP, &u16Index);
+	SD_WriteBuffToFile(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+	
+	u32FileSize = SD_GetFileSize(FILENAME_DRIVE_DAY_TMP);
+	u32DataSize = 0;
+	u32GetSize = 0;
+	
+	do
+	{
+		//LOGprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+		
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+		if(osRes != osOK)
+		{
+			RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+			return; 
+		}
+		
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+		
+		SD_ReadAddrToBuff(FILENAME_DRIVE_DAY_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+		
+		SD_AddBuffToFile(FILENAME_DRIVE_DAY_2_TMP, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+		
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+
+	//LOGprintf("\r\n> FILENAME_POSITION_DAY_TMP Copy");
+	
+	#if ENABLE_INDEX_BUFFER
+	u16Index = 0;
+	V161_GetFileIdx(FILENAME_POSITION_DAY_TMP, &u16Index);
+	SD_WriteBuffToFile(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+	
+	u32FileSize = SD_GetFileSize(FILENAME_POSITION_DAY_TMP);
+	u32DataSize = 0;
+	u32GetSize = 0;
+	
+	do
+	{
+		//LOGprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+		
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+		if(osRes != osOK)
+		{
+			RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+			return; 
+		}
+		
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+		
+		SD_ReadAddrToBuff(FILENAME_POSITION_DAY_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+
+		SD_AddBuffToFile(FILENAME_POSITION_DAY_2_TMP, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+	
+	//LOGprintf("\r\n> FILENAME_EXTERNAL_DAY_TMP Copy");
+	
+	#if ENABLE_INDEX_BUFFER
+	u16Index = 0;
+	V161_GetFileIdx(FILENAME_EXTERNAL_DAY_TMP, &u16Index);
+	SD_WriteBuffToFile(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#endif
+	
+	u32FileSize = SD_GetFileSize(FILENAME_EXTERNAL_DAY_TMP);
+	u32DataSize = 0;
+	u32GetSize = 0;
+	
+	do
+	{
+		//LOGprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+		
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+		if(osRes != osOK)
+		{
+			RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+			return; 
+		}
+		
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+		
+		SD_ReadAddrToBuff(FILENAME_EXTERNAL_DAY_TMP, u8VDR_Buf, u32GetSize, u32DataSize);
+		
+		SD_AddBuffToFile(FILENAME_EXTERNAL_DAY_2_TMP, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+		
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+}
+#endif
+
+//============================================================================//
+// @brief  Copy file.
+// @param  pcSrcFileName: Pointer to a char array storing the source file name.
+//         pcDstFileName: Pointer to a char array storing the destination file name.
+// @retval None.
+//============================================================================//
+void V161_CopyFile(char *pcScrFileName, char *pcDstFileName)
+{
+	uint32_t u32FileSize, u32DataSize = 0, u32GetSize = 0;
+
+	
+	LOGprintf("\r\n> ### V161_CopyFile ###");
+
+	u32FileSize = SD_GetFileSize(pcScrFileName);
+	
+	u32DataSize = 0;
+	
+	u32GetSize = 0;
+	
+	do
+	{
+		//RTOSprintf("\r\n> ### u32FileSize: %d, u32DataSize: %d ###", u32FileSize, u32DataSize);
+		if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+		{
+			u32GetSize = MOVE_DATA_MAX_SIZE;
+		}
+		else
+		{
+			u32GetSize = u32FileSize - u32DataSize;
+		}
+		
+		osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+	  if(osRes != osOK)
+	  {
+	    RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+	
+	    return; 
+	  }
+		
+		memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+		
+		SD_ReadAddrToBuff(pcScrFileName, u8VDR_Buf, u32GetSize, u32DataSize);
+		
+		SD_AddBuffToFile(pcDstFileName, u8VDR_Buf, u32GetSize);
+		
+		osMutexRelease(mutex_data_buf1_user);
+		
+		HAL_Delay(2);
+		
+		u32DataSize += u32GetSize;
+	}
+	while(u32DataSize < u32FileSize);
+}
+
+//============================================================================//
+// @brief  Save event to SD card.
+// @param  u8EventIndex: Event index.
+// @retval None.
+//============================================================================//
+bool V161_SaveEvent(uint8_t u8EventIndex)
+{
+	EventDataTypeDef stRecEvent;
+	uint32_t u32NowSec;
+	
+	
+	stRecEvent.u8Code = u8EventIndex;
+
+	u32NowSec = System_GetTime();
+
+	SecToBCDTime(u32NowSec, stRecEvent.u8DateStartBCD);
+
+	memcpy(stRecEvent.u8DateStopBCD, stRecEvent.u8DateStartBCD, 7);
+	
+	V161_RecordEvent(stRecEvent);
+	
+	if(u8EventIndex == 1)
+	{
+		stPwrOffEvent.bIsShowFlag = TRUE;
+		stPwrOffEvent.u8EventTime[0] = stRecEvent.u8DateStartBCD[4];
+		stPwrOffEvent.u8EventTime[1] = stRecEvent.u8DateStartBCD[5];
+		stPwrOffEvent.u8EventTime[2] = stRecEvent.u8DateStartBCD[6];
+	}
+	
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Write technical data to a file.
+// @param  pcFileName: Pointer to the name of the file to write to.
+// @retval None.
+//============================================================================//
+void V161_WriteTechnicalToFile(char *pcFileName)
+{
+	bool bRes;
+	VdrTechnicalDataTypeDef stVdrTechnical;
+
+	
+	memset(&stVdrTechnical, '\0', sizeof(VdrTechnicalDataTypeDef));
+	
+	stVdrTechnical.u8TableCode = 0x03;
+	
+	strncpy((char *)stVdrTechnical.u8Name, (char *)u8Table7Name, sizeof(u8Table7Name));
+	
+	stVdrTechnical.u32Lens = sizeof(TechnicalDataTypeDef);
+
+	bRes = SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stVdrTechnical.stTechData, sizeof(TechnicalDataTypeDef));
+
+	if(bRes == TRUE)
+	{
+		bRes = SD_AddBuffToFile(pcFileName, (uint8_t *)&stVdrTechnical, sizeof(VdrTechnicalDataTypeDef));
+	
+		if(bRes == TRUE)
+		{
+			LOGprintf("\r\n> V161_WriteTechnicalToFile OK. ");
+		}
+		else
+		{
+			LOGprintf("\r\n> V161_WriteTechnicalToFile NG. ");
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Write record to breakdown file.
+// @param  stBreakDown: Record data in BreakdownDataTypeDef format.
+// @retval None.
+//============================================================================//
+void V161_RecordBreakdown(BreakdownDataTypeDef stBreakDown)
+{
+	SD_ReadFileToBuff(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stBreakDown.u8BlockIndex, SHORTHEAD);
+
+	stBreakDown.u8BlockIndex++;
+
+	SD_WriteBuffToFile(FILENAME_BREAKDOWN_TMP, (uint8_t *)&stBreakDown.u8BlockIndex, SHORTHEAD);
+
+	if(stBreakDown.u8BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_BREAKDOWN_TMP, &stBreakDown.u8Code, BREAKDOWNLENS,
+											SHORTHEAD + ((stBreakDown.u8BlockIndex - 1) * BREAKDOWNLENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_BREAKDOWN_TMP, &stBreakDown.u8Code, BREAKDOWNLENS, SHORTHEAD);
+	}
+	
+	V161_WriteBreakdownToVDR(stBreakDown);
+}
+
+//============================================================================//
+// @brief  Write record to event file.
+// @param  stEvent: Record data in EventDataTypeDef format.
+// @retval None
+//============================================================================//
+void V161_RecordEvent(EventDataTypeDef stEvent)
+{
+	uint8_t i;
+
+	EventDataTypeDef stEvent2;
+
+	SD_ReadFileToBuff(FILENAME_EVENT_TMP, (uint8_t *) & stEvent.u8BlockIndex, SHORTHEAD);
+
+	stEvent.u8EventCnt = 1;
+
+	for(i=0; i<stEvent.u8BlockIndex; i++)
+	{
+		SD_ReadAddrToBuff(FILENAME_EVENT_TMP, (uint8_t *) & stEvent2.u8Code, EVENTLENS, SHORTHEAD + (i * EVENTLENS));
+
+		if (stEvent.u8Code == stEvent2.u8Code)
+		{
+			stEvent.u8EventCnt = stEvent2.u8EventCnt + 1;
+		}
+	}
+
+	stEvent.u8BlockIndex++;
+
+	SD_WriteBuffToFile(FILENAME_EVENT_TMP, (uint8_t *) & stEvent.u8BlockIndex, SHORTHEAD);
+
+	if(stEvent.u8BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_EVENT_TMP, &stEvent.u8Code, EVENTLENS,
+											SHORTHEAD + ((stEvent.u8BlockIndex - 1) * EVENTLENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_EVENT_TMP, &stEvent.u8Code, EVENTLENS, SHORTHEAD);
+	}
+	
+	V161_WriteEventToVDR(stEvent);
+}
+
+//============================================================================//
+// @brief  Write record to driving file.
+// @param  stDriving: Record data in DriveDataTypeDef format.
+// @retval None
+//============================================================================//
+void V161_RecordDriving(DriveDataTypeDef stDriving)
+{
+	//uint16_t u16DriveActCntDay = 0;
+	
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriving.u16BlockIndex, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_DRIVE_TMP, &(stDriving.u16BlockIndex));
+	#endif
+
+	stDriving.u16BlockIndex++;
+
+	u16DrvIdx = stDriving.u16BlockIndex;
+
+	#if !ENABLE_INDEX_BUFFER
+	SD_WriteBuffToFile(FILENAME_DRIVE_TMP, (uint8_t *)&stDriving.u16BlockIndex, HEADLENS);
+	#else
+	V161_SaveFileIdx(FILENAME_DRIVE_TMP, stDriving.u16BlockIndex);
+  #endif
+	
+	if(stDriving.u16BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_DRIVE_TMP, (uint8_t *)&stDriving.u8DriverName, DRIVINGLENS,
+											HEADLENS + ((stDriving.u16BlockIndex - 1) * DRIVINGLENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_DRIVE_TMP, (uint8_t *)&stDriving.u8DriverName, DRIVINGLENS, HEADLENS);
+	}
+
+	// One Day Data file
+	/*
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&u16DriveActCntDay, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_DRIVE_DAY_TMP, &u16DriveActCntDay);
+  #endif
+	
+	u16DriveActCntDay++;
+
+	u16DrvDayIdx = u16DriveActCntDay;
+
+  #if !ENABLE_INDEX_BUFFER
+	SD_WriteBuffToFile(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&u16DriveActCntDay, HEADLENS);
+	#else
+	V161_SaveFileIdx(FILENAME_DRIVE_DAY_TMP, u16DriveActCntDay);
+  #endif
+	
+	SD_WriteBuffToAddr(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&stDriving.u8DriverName, DRIVINGLENS,
+	                   HEADLENS + ((u16DriveActCntDay - 1) * DRIVINGLENS));
+	*/
+}
+
+//============================================================================//
+// @brief  Write record to technical file.
+// @param  None.
+// @retval None
+//============================================================================//
+void V161_RecordTechnical(uint8_t u8Item)
+{
+	bool res;
+	TechnicalDataTypeDef stTechnical;
+	time_t ttRecTime;
+	uint8_t u8BCDTime[7], u8Buf;
+
+
+	memset(&stTechnical, '\0', sizeof(TechnicalDataTypeDef));
+
+	res = SD_CheckFileExist(FILENAME_TECHNICAL_TMP);
+	if(res == TRUE)
+	{
+		SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stTechnical, sizeof(TechnicalDataTypeDef));
+		
+		if(u8Item == 1)
+		{
+			strncpy((char *)stTechnical.u8BusID, (char *)g_Setting.tBusInfo.cBus_ID, sizeof(g_Setting.tBusInfo.cBus_ID));
+		}
+		else if(u8Item == 2)
+		{
+			ttRecTime = System_GetTime();
+			SecToBCDTime(ttRecTime, u8BCDTime);
+			strncpy((char *)stTechnical.u8FwDateBCD, (char *)u8BCDTime, sizeof(u8BCDTime));
+		}
+		else if(u8Item == 3)
+		{
+			memset(u8BCDTime, '\0', sizeof(u8BCDTime));
+			sprintf((char *)u8BCDTime, "%04d", VERSION_BUILD);
+			strncpy((char *)stTechnical.u8FwNum, (char *)u8BCDTime, 4);
+		}
+	}
+	else
+	{
+		strncpy((char *)stTechnical.u8Company, (char *)u8Company, sizeof(u8Company));
+		strncpy((char *)stTechnical.u8Address, (char *)u8Address, sizeof(u8Address));
+		strncpy((char *)stTechnical.u8DeviceNum, (char *)u8DeviceNum, sizeof(u8DeviceNum));
+		
+		memset(u8BCDTime, '\0', sizeof(u8BCDTime));
+		
+		sprintf((char *)u8BCDTime, "%04d", VERSION_BUILD);
+		
+		strncpy((char *)stTechnical.u8FwNum, (char *)u8BCDTime, 4);
+		
+		u8BCDTime[0] = 0x20;
+		
+		u8Buf = FIRMWARE_DATE[2];
+		u8BCDTime[1] = ((u8Buf << 4) & 0xF0) | (FIRMWARE_DATE[3] & 0x0F);
+		u8Buf = FIRMWARE_DATE[4];
+		u8BCDTime[2] = ((u8Buf << 4) & 0xF0) | (FIRMWARE_DATE[5] & 0x0F);
+		u8Buf = FIRMWARE_DATE[6];
+		u8BCDTime[3] = ((u8Buf << 4) & 0xF0) | (FIRMWARE_DATE[7] & 0x0F);
+		
+		u8BCDTime[4] = 0x00;
+		u8BCDTime[5] = 0x00;
+		u8BCDTime[6] = 0x00;
+		
+		strncpy((char *)stTechnical.u8FwDateBCD, (char *)u8BCDTime, sizeof(u8BCDTime));
+		strncpy((char *)stTechnical.u8MakeYear, (char *)u8MakeYear, sizeof(u8MakeYear));
+		strncpy((char *)stTechnical.u8CertNum, (char *)u8CertNum, sizeof(u8CertNum));
+		strncpy((char *)stTechnical.u8BusID, (char *)g_Setting.tBusInfo.cBus_ID, sizeof(g_Setting.tBusInfo.cBus_ID));
+	}
+	
+	SD_WriteBuffToFile(FILENAME_TECHNICAL_TMP, (uint8_t *)&stTechnical.u8Company, sizeof(TechnicalDataTypeDef));
+	
+	V161_WriteTechnicalToVDR();
+}
+
+//============================================================================//
+// @brief  Write record to calibration file.
+// @param  stCalibration: Record data in stCalibration format.
+// @retval None
+//============================================================================//
+void V161_RecordCalibration(CalibrationDataTypeDef stCalibration)
+{
+	SD_ReadFileToBuff(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalibration.u16BlockIndex, HEADLENS);
+
+	stCalibration.u16BlockIndex++;
+
+	SD_WriteBuffToFile(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalibration.u16BlockIndex, HEADLENS);
+
+	if(stCalibration.u16BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalibration.u8NameID, CALIBRATIONLENS,
+											HEADLENS + ((stCalibration.u16BlockIndex-1) * CALIBRATIONLENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_CALIBRATION_TMP, (uint8_t *)&stCalibration.u8NameID, CALIBRATIONLENS, HEADLENS);
+	}
+
+	V161_WriteCalibrationToVDR(stCalibration);
+}
+
+//============================================================================//
+// @brief  Writing record to adjust file.
+// @param  stAdjust: Record data in AdjustDataTypeDef format.
+// @retval None.
+//============================================================================//
+void V161_RecordAdjust(AdjustDataTypeDef stAdjust)
+{
+	SD_ReadFileToBuff(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjust.u8BlockIndex, SHORTHEAD);
+
+	stAdjust.u8BlockIndex++;
+
+	SD_WriteBuffToFile(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjust.u8BlockIndex, SHORTHEAD);
+
+	if(stAdjust.u8BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjust.u8BeforeDateBCD, ADJUSTLENS,
+											SHORTHEAD + ((stAdjust.u8BlockIndex-1) * ADJUSTLENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_ADJUST_TMP, (uint8_t *)&stAdjust.u8BeforeDateBCD, ADJUSTLENS, SHORTHEAD);
+	}
+	
+	V161_WriteAdjustToVDR(stAdjust);
+}
+
+//============================================================================//
+// @brief  Writing record to driving time file.
+// @param  stDriving: Record in DrivingTimeTypeDef.
+// @retval None.
+//============================================================================//
+void V161_RecordDrivingTime(DrivingTimeTypeDef stDrivingTime)
+{
+	SD_ReadFileToBuff(FILENAME_DRIVING_TMP, (uint8_t *)&stDrivingTime.u8BlockIndex, SHORTHEAD);
+
+	stDrivingTime.u8BlockIndex++;
+
+	SD_WriteBuffToFile(FILENAME_DRIVING_TMP, (uint8_t *)&stDrivingTime.u8BlockIndex, SHORTHEAD);
+
+	if(stDrivingTime.u8BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_DRIVING_TMP, (uint8_t *)&stDrivingTime.u8BeforeDateBCD, DRIVERTIMELENS,
+											SHORTHEAD + ((stDrivingTime.u8BlockIndex - 1) * DRIVERTIMELENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_DRIVING_TMP, (uint8_t *)&stDrivingTime.u8BeforeDateBCD, DRIVERTIMELENS, SHORTHEAD);
+	}
+	
+	V161_WriteDrivingToVDR(stDrivingTime);
+}
+
+//============================================================================//
+// @brief  Writing record to rest file.
+// @param  stRestTime: Record data in RestDataTypeDef format.
+// @retval None.
+//============================================================================//
+void V161_RecordRestTime(RestDataTypeDef stRestTime)
+{
+	SD_ReadFileToBuff(FILENAME_REST_TMP, (uint8_t *)&stRestTime.u8BlockIndex, SHORTHEAD);
+
+	stRestTime.u8BlockIndex++;
+
+	SD_WriteBuffToFile(FILENAME_REST_TMP, (uint8_t *)&stRestTime.u8BlockIndex, SHORTHEAD);
+
+	if(stRestTime.u8BlockIndex != 0)
+	{
+		SD_WriteBuffToAddr(FILENAME_REST_TMP, (uint8_t *)&stRestTime.u8BeforeDateBCD, RESTLENS,
+											SHORTHEAD + ((stRestTime.u8BlockIndex-1) * RESTLENS));
+	}
+	else
+	{
+		SD_WriteBuffToAddr(FILENAME_REST_TMP, (uint8_t *)&stRestTime.u8BeforeDateBCD, RESTLENS, SHORTHEAD);
+	}
+	
+	V161_WriteRestToVDR(stRestTime);
+}
+
+#if ENABLE_SD_BUFFER
+//============================================================================//
+// @brief  Check if the system is in SD high loading status.
+// @param  None.
+// @retval TRUE: SD is in high loading.
+//         FALSE: SD is not in high loading.
+//============================================================================//
+bool V161_SDBuf_IsHighLoading(void)
+{
+	if((bDoVDR_HourFlag == TRUE) || (bDoVDR_DayFlag == TRUE))
+		return TRUE;
+
+	if(bDoHourVDRFlag == TRUE)
+		return TRUE;
+
+	if(bPC_Trans == TRUE)
+		return TRUE;
+
+	if(procUSB_TransStep != PROC_STEP_NULL)
+		return TRUE;
+
+	if(bPRN_Run == TRUE)
+		return TRUE;
+  
+	return FALSE;
+}
+
+//============================================================================//
+// @brief  Initialize SD buffer mechanism.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_SDBuf_SaveDataInit(void)
+{
+	for(int i = 0; i < SD_1MIN_QUEUE_MAX; i++)
+	{
+		sd1MinBuf.bRequest[i] = FALSE;
+		sd1MinBuf.u32DetailSpeedAddr[i] = 0;
+		sd1MinBuf.u32DetailSpeedDayAddr[i] = 0;
+		sd1MinBuf.u32PositionAddr[i] = 0;
+		sd1MinBuf.u32PositionDayAddr[i] = 0;
+	}
+
+	sd1MinBuf.u32Position1HourAddr = 0;
+	sd1MinBuf.u32PositionDay1HourAddr = 0;
+
+	sd1MinBuf.b1HourRequest = FALSE;
+	sd1MinBuf.b_u16Index2Save = FALSE;
+
+	sd1MinBuf.u32DetailSpeedLen = DATELENS;
+	sd1MinBuf.u32DetailSpeedDayLen = DATELENS;
+	sd1MinBuf.u32Position1HourLen = POSLENS;
+	sd1MinBuf.u32PositionDay1HourLen = POSLENS;
+	sd1MinBuf.u32PositionLen = POSITIONLENS;
+	sd1MinBuf.u32PositionDayLen = POSITIONLENS;
+
+	for(int i = 0; i < SD_RECORD_DRIVE_QUEUE_MAX; i++)
+	{
+		sdRecDrvBuf.bRequest[i] = FALSE;
+		sdRecDrvBuf.u32DriveAddr[i] = 0;
+		sdRecDrvBuf.u32DriveDayAddr[i] = 0;
+	}
+
+	sdRecDrvBuf.u32DatLen = DRIVINGLENS;
+	
+	for(int i = 0; i < SD_RECORD_EXTEND_QUEUE_MAX; i++)
+	{
+		sdRecExtBuf.bRequest[i] = FALSE;
+		sdRecExtBuf.u32RecExtAddr[i] = 0;
+		sdRecExtBuf.u32RecExtDayAddr[i] = 0;
+	}
+
+	sdRecExtBuf.u32DatLen = EXTLENS;
+}
+
+//============================================================================//
+// @brief  Handle SD buffer saving data request.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_SDBuf_SaveDataProc(void)
+{
+	bool bRes;
+
+
+	LOGprintf("\r\n> Write SD buffered data.");
+
+	if(sd1MinBuf.u16DSBlockIndex > 0)
+	{
+		#if !ENABLE_INDEX_BUFFER
+		bRes = SD_WriteBuffToFile((char *)FILENAME_DETAILSPEED_TMP, (uint8_t *)&sd1MinBuf.u16DSBlockIndex, HEADLENS);
+
+		if(!bRes)
+		{
+			LOGprintf("\r\n> SD write 1 min buffered index %d to file %s FAIL.",
+			          sd1MinBuf.u16DSBlockIndex, FILENAME_DETAILSPEED_TMP);
+		}
+		#else
+		V161_SaveFileIdx(FILENAME_DETAILSPEED_TMP, sd1MinBuf.u16DSBlockIndex);
+		#endif
+	}
+	
+	for(int i = 0; i < SD_1MIN_QUEUE_MAX; i++)
+	{
+		if(sd1MinBuf.bRequest[i] == TRUE)
+		{
+			if(sd1MinBuf.u32DetailSpeedAddr[i] > 1)
+			{
+				bRes = SD_WriteBuffToAddr((char *)FILENAME_DETAILSPEED_TMP, sd1MinBuf.u8DetailSpeedData[i], DATELENS,
+																	sd1MinBuf.u32DetailSpeedAddr[i]);
+
+				if(!bRes)
+				{
+					LOGprintf("\r\n> SD write 1 min buffer %d to file %s FAIL.", i, FILENAME_DETAILSPEED_TMP);
+				}
+			}
+		}
+	}
+
+	//if(sd1MinBuf.u16Index > 0)
+	//{
+	//	#if !ENABLE_INDEX_BUFFER
+	//	bRes = SD_WriteBuffToFile((char *)FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&sd1MinBuf.u16Index, HEADLENS);
+
+	//	if(!bRes)
+	//	{
+	//		LOGprintf("\r\n> SD write 1 min buffered index %d to file %s FAIL.",
+	//		           sd1MinBuf.u16DSBlockIndex, FILENAME_DETAILSPEED_TMP);
+	//	}
+	//	#else
+	//	V161_SaveFileIdx(FILENAME_DETAILSPEED_DAY_TMP, sd1MinBuf.u16Index);
+	//	#endif
+	//}
+	
+	//for(int i = 0; i < SD_1MIN_QUEUE_MAX; i++)
+	//{
+	//	if(sd1MinBuf.bRequest[i] == TRUE)
+	//	{
+	//		if(sd1MinBuf.u32DetailSpeedDayAddr[i] > 1)
+	//		{
+	//			bRes = SD_WriteBuffToAddr((char *)FILENAME_DETAILSPEED_DAY_TMP, sd1MinBuf.u8DetailSpeedData[i], DATELENS,
+	//																sd1MinBuf.u32DetailSpeedDayAddr[i]);
+
+	//			if(!bRes)
+	//			{
+	//				LOGprintf("\r\n> SD write 1 min buffer %d to file %s FAIL.", i, FILENAME_DETAILSPEED_DAY_TMP);
+	//			}
+	//		}
+	//	}
+	//}
+
+	if(sd1MinBuf.b1HourRequest == TRUE)
+	{
+		if(sd1MinBuf.u16PosBlockIndex > 0)
+		{
+			#if !ENABLE_INDEX_BUFFER
+			bRes = SD_WriteBuffToFile((char *)FILENAME_POSITION_TMP, (uint8_t *)&sd1MinBuf.u16PosBlockIndex, HEADLENS);
+
+			if(!bRes)
+			{
+				LOGprintf("\r\n> SD write 1 hour buffered index %d to file %s FAIL.",
+				           sd1MinBuf.u16PosBlockIndex, FILENAME_POSITION_TMP);
+			}
+			#else
+			V161_SaveFileIdx(FILENAME_POSITION_TMP, sd1MinBuf.u16PosBlockIndex);
+			#endif
+		}
+		
+		if(sd1MinBuf.u32Position1HourAddr > 1)
+		{
+			bRes = SD_WriteBuffToAddr((char *)FILENAME_POSITION_TMP, sd1MinBuf.u8Position1HourData, 7,
+																sd1MinBuf.u32Position1HourAddr);
+
+			if(!bRes)
+			{
+				LOGprintf("\r\n> SD write 1 hour buffered data to file %s FAIL.", FILENAME_POSITION_TMP);
+			}
+		}
+
+		//if(sd1MinBuf.u16Index2 > 0)
+		//{
+		//	#if !ENABLE_INDEX_BUFFER
+		//	bRes = SD_WriteBuffToFile((char *)FILENAME_POSITION_DAY_TMP, (uint8_t *)&sd1MinBuf.u16Index2, HEADLENS);
+
+		//	if(!bRes)
+		//	{
+		//		LOGprintf("\r\n> SD write 1 hour buffered index %d to file %s FAIL.",
+		//		           sd1MinBuf.u16PosBlockIndex, FILENAME_POSITION_DAY_TMP);
+		//	}
+		//	#else
+		//	V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, sd1MinBuf.u16Index2);
+		//	#endif
+		//}
+		
+		//if(sd1MinBuf.u32PositionDay1HourAddr > 1)
+		//{
+		//	bRes = SD_WriteBuffToAddr((char *)FILENAME_POSITION_DAY_TMP, sd1MinBuf.u8Position1HourData, 7,
+		//														sd1MinBuf.u32PositionDay1HourAddr);
+
+		//	if(!bRes)
+		//	{
+		//		LOGprintf("\r\n> SD write 1 hour buffered data to file %s FAIL.", FILENAME_POSITION_DAY_TMP);
+		//	}
+		//}
+	}
+
+	//if(sd1MinBuf.b_u16Index2Save == TRUE)
+	//{
+	//	#if !ENABLE_INDEX_BUFFER
+	//	bRes = SD_WriteBuffToFile((char *)FILENAME_POSITION_DAY_TMP, (uint8_t *)&sd1MinBuf.u16Index2, HEADLENS);
+
+	//	if(!bRes)
+	//	{
+	//		LOGprintf("\r\n> SD set buffered index %d to file %s FAIL.", sd1MinBuf.u16Index2, FILENAME_POSITION_DAY_TMP);
+	//	}
+	//	#else
+	//	V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, sd1MinBuf.u16Index2);
+	//	#endif
+	//}
+
+	for(int i = 0; i < SD_1MIN_QUEUE_MAX; i++)
+	{
+		if(sd1MinBuf.bRequest[i] == TRUE)
+		{
+			if(sd1MinBuf.u32PositionAddr[i] > 1)
+			{
+				bRes = SD_WriteBuffToAddr((char *)FILENAME_POSITION_TMP, sd1MinBuf.u8PositionData[i],
+				                          POSITIONLENS, sd1MinBuf.u32PositionAddr[i]);
+
+				if(!bRes)
+				{
+					LOGprintf("\r\n> SD write 1 min buffer %d to file %s FAIL.", i, FILENAME_POSITION_TMP);
+				}
+			}
+
+			//if(sd1MinBuf.u32PositionDayAddr[i] > 1)
+			//{
+			//	bRes = SD_WriteBuffToAddr((char *)FILENAME_POSITION_DAY_TMP, sd1MinBuf.u8PositionData[i],
+			//	                          POSITIONLENS, sd1MinBuf.u32PositionDayAddr[i]);
+
+			//	if(!bRes)
+			//	{
+			//		LOGprintf("\r\n> SD write 1 min buffer %d to file %s FAIL.", i, FILENAME_POSITION_DAY_TMP);
+			//	}
+			//}
+		}
+	}
+
+	if(sdRecDrvBuf.u16DrvBlockIndex > 0)
+	{
+		#if !ENABLE_INDEX_BUFFER
+		bRes = SD_WriteBuffToFile((char *)FILENAME_DRIVE_TMP, (uint8_t *)&sdRecDrvBuf.u16DrvBlockIndex, HEADLENS);
+
+		if(!bRes)
+		{
+			LOGprintf("\r\n> SD write file %s index %d FAIL. Skip writing driving data.",
+			           FILENAME_DRIVE_TMP, sdRecDrvBuf.u16DrvBlockIndex);
+		}
+		#else
+		V161_SaveFileIdx(FILENAME_DRIVE_TMP, sdRecDrvBuf.u16DrvBlockIndex);
+		#endif
+	}
+	
+	for(int i = 0; i < SD_RECORD_DRIVE_QUEUE_MAX; i++)
+	{
+		if(sdRecDrvBuf.bRequest[i] == TRUE)
+		{
+			if(sdRecDrvBuf.u32DriveAddr[i] > 1)
+			{
+				bRes = SD_WriteBuffToAddr((char *)FILENAME_DRIVE_TMP, sdRecDrvBuf.u8Data[i], DRIVINGLENS,
+																	sdRecDrvBuf.u32DriveAddr[i]);
+
+				if(!bRes)
+				{
+					LOGprintf("\r\n> SD write buffer %d to file %s FAIL.", i, FILENAME_DRIVE_TMP);
+				}
+			}
+		}
+	}
+
+	//if(sdRecDrvBuf.u16DriveActCntDay > 0)
+	//{
+	//	#if !ENABLE_INDEX_BUFFER
+	//	bRes = SD_WriteBuffToFile((char *)FILENAME_DRIVE_DAY_TMP, (uint8_t *)&sdRecDrvBuf.u16DriveActCntDay, HEADLENS);
+
+	//	if(!bRes)
+	//	{
+	//		LOGprintf("\r\n> SD write file %s index %d FAIL. Skip writing driving data.",
+	//		           FILENAME_DRIVE_DAY_TMP, sdRecDrvBuf.u16DriveActCntDay);
+	//	}
+	//	#else
+	//	V161_SaveFileIdx(FILENAME_DRIVE_DAY_TMP, sdRecDrvBuf.u16DriveActCntDay);
+	//	#endif
+	//}
+	
+	//for(int i = 0; i < SD_RECORD_DRIVE_QUEUE_MAX; i++)
+	//{
+	//	if(sdRecDrvBuf.bRequest[i] == TRUE)
+	//	{
+	//		if(sdRecDrvBuf.u32DriveDayAddr[i] > 1)
+	//		{
+	//			bRes = SD_WriteBuffToAddr((char *)FILENAME_DRIVE_DAY_TMP, sdRecDrvBuf.u8Data[i], DRIVINGLENS,
+	//																sdRecDrvBuf.u32DriveDayAddr[i]);
+
+	//			if(!bRes)
+	//			{
+	//				LOGprintf("\r\n> SD write buffer %d to file %s FAIL.", i, FILENAME_DRIVE_DAY_TMP);
+	//			}
+	//		}
+	//	}
+	//}
+	
+	if(sdRecExtBuf.u16RecExtBlockIndex > 0)
+	{
+		#if !ENABLE_INDEX_BUFFER
+		bRes = SD_WriteBuffToFile((char *)FILENAME_EXTERNAL_TMP, (uint8_t *)&sdRecExtBuf.u16RecExtBlockIndex, HEADLENS);
+
+		if(!bRes)
+		{
+			LOGprintf("\r\n> SD write file %s index %d FAIL. Skip writing driving data.",
+			           FILENAME_EXTERNAL_TMP, sdRecExtBuf.u16RecExtBlockIndex);
+		}
+		#else
+		V161_SaveFileIdx(FILENAME_EXTERNAL_TMP, sdRecExtBuf.u16RecExtBlockIndex);
+		#endif
+	}
+	
+	for(int i = 0; i < SD_RECORD_EXTEND_QUEUE_MAX; i++)
+	{
+		if(sdRecExtBuf.bRequest[i] == TRUE)
+		{
+			if(sdRecExtBuf.u32RecExtAddr[i] > 1)
+			{
+				bRes = SD_WriteBuffToAddr((char *)FILENAME_EXTERNAL_TMP, sdRecExtBuf.u8Data[i], EXTLENS,
+																	sdRecExtBuf.u32RecExtAddr[i]);
+
+				if(!bRes)
+				{
+					LOGprintf("\r\n> SD write buffer %d to file %s FAIL.", i, FILENAME_EXTERNAL_TMP);
+				}
+			}
+		}
+	}
+
+	//if(sdRecExtBuf.u16Idx > 0)
+	//{
+	//	#if !ENABLE_INDEX_BUFFER
+	//	bRes = SD_WriteBuffToFile((char *)FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&sdRecExtBuf.u16Idx, HEADLENS);
+
+	//	if(!bRes)
+	//	{
+	//		LOGprintf("\r\n> SD write file %s index %d FAIL. Skip writing driving data.",
+	//		           FILENAME_EXTERNAL_DAY_TMP, sdRecExtBuf.u16Idx);
+	//	}
+	//	#else
+	//	V161_SaveFileIdx(FILENAME_EXTERNAL_DAY_TMP, sdRecExtBuf.u16Idx);
+	//	#endif
+	//}
+	
+	//for(int i = 0; i < SD_RECORD_EXTEND_QUEUE_MAX; i++)
+	//{
+	//	if(sdRecExtBuf.bRequest[i] == TRUE)
+	//	{
+	//		if(sdRecExtBuf.u32RecExtDayAddr[i] > 1)
+	//		{
+	//			bRes = SD_WriteBuffToAddr((char *)FILENAME_EXTERNAL_DAY_TMP, sdRecExtBuf.u8Data[i], EXTLENS,
+	//																sdRecExtBuf.u32RecExtDayAddr[i]);
+
+	//			if(!bRes)
+	//			{
+	//				LOGprintf("\r\n> SD write buffer %d to file %s FAIL.", i, FILENAME_EXTERNAL_DAY_TMP);
+	//			}
+	//		}
+	//	}
+	//}
+
+	V161_SDBuf_SaveDataInit();
+
+	LOGprintf("\r\n> SD finish writing buffered data.");
+}
+
+//============================================================================//
+// @brief  Process request to do 1 min task.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void V161_1MinLogStepProc(void)
+{
+	bool bRes;
+	static uint8_t u8OneMinAvgSpeed = 0;
+	//static uint16_t u16Index = 0;
+	//static uint16_t u16Index2 = 0;
+	static uint16_t u16Buf = 0;
+	static uint8_t PosData[POSITIONLENS] = {0};
+	static DriveDataTypeDef stRecDriving;
+	//static uint16_t u16DriveActCntDay;
+	static bool bIsDrv1 = TRUE;
+	static uint8_t u8BufIdx;
+
+
+	if(procSD_1M_Step == PROC_STEP_NULL)
+		return;
+
+	switch((int)procSD_1M_Step)
+	{
+		// Step 1: Calculate 1 min average speed and select an SD buffer slot.
+		case PROC_STEP_1:
+			{
+				uint8_t j = 0;
+
+
+				SecToBCDTime(ttSysLogTime, u8SpeedDateBCD);
+
+				memcpy(u8DetailSpeed.u8DateBCD, u8SpeedDateBCD, 7);
+
+				LOGprintf("\r\n> ### %02X%02X/%02X/%02X %02X:%02X:%02X, One Min Rec ###",
+				           u8SpeedDateBCD[0], u8SpeedDateBCD[1], u8SpeedDateBCD[2],
+				           u8SpeedDateBCD[3], u8SpeedDateBCD[4], u8SpeedDateBCD[5],
+				           u8SpeedDateBCD[6]);
+
+				u16Buf = 0;
+				j = 0;
+
+				for(int i = 0; i < 60; i++)
+				{
+					u16Buf += (uint16_t)u8SpeedBuf[i][0];
+					u16Buf += (uint16_t)u8SpeedBuf[i][1];
+
+					u8DetailSpeed.u8SpeedData[j] = u8SpeedBuf[i][0];
+					u8DetailSpeed.u8SpeedData[j + 1] = u8SpeedBuf[i][1];
+
+					j += 2;
+				}
+
+				u8OneMinAvgSpeed = (uint8_t)(u16Buf / 120);
+
+				u8BufIdx = SD_1MIN_QUEUE_MAX;
+
+				for(int i = 0; i < SD_1MIN_QUEUE_MAX; i++)
+				{
+					if(sd1MinBuf.bRequest[i] == FALSE)
+					{
+						u8BufIdx = i;
+
+						break;
+					}
+				}
+
+				procSD_1M_Step = PROC_STEP_2;
+
+				break;
+			}
+
+		// Step 2: Write new index to file DETAIL_SPEED
+		case PROC_STEP_2:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sd1MinBuf.u16DSBlockIndex = 0;
+
+					u8DetailSpeed.u16BlockIndex++;
+
+					if(u8DetailSpeed.u16BlockIndex > DSPEEDMAX)
+					{
+						u8DetailSpeed.u16BlockIndex = 1;
+					}
+
+					#if !ENABLE_INDEX_BUFFER
+					bRes = SD_WriteBuffToFile(FILENAME_DETAILSPEED_TMP, (uint8_t *)&u8DetailSpeed.u16BlockIndex, HEADLENS);
+				
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write index %d to file %s FAIL.", u8DetailSpeed.u16BlockIndex,
+												 FILENAME_DETAILSPEED_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_4;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_2;
+
+						break;
+					}
+					#else
+					V161_SaveFileIdx(FILENAME_DETAILSPEED_TMP, u8DetailSpeed.u16BlockIndex);
+					#endif
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_3;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_16;
+
+						break;
+					}
+
+					sd1MinBuf.u16DSBlockIndex = u8DetailSpeed.u16BlockIndex;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_3;
+				}
+
+				break;
+			}
+
+		// Step 3: Write data to file DETAIL_SPEED
+		case PROC_STEP_3:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sd1MinBuf.u16DSBlockIndex = 0;
+
+					bRes = SD_WriteBuffToAddr(FILENAME_DETAILSPEED_TMP, u8DetailSpeed.u8DateBCD, DATELENS,
+					                          HEADLENS + ((u8DetailSpeed.u16BlockIndex - 1) * DATELENS));
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write data to file %s FAIL.", FILENAME_DETAILSPEED_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_4;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_3;
+
+						break;
+					}
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_4;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_16;
+
+						break;
+					}
+
+					snprintf((char *)sd1MinBuf.u8DetailSpeedData[u8BufIdx], DATELENS, "%s", (char *)u8DetailSpeed.u8DateBCD);
+
+					sd1MinBuf.u32DetailSpeedAddr[u8BufIdx] = HEADLENS + ((u8DetailSpeed.u16BlockIndex - 1) * DATELENS);
+
+					sd1MinBuf.u16DSBlockIndex = u8DetailSpeed.u16BlockIndex;
+
+					sd1MinBuf.bRequest[u8BufIdx] = TRUE;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_4;
+				}
+
+				break;
+			}
+
+		// Step 4: Get file DETAIL_SPEED_DAY index
+		case PROC_STEP_4:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_ReadFileToBuff(FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min read file %s index FAIL.", FILENAME_DETAILSPEED_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_7;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_4;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_GetFileIdx(FILENAME_DETAILSPEED_DAY_TMP, &u16Index);
+				//	#endif				
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16DS_DayIdx = u16Index;
+
+				//	u16Index++;
+
+				//	procSD_1M_Step = PROC_STEP_5;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_5;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_5;
+
+				break;
+			}
+
+		// Step 5: Write new index to file DETAIL_SPEED_DAY
+		case PROC_STEP_5:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sd1MinBuf.u16Index = 0;
+
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_WriteBuffToFile(FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write new index %d to file %s FAIL.", u16Index,
+				//			           FILENAME_DETAILSPEED_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_7;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_5;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_SaveFileIdx(FILENAME_DETAILSPEED_DAY_TMP, u16Index);
+				//	#endif
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16DS_DayIdx = u16Index;
+
+				//	procSD_1M_Step = PROC_STEP_6;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_6;
+				//}
+				procSD_1M_Step = PROC_STEP_6;
+
+				break;
+			}
+
+		// Step 6: Write data to file DETAIL_SPEED_DAY
+		case PROC_STEP_6:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sd1MinBuf.u16Index = 0;
+
+				//	bRes = SD_WriteBuffToAddr(FILENAME_DETAILSPEED_DAY_TMP, u8DetailSpeed.u8DateBCD, DATELENS,
+				//	                          HEADLENS + ((u16Index - 1) * DATELENS));
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write data to file %s FAIL.", FILENAME_DETAILSPEED_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_7;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_6;
+
+				//		break;
+				//	}
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	procSD_1M_Step = PROC_STEP_7;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_7;
+				//}
+
+        procSD_1M_Step = PROC_STEP_7;
+ 
+				break;
+			}
+
+		// Step 7: Write new block index to file POSITION
+		case PROC_STEP_7:
+			{
+				if(PositionData.u8Index != 0)
+				{
+					procSD_1M_Step = PROC_STEP_12;
+
+					break;
+				}
+
+				PositionData.u16BlockIndex++;
+
+				if(PositionData.u16BlockIndex > POSMAX)
+				{
+					PositionData.u16BlockIndex = 1;
+				}
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sd1MinBuf.u16PosBlockIndex = 0;
+
+					#if !ENABLE_INDEX_BUFFER
+					bRes = SD_WriteBuffToFile(FILENAME_POSITION_TMP, (uint8_t *)&PositionData.u16BlockIndex, HEADLENS);
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write block index %d to file %s FAIL.", PositionData.u16BlockIndex,
+							           FILENAME_POSITION_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_9;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_7;
+
+						break;
+					}
+					#else
+					V161_SaveFileIdx(FILENAME_POSITION_TMP, PositionData.u16BlockIndex);
+					#endif
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_8;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_16;
+
+						break;
+					}
+
+					sd1MinBuf.u16PosBlockIndex = PositionData.u16BlockIndex;
+
+					sd1MinBuf.b1HourRequest = TRUE;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_8;
+				}
+
+				break;
+			}
+
+		// Step 8: Write hour data to file POSITION
+		case PROC_STEP_8:
+			{
+				memset(PositionData.u8DateBCD, 0x00, POSLENS);
+				memcpy(PositionData.u8DateBCD, u8SpeedDateBCD, 7);
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sd1MinBuf.u16PosBlockIndex = 0;
+
+					bRes = SD_WriteBuffToAddr(FILENAME_POSITION_TMP, PositionData.u8DateBCD, POSLENS,
+					                          HEADLENS + ((PositionData.u16BlockIndex - 1) * POSLENS));
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write hour data to file %s FAIL.", FILENAME_POSITION_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_9;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_8;
+
+						break;
+					}
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_9;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_16;
+
+						break;
+					}
+
+					memset(PositionData.u8DateBCD, 0x00, POSLENS);
+					memcpy(PositionData.u8DateBCD, u8SpeedDateBCD, 7);
+
+					snprintf((char *)sd1MinBuf.u8Position1HourData, POSLENS, "%s", (char *)PositionData.u8DateBCD);
+
+					sd1MinBuf.u32Position1HourAddr = HEADLENS + ((PositionData.u16BlockIndex - 1) * POSLENS);
+
+					sd1MinBuf.u16PosBlockIndex = PositionData.u16BlockIndex;
+
+					sd1MinBuf.b1HourRequest = TRUE;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_9;
+				}
+
+				break;
+			}
+
+		// Step 9: Get file POSITION_DAY block index
+		case PROC_STEP_9:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_ReadFileToBuff(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min read file %s block index FAIL.", FILENAME_POSITION_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_12;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_9;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_GetFileIdx(FILENAME_POSITION_DAY_TMP, &u16Index2);
+				//	#endif
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16PosDayIdx = u16Index2;
+
+				//	u16Index2++;
+
+				//	procSD_1M_Step = PROC_STEP_10;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_10;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_10;
+
+				break;
+			}
+
+		// Step 10: Write new block index to file POSITION_DAY
+		case PROC_STEP_10:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sd1MinBuf.u16Index2 = 0;
+
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_WriteBuffToFile(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write new block index %d to file %s FAIL.", u16Index2, FILENAME_POSITION_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_12;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_10;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, u16Index2);
+				//	#endif
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16PosDayIdx = u16Index2;
+
+				//	procSD_1M_Step = PROC_STEP_11;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_11;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_11;
+
+				break;
+			}
+
+		// Step 11: Write hour data to file POSITION_DAY
+		case PROC_STEP_11:
+			{
+				//memset(PositionData.u8DateBCD, 0x00, POSLENS);
+				//memcpy(PositionData.u8DateBCD, u8SpeedDateBCD, 7);
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sd1MinBuf.u16Index2 = 0;
+
+				//	bRes = SD_WriteBuffToAddr(FILENAME_POSITION_DAY_TMP, PositionData.u8DateBCD, POSLENS,
+				//	                          HEADLENS + ((u16Index2 - 1) * POSLENS));
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write hour data to file %s FAIL.", FILENAME_POSITION_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_12;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_11;
+
+				//		break;
+				//	}
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	procSD_1M_Step = PROC_STEP_12;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_12;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_12;
+
+				break;
+			}
+
+		// Step 12: Write data to file POSITION
+		case PROC_STEP_12:
+			{
+				uint32_t u32Addr = 0;
+
+
+				u16Buf = g_SysInfo.tGPS_Data.gpsLon.u8ddd * 100 + g_SysInfo.tGPS_Data.gpsLon.u8mm;
+
+				memcpy(&PosData[0], &u16Buf, 2);
+				memcpy(&PosData[2], &g_SysInfo.tGPS_Data.gpsLon.u16mmmm, 2);
+
+				u16Buf = g_SysInfo.tGPS_Data.gpsLat.u8dd * 100 + g_SysInfo.tGPS_Data.gpsLat.u8mm;
+
+				memcpy(&PosData[4], &u16Buf, 2);
+				memcpy(&PosData[6], &g_SysInfo.tGPS_Data.gpsLat.u16mmmm, 2);
+				memcpy(&PosData[8], &g_SysInfo.tGPS_Data.fAltitude, 2);
+
+				PosData[10] = u8OneMinAvgSpeed;
+
+				u32Addr = HEADLENS + ((PositionData.u16BlockIndex - 1) * POSLENS) +
+				          BCDDATE + (PositionData.u8Index * POSITIONLENS);
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					bRes = SD_WriteBuffToAddr(FILENAME_POSITION_TMP, PosData, POSITIONLENS, u32Addr);
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write data to file %s FAIL.", FILENAME_POSITION_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_13;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_12;
+
+						break;
+					}
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_13;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_16;
+
+						break;
+					}
+
+					snprintf((char *)sd1MinBuf.u8PositionData[u8BufIdx], POSITIONLENS, "%s", (char *)PosData);
+
+					sd1MinBuf.u32PositionAddr[u8BufIdx] = u32Addr;
+
+					sd1MinBuf.bRequest[u8BufIdx] = TRUE;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_13;
+				}
+
+				break;
+			}
+
+		// Step 13: Get file POSITION_DAY block index
+		case PROC_STEP_13:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_ReadFileToBuff(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min get file %s index FAIL.", FILENAME_POSITION_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_16;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_13;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_GetFileIdx(FILENAME_POSITION_DAY_TMP, &u16Index2);
+				//	#endif
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16PosDayIdx = u16Index2;
+
+				//	if(u16Index2 == 0)
+				//	{
+				//		u16Index2 = 1;
+
+				//		procSD_1M_Step = PROC_STEP_14;
+				//	}
+				//	else
+				//	{
+				//		procSD_1M_Step = PROC_STEP_15;
+				//	}
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+					
+				//	procSD_1M_Step = PROC_STEP_16;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_16;
+
+				break;
+			}
+
+		// Step 14: If file POSITION_DAY index reset to 1 then write it
+		case PROC_STEP_14:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sd1MinBuf.u16Index2 = 0;
+
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_WriteBuffToFile(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min reset file %s index FAIL.", FILENAME_POSITION_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_16;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_14;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, u16Index2);
+				//	#endif
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16PosDayIdx = u16Index2;
+
+				//	procSD_1M_Step = PROC_STEP_15;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_15;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_15;
+
+				break;
+			}
+
+		// Step 15: Write data to file POSITION_DAY
+		case PROC_STEP_15:
+			{
+				//uint32_t u32Addr = HEADLENS + ((u16Index2 - 1) * POSLENS) + BCDDATE + (PositionData.u8Index * POSITIONLENS);
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	bRes = SD_WriteBuffToAddr(FILENAME_POSITION_DAY_TMP, PosData, POSITIONLENS, u32Addr);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write data to file %s FAIL.", FILENAME_POSITION_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_16;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_15;
+
+				//		break;
+				//	}
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	procSD_1M_Step = PROC_STEP_16;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_1MIN_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_16;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_16;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_16;
+
+				break;
+			}
+
+		// Step 16: Change PositionData.u8Index
+		case PROC_STEP_16:
+			{
+				if(PositionData.u8Index >= 59)
+				{
+					PositionData.u8Index = 0;
+
+					LOGprintf("\r\n> ### 1Hr PosData ###");
+				}
+				else
+				{
+					PositionData.u8Index++;
+				}
+
+				memset(&stRecDriving, 0x00, sizeof(DriveDataTypeDef));
+
+				stRecDriving.u8DriveCode = g_Setting.u8DrvStatus;
+
+				memset(stRecDriving.u8DriverName, '\0', sizeof(stRecDriving.u8DriverName));
+
+				memcpy(stRecDriving.u8DriverName, &g_Setting.u32DrvIdNum, 4);
+
+				memcpy(stRecDriving.u8DriveDateBCD, u8SpeedDateBCD, 7);
+
+				bIsDrv1 = TRUE;
+
+				procSD_1M_Step = PROC_STEP_17;
+
+				break;
+			}
+
+		// Step 17: Get file DRIVE index
+		case PROC_STEP_17:
+			{
+				u8BufIdx = SD_RECORD_DRIVE_QUEUE_MAX;
+
+				for(int i = 0; i < SD_RECORD_DRIVE_QUEUE_MAX; i++)
+				{
+					if(sd1MinBuf.bRequest[i] == FALSE)
+					{
+						u8BufIdx = i;
+
+						break;
+					}
+				}
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					#if !ENABLE_INDEX_BUFFER
+					bRes = SD_ReadFileToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stRecDriving.u16BlockIndex, HEADLENS);
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min get file %s index FAIL.", FILENAME_DRIVE_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_20;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_17;
+
+						break;
+					}
+					#else
+					V161_GetFileIdx(FILENAME_DRIVE_TMP, &stRecDriving.u16BlockIndex);
+					#endif
+
+					stRecDriving.u16BlockIndex++;
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_18;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_RECORD_DRIVE_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_NULL;
+
+						break;
+					}
+
+					stRecDriving.u16BlockIndex = u16DrvIdx;
+
+					stRecDriving.u16BlockIndex++;
+
+					procSD_1M_Step = PROC_STEP_18;
+				}
+
+				break;
+			}
+
+		// Step 18: Write new index to file DRIVE
+		case PROC_STEP_18:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sdRecDrvBuf.u16DrvBlockIndex = 0;
+
+					#if !ENABLE_INDEX_BUFFER
+					bRes = SD_WriteBuffToFile(FILENAME_DRIVE_TMP, (uint8_t *)&stRecDriving.u16BlockIndex, HEADLENS);
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write new index %d to file %s FAIL.",
+							           stRecDriving.u16BlockIndex, FILENAME_DRIVE_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_20;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_18;
+
+						break;
+					}
+					#else
+					V161_SaveFileIdx(FILENAME_DRIVE_TMP, stRecDriving.u16BlockIndex);
+					#endif
+
+					u8SD_1MinRetryCnt = 0;
+
+					u16DrvIdx = stRecDriving.u16BlockIndex;
+
+					procSD_1M_Step = PROC_STEP_19;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_RECORD_DRIVE_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_NULL;
+
+						break;
+					}
+
+					u16DrvIdx = stRecDriving.u16BlockIndex;
+
+					sdRecDrvBuf.u16DrvBlockIndex = stRecDriving.u16BlockIndex;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_19;
+				}
+
+				break;
+			}
+
+		// Step 19: Write data to file DRIVE
+		case PROC_STEP_19:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sdRecDrvBuf.u16DrvBlockIndex = 0;
+
+					bRes = SD_WriteBuffToAddr(FILENAME_DRIVE_TMP, (uint8_t *)&stRecDriving.u8DriverName, DRIVINGLENS,
+					                          HEADLENS + ((stRecDriving.u16BlockIndex - 1) * DRIVINGLENS));
+
+					if(!bRes)
+					{
+						u8SD_1MinRetryCnt++;
+
+						if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+						{
+							LOGprintf("\r\n> SD 1 min write data to file %s FAIL.", FILENAME_DRIVE_TMP);
+
+							u8SD_1MinRetryCnt = 0;
+
+							procSD_1M_Step = PROC_STEP_20;
+
+							break;
+						}
+
+						procSD_1M_Step = PROC_STEP_19;
+
+						break;
+					}
+
+					u8SD_1MinRetryCnt = 0;
+
+					procSD_1M_Step = PROC_STEP_20;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_RECORD_DRIVE_QUEUE_MAX)
+					{
+						procSD_1M_Step = PROC_STEP_NULL;
+
+						break;
+					}
+
+					snprintf((char *)sdRecDrvBuf.u8Data[u8BufIdx], DRIVINGLENS, "%s", (char *)&stRecDriving.u8DriverName);
+
+					sdRecDrvBuf.u32DriveAddr[u8BufIdx] = HEADLENS + ((stRecDriving.u16BlockIndex - 1) * DRIVINGLENS);
+
+					sdRecDrvBuf.u16DrvBlockIndex = stRecDriving.u16BlockIndex;
+
+					sdRecDrvBuf.bRequest[u8BufIdx] = TRUE;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procSD_1M_Step = PROC_STEP_20;
+				}
+
+				break;
+			}
+
+		// Step 20: Get file DRIVE_DAY index
+		case PROC_STEP_20:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_ReadFileToBuff(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&u16DriveActCntDay, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min get file %s index FAIL.", FILENAME_DRIVE_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_23;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_20;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_GetFileIdx(FILENAME_DRIVE_DAY_TMP, &u16DriveActCntDay);
+				//	#endif
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	u16DriveActCntDay++;
+
+				//	procSD_1M_Step = PROC_STEP_21;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_RECORD_DRIVE_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_NULL;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_21;
+				//}
+
+        procSD_1M_Step = PROC_STEP_21;
+
+				break;
+			}
+
+		// Step 21: Write new index to file DRIVE_DAY
+		case PROC_STEP_21:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sdRecDrvBuf.u16DriveActCntDay = 0;
+
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_WriteBuffToFile(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&u16DriveActCntDay, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write new index %d to file %s FAIL.",
+				//			           u16DriveActCntDay, FILENAME_DRIVE_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_23;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_21;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_SaveFileIdx(FILENAME_DRIVE_DAY_TMP, u16DriveActCntDay);
+				//	#endif
+
+				//	u16DrvDayIdx = u16DriveActCntDay;
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	procSD_1M_Step = PROC_STEP_22;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_RECORD_DRIVE_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_NULL;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_22;
+				//}
+				
+				procSD_1M_Step = PROC_STEP_22;
+
+				break;
+			}
+
+		// Step 22: Write data to file DRIVE_DAY
+		case PROC_STEP_22:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sdRecDrvBuf.u16DriveActCntDay = 0;
+
+				//	bRes = SD_WriteBuffToAddr(FILENAME_DRIVE_DAY_TMP, (uint8_t *)&stRecDriving.u8DriverName, DRIVINGLENS,
+				//	                          HEADLENS + ((u16DriveActCntDay - 1) * DRIVINGLENS));
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_1MinRetryCnt++;
+
+				//		if(u8SD_1MinRetryCnt == SD_1MIN_TASK_RETRY_MAX)
+				//		{
+				//			LOGprintf("\r\n> SD 1 min write data %d to file %s FAIL.",
+				//			           FILENAME_DRIVE_DAY_TMP);
+
+				//			u8SD_1MinRetryCnt = 0;
+
+				//			procSD_1M_Step = PROC_STEP_23;
+
+				//			break;
+				//		}
+
+				//		procSD_1M_Step = PROC_STEP_22;
+
+				//		break;
+				//	}
+
+				//	u8SD_1MinRetryCnt = 0;
+
+				//	procSD_1M_Step = PROC_STEP_23;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_RECORD_DRIVE_QUEUE_MAX)
+				//	{
+				//		procSD_1M_Step = PROC_STEP_NULL;
+
+				//		break;
+				//	}
+
+				//	procSD_1M_Step = PROC_STEP_23;
+				//}
+
+        procSD_1M_Step = PROC_STEP_23;
+ 
+				break;
+			}
+
+		// Step 23: Move to driver 2 or finish
+		case PROC_STEP_23:
+			{
+				// If the current data is for driver 1 then continue to write data for driver 2
+				if(bIsDrv1 == TRUE)
+				{
+					memset(&stRecDriving, 0x00, sizeof(DriveDataTypeDef));
+
+					stRecDriving.u8DriveCode = g_Setting.u8DrvStatus2;
+
+					memset(stRecDriving.u8DriverName, '\0', sizeof(stRecDriving.u8DriverName));
+
+					memcpy(stRecDriving.u8DriverName, &g_Setting.u32DrvIdNum2, 4);
+
+					memcpy(stRecDriving.u8DriveDateBCD, u8SpeedDateBCD, 7);
+
+					bIsDrv1 = FALSE;
+
+					procSD_1M_Step = PROC_STEP_17;
+				}
+				// If the current data is for driver 2 then finish
+				else
+				{
+					bIsDrv1 = TRUE;
+
+					//LOGprintf("\r\n> ### One Min Rec OK ###");
+
+					procSD_1M_Step = PROC_STEP_NULL;
+				}
+
+				break;
+			}
+
+		default:
+			break;
+	}
+}
+
+//============================================================================//
+// @brief  Do 1 min task with SD buffer enabled.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_1MinLogProc(void)
+{
+	u8SD_1MinRetryCnt = 0;
+
+	procSD_1M_Step = PROC_STEP_1;
+
+	while(procSD_1M_Step != PROC_STEP_NULL)
+	{
+		V161_1MinLogStepProc();
+	}
+}
+
+//============================================================================//
+// @brief  Handle extended record task.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void V161_RecExtStepProc(void)
+{
+  static ExternalDataTypeDef stExternalData;
+	static uint8_t u8BCDTime[7];
+	//static uint16_t u16Idx;
+	static time_t ttBuf;
+	static uint8_t u8BufIdx;
+	bool bRes;
+	
+	
+	if(procRecExtStep == PROC_STEP_NULL)
+		return;
+
+	switch((int)procRecExtStep)
+	{
+		// Step 1: Get file EXTERNAL index
+		case PROC_STEP_1:
+			{
+				memset(&stExternalData, 0x00, sizeof(ExternalDataTypeDef));
+	
+				ttBuf = System_GetTime();
+				
+				SecToBCDTime(ttBuf, u8BCDTime);
+				
+				memcpy(stExternalData.u8DateBCD, u8BCDTime, 7);
+				
+				stExternalData.u8IOStatus = g_SysInfo.tEXTIO.word;
+				
+				stExternalData.u32Distance = (uint32_t)(g_SysInfo.tVehicleState.dDistance / 100);
+				
+				u8BufIdx = SD_RECORD_EXTEND_QUEUE_MAX;
+
+				for(int i = 0; i < SD_RECORD_EXTEND_QUEUE_MAX; i++)
+				{
+					if(sd1MinBuf.bRequest[i] == FALSE)
+					{
+						u8BufIdx = i;
+
+						break;
+					}
+				}
+
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					#if !ENABLE_INDEX_BUFFER
+					bRes = SD_ReadFileToBuff(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternalData.u16BlockIndex, HEADLENS);
+
+					if(!bRes)
+					{
+						u8SD_RecExtRetryCnt++;
+
+						if(u8SD_RecExtRetryCnt == SD_REC_EXT_TASK_RETRY_MAX)
+						{
+							RTOSprintf("\r\n> SD record extend get file %s index FAIL.", FILENAME_EXTERNAL_TMP);
+
+							u8SD_RecExtRetryCnt = 0;
+
+							procRecExtStep = PROC_STEP_4;
+
+							break;
+						}
+
+						procRecExtStep = PROC_STEP_1;
+
+						break;
+					}
+					#else
+					V161_GetFileIdx(FILENAME_EXTERNAL_TMP, &stExternalData.u16BlockIndex);
+					#endif
+
+					stExternalData.u16BlockIndex++;
+
+					u8SD_RecExtRetryCnt = 0;
+
+					procRecExtStep = PROC_STEP_2;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_RECORD_EXTEND_QUEUE_MAX)
+					{
+						procRecExtStep = PROC_STEP_NULL;
+
+						break;
+					}
+
+					stExternalData.u16BlockIndex = u16RecExtIdx;
+
+					stExternalData.u16BlockIndex++;
+
+					procRecExtStep = PROC_STEP_2;
+				}
+
+				break;
+			}
+
+		// Step 2: Write new index to file EXTERNAL
+		case PROC_STEP_2:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sdRecExtBuf.u16RecExtBlockIndex = 0;
+
+					#if !ENABLE_INDEX_BUFFER
+					bRes = SD_WriteBuffToFile(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternalData.u16BlockIndex, HEADLENS);
+
+					if(!bRes)
+					{
+						u8SD_RecExtRetryCnt++;
+
+						if(u8SD_RecExtRetryCnt == SD_REC_EXT_TASK_RETRY_MAX)
+						{
+							RTOSprintf("\r\n> SD record extend write new index %d to file %s FAIL.",
+							           stExternalData.u16BlockIndex, FILENAME_EXTERNAL_TMP);
+
+							u8SD_RecExtRetryCnt = 0;
+
+							procRecExtStep = PROC_STEP_4;
+
+							break;
+						}
+
+						procRecExtStep = PROC_STEP_2;
+
+						break;
+					}
+					#else
+					V161_SaveFileIdx(FILENAME_EXTERNAL_TMP, stExternalData.u16BlockIndex);
+					#endif
+
+					u8SD_RecExtRetryCnt = 0;
+
+					u16RecExtIdx = stExternalData.u16BlockIndex;
+
+					procRecExtStep = PROC_STEP_3;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_RECORD_EXTEND_QUEUE_MAX)
+					{
+						procRecExtStep = PROC_STEP_NULL;
+
+						break;
+					}
+
+					u16RecExtIdx = stExternalData.u16BlockIndex;
+
+					sdRecExtBuf.u16RecExtBlockIndex = stExternalData.u16BlockIndex;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procRecExtStep = PROC_STEP_3;
+				}
+
+				break;
+			}
+
+		// Step 3: Write data to file EXTERNAL
+		case PROC_STEP_3:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				if(V161_SDBuf_IsHighLoading() == FALSE)
+				{
+					sdRecExtBuf.u16RecExtBlockIndex = 0;
+
+					bRes = SD_WriteBuffToAddr(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternalData.u8DateBCD, EXTLENS,
+					                          HEADLENS + ((stExternalData.u16BlockIndex - 1) * EXTLENS));
+
+					if(!bRes)
+					{
+						u8SD_RecExtRetryCnt++;
+
+						if(u8SD_RecExtRetryCnt == SD_REC_EXT_TASK_RETRY_MAX)
+						{
+							RTOSprintf("\r\n> SD record extend write data to file %s FAIL.", FILENAME_EXTERNAL_TMP);
+
+							u8SD_RecExtRetryCnt = 0;
+
+							procRecExtStep = PROC_STEP_4;
+
+							break;
+						}
+
+						procRecExtStep = PROC_STEP_3;
+
+						break;
+					}
+
+					u8SD_RecExtRetryCnt = 0;
+
+					procRecExtStep = PROC_STEP_4;
+				}
+				// If make VDR file then write to SD buffer
+				else
+				{
+					if(u8BufIdx == SD_RECORD_EXTEND_QUEUE_MAX)
+					{
+						procRecExtStep = PROC_STEP_NULL;
+
+						break;
+					}
+
+					snprintf((char *)sdRecExtBuf.u8Data[u8BufIdx], EXTLENS, "%s", (char *)&stExternalData.u8DateBCD);
+
+					sdRecExtBuf.u32RecExtAddr[u8BufIdx] = HEADLENS + ((stExternalData.u16BlockIndex - 1) * EXTLENS);
+
+					sdRecExtBuf.u16RecExtBlockIndex = stExternalData.u16BlockIndex;
+
+					sdRecExtBuf.bRequest[u8BufIdx] = TRUE;
+
+					bSD_SaveDatRequest = TRUE;
+
+					procRecExtStep = PROC_STEP_4;
+				}
+
+				break;
+			}
+
+		// Step 4: Get file EXTERNAL_DAY index
+		case PROC_STEP_4:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_ReadFileToBuff(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&u16Idx, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_RecExtRetryCnt++;
+
+				//		if(u8SD_RecExtRetryCnt == SD_REC_EXT_TASK_RETRY_MAX)
+				//		{
+				//			RTOSprintf("\r\n> SD record extend get file %s index FAIL.", FILENAME_EXTERNAL_DAY_TMP);
+
+				//			u8SD_RecExtRetryCnt = 0;
+
+				//			procRecExtStep = PROC_STEP_7;
+
+				//			break;
+				//		}
+
+				//		procRecExtStep = PROC_STEP_4;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_GetFileIdx(FILENAME_EXTERNAL_DAY_TMP, &u16Idx);
+				//	#endif
+
+				//	u8SD_RecExtRetryCnt = 0;
+
+				//	u16Idx++;
+
+				//	procRecExtStep = PROC_STEP_5;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_RECORD_EXTEND_QUEUE_MAX)
+				//	{
+				//		procRecExtStep = PROC_STEP_NULL;
+
+				//		break;
+				//	}
+
+				//	procRecExtStep = PROC_STEP_5;
+				//}
+
+        procRecExtStep = PROC_STEP_5;
+
+				break;
+			}
+
+		// Step 5: Write new index to file EXTERNAL_DAY
+		case PROC_STEP_5:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sdRecExtBuf.u16Idx = 0;
+
+				//	#if !ENABLE_INDEX_BUFFER
+				//	bRes = SD_WriteBuffToFile(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&u16Idx, HEADLENS);
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_RecExtRetryCnt++;
+
+				//		if(u8SD_RecExtRetryCnt == SD_REC_EXT_TASK_RETRY_MAX)
+				//		{
+				//			RTOSprintf("\r\n> SD record extend write new index %d to file %s FAIL.",
+				//			           u16Idx, FILENAME_EXTERNAL_DAY_TMP);
+
+				//			u8SD_RecExtRetryCnt = 0;
+
+				//			procRecExtStep = PROC_STEP_7;
+
+				//			break;
+				//		}
+
+				//		procRecExtStep = PROC_STEP_5;
+
+				//		break;
+				//	}
+				//	#else
+				//	V161_SaveFileIdx(FILENAME_EXTERNAL_DAY_TMP, u16Idx);
+				//	#endif
+
+				//	u16RecExtDayIdx = u16Idx;
+
+				//	u8SD_RecExtRetryCnt = 0;
+
+				//	procRecExtStep = PROC_STEP_6;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_RECORD_EXTEND_QUEUE_MAX)
+				//	{
+				//		procRecExtStep = PROC_STEP_NULL;
+
+				//		break;
+				//	}
+
+				//	procRecExtStep = PROC_STEP_6;
+				//}
+				
+				procRecExtStep = PROC_STEP_6;
+
+				break;
+			}
+
+		// Step 6: Write data to file EXTERNAL_DAY
+		case PROC_STEP_6:
+			{
+				// If not do making VDR file/PC download/USB download/printing then read/ write directly to SD card
+				//if(V161_SDBuf_IsHighLoading() == FALSE)
+				//{
+				//	sdRecExtBuf.u16Idx = 0;
+
+				//	bRes = SD_WriteBuffToAddr(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&stExternalData.u8DateBCD, EXTLENS,
+				//	                          HEADLENS + ((u16Idx - 1) * EXTLENS));
+
+				//	if(!bRes)
+				//	{
+				//		u8SD_RecExtRetryCnt++;
+
+				//		if(u8SD_RecExtRetryCnt == SD_REC_EXT_TASK_RETRY_MAX)
+				//		{
+				//			RTOSprintf("\r\n> SD record extend write data %d to file %s FAIL.",
+				//			           FILENAME_EXTERNAL_DAY_TMP);
+
+				//			u8SD_RecExtRetryCnt = 0;
+        
+				//			procRecExtStep = PROC_STEP_7;
+
+				//			break;
+				//		}
+
+				//		procRecExtStep = PROC_STEP_6;
+
+				//		break;
+				//	}
+
+				//	u8SD_RecExtRetryCnt = 0;
+
+				//	procRecExtStep = PROC_STEP_7;
+				//}
+				// If make VDR file then write to SD buffer
+				//else
+				//{
+				//	if(u8BufIdx == SD_RECORD_EXTEND_QUEUE_MAX)
+				//	{
+				//		procRecExtStep = PROC_STEP_NULL;
+
+				//		break;
+				//	}
+
+				//	procRecExtStep = PROC_STEP_7;
+				//}
+				
+				procRecExtStep = PROC_STEP_7;
+
+				break;
+			}
+			
+	  case PROC_STEP_7:
+		{
+			procRecExtStep = PROC_STEP_NULL;
+		  
+			break;
+		}
+		
+		default:
+			break;
+	}
+}
+
+//============================================================================//
+// @brief  Writing record to extended record file.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_RecordExternslData(void)
+{
+	u8SD_RecExtRetryCnt = 0;
+
+	procRecExtStep = PROC_STEP_1;
+
+	while(procRecExtStep != PROC_STEP_NULL)
+	{
+		V161_RecExtStepProc();
+	}
+}
+#else
+//============================================================================//
+// @brief  Do 1 min task without SD buffer.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_1MinLogProc(void)
+{
+	//bool bRes;
+  uint32_t u32Buf = 0;
+	uint16_t u16Buf = 0;
+	uint8_t PosData[11] = {0}, u8OneMinAvgSpeed = 0;
+	uint8_t i, j;
+	DriveDataTypeDef stRecDriving;
+	VdrPositionDataTypeDef stVdrPos;
+
+
+	SecToBCDTime(ttSysLogTime, u8SpeedDateBCD);
+
+	memcpy(u8DetailSpeed.u8DateBCD, u8SpeedDateBCD, 7);
+
+	RTOSprintf("\r\n> ### %02X%02X/%02X/%02X %02X:%02X:%02X, One Min Rec ###",
+					    u8SpeedDateBCD[0], u8SpeedDateBCD[1], u8SpeedDateBCD[2],
+					    u8SpeedDateBCD[3], u8SpeedDateBCD[4], u8SpeedDateBCD[5],
+					    u8SpeedDateBCD[6]);
+
+	u16Buf = 0;
+	
+	j = 0;
+
+	for(i = 0; i < 60; i++)
+	{
+		u16Buf += (uint16_t)u8SpeedBuf[i][0];
+ 		u16Buf += (uint16_t)u8SpeedBuf[i][1];
+
+		u8DetailSpeed.u8SpeedData[j] = u8SpeedBuf[i][0];
+		u8DetailSpeed.u8SpeedData[j + 1] = u8SpeedBuf[i][1];
+
+		j += 2;
+	}
+
+	u8OneMinAvgSpeed = (uint8_t)(u16Buf / 120);
+	
+	u8DetailSpeed.u16BlockIndex++;
+
+	if(u8DetailSpeed.u16BlockIndex > DSPEEDMAX)
+	{
+		u8DetailSpeed.u16BlockIndex = 1;
+	}
+
+	// DETAIL_SPEED and DETAIL_SPEED_DAY 
+	
+	#if !ENABLE_INDEX_BUFFER
+	SD_WriteBuffToFile(FILENAME_DETAILSPEED_TMP, (uint8_t *)&u8DetailSpeed.u16BlockIndex, HEADLENS);
+	#else
+	V161_SaveFileIdx(FILENAME_DETAILSPEED_TMP, u8DetailSpeed.u16BlockIndex);
+	#endif
+
+	SD_WriteBuffToAddr(FILENAME_DETAILSPEED_TMP, u8DetailSpeed.u8DateBCD, DATELENS,
+						         HEADLENS + ((u8DetailSpeed.u16BlockIndex - 1) * DATELENS));
+
+  /*
+	// One Day Data file
+	#if !ENABLE_INDEX_BUFFER
+  SD_ReadFileToBuff(FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_DETAILSPEED_DAY_TMP, &u16Index);
+  #endif
+	
+	u16Index++;
+
+  #if !ENABLE_INDEX_BUFFER
+	SD_WriteBuffToFile(FILENAME_DETAILSPEED_DAY_TMP, (uint8_t *)&u16Index, HEADLENS);
+	#else
+	V161_SaveFileIdx(FILENAME_DETAILSPEED_DAY_TMP, u16Index);
+  #endif
+	
+	SD_AddBuffToFile(FILENAME_DETAILSPEED_DAY_TMP, u8DetailSpeed.u8DateBCD, DATELENS);
+  */
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+	
+	// Min-VDR Record
+	V161_WriteDetailSpeedToVDR(u8DetailSpeed);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+	
+	// If new hour then create new block for POSITION and POSITION_DAY
+	if(PositionData.u8Index == 0)
+	{
+		LOGprintf("\r\n> ### New POSITION Block ###");
+
+		memset(PositionData.u8DateBCD, 0x00, POSLENS);
+		memcpy(PositionData.u8DateBCD, u8SpeedDateBCD, 7);
+
+		PositionData.u16BlockIndex++;
+
+		if(PositionData.u16BlockIndex > POSMAX)
+		{
+			PositionData.u16BlockIndex = 1;
+		}
+
+		#if !ENABLE_INDEX_BUFFER
+		SD_WriteBuffToFile(FILENAME_POSITION_TMP, (uint8_t *)&PositionData.u16BlockIndex, HEADLENS);
+		#else
+		V161_SaveFileIdx(FILENAME_POSITION_TMP, PositionData.u16BlockIndex);
+    #endif
+		
+		SD_WriteBuffToAddr(FILENAME_POSITION_TMP, PositionData.u8DateBCD, POSLENS,
+									     HEADLENS + ((PositionData.u16BlockIndex - 1) * POSLENS));
+
+    /*
+		// Daily file
+		#if !ENABLE_INDEX_BUFFER
+		SD_ReadFileToBuff(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+		#else
+		V161_GetFileIdx(FILENAME_POSITION_DAY_TMP, &u16Index2);
+    #endif
+		
+		u16Index2++;
+
+		#if !ENABLE_INDEX_BUFFER
+		SD_WriteBuffToFile(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+		#else
+		V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, u16Index2);
+    #endif
+		
+		SD_WriteBuffToAddr(FILENAME_POSITION_DAY_TMP, PositionData.u8DateBCD, POSLENS,
+									     HEADLENS + ((u16Index2 - 1) * POSLENS));
+    */
+	}
+
+	//RTOSprintf("\r\n> ### PositionData.u8Index: %d ###", PositionData.u8Index);
+
+	// POSITION and POSITION_DAY
+	u16Buf = g_SysInfo.tGPS_Data.gpsLon.u8ddd * 100 + g_SysInfo.tGPS_Data.gpsLon.u8mm;
+
+	memcpy(&PosData[0], &u16Buf, 2);
+	memcpy(&PosData[2], &g_SysInfo.tGPS_Data.gpsLon.u16mmmm, 2);
+
+	u16Buf = g_SysInfo.tGPS_Data.gpsLat.u8dd * 100 + g_SysInfo.tGPS_Data.gpsLat.u8mm;
+
+	memcpy(&PosData[4], &u16Buf, 2);
+	memcpy(&PosData[6], &g_SysInfo.tGPS_Data.gpsLat.u16mmmm, 2);
+	
+	u16Buf = (uint16_t)g_SysInfo.tGPS_Data.fAltitude;
+	
+	memcpy(&PosData[8], &u16Buf, 2);
+
+	PosData[10] = u8OneMinAvgSpeed;
+
+	u32Buf = 0;
+
+	u32Buf = HEADLENS + ((PositionData.u16BlockIndex-1) * POSLENS) + (PositionData.u8Index * 11) + BCDDATE;
+
+	//RTOSprintf("\r\n> ### BIdx: %d, Idx: %d, Addr: 0x%04X ###", PositionData.u16BlockIndex, PositionData.u8Index, u32Address);
+
+	SD_WriteBuffToAddr(FILENAME_POSITION_TMP, (uint8_t *)&PosData,	11, u32Buf);
+
+  /*
+	// One day file
+  #if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_POSITION_DAY_TMP, &u16Index2);
+	#endif
+
+	if(u16Index2 == 0)
+	{
+		u16Index2 = 1;
+
+		#if !ENABLE_INDEX_BUFFER
+		SD_WriteBuffToFile(FILENAME_POSITION_DAY_TMP, (uint8_t *)&u16Index2, HEADLENS);
+		#else
+		V161_SaveFileIdx(FILENAME_POSITION_DAY_TMP, u16Index2);
+		#endif
+	}
+
+	u32Buf = HEADLENS + ((u16Index2 - 1) * POSLENS) + (PositionData.u8Index * 11) + BCDDATE;
+
+	//LOGprintf("\r\n> ### BIdx: %d, Idx: %d, Addr: 0x%04X ###", PositionData.u16BlockIndex, PositionData.u8Index, u32Address);
+
+	SD_WriteBuffToAddr(FILENAME_POSITION_DAY_TMP, (uint8_t *)&PosData,	11, u32Buf);
+
+	//LOGprintf("\r\n> ### BIdx: %d, DayBIdx: %d, Pos_Idx2: %d ###", PositionData.u16BlockIndex, u16Index2, PositionData.u8Index);
+  */
+
+	if(PositionData.u8Index >= 59)
+	{
+		PositionData.u8Index = 0;
+
+		LOGprintf("\r\n> ### 1Hr PosData ###");
+	}
+	else
+	{
+		PositionData.u8Index++;
+	}
+
+	// Min-VDR Record
+	memcpy(stVdrPos.u8DateBCD, u8SpeedDateBCD, 7);
+	memcpy(stVdrPos.u8Position , PosData, 11);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+	
+	V161_WritePositionToVDR(stVdrPos);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+	
+	//================================================================================================
+
+	//RTOSprintf("\r\n> ### u32DrvIdNum ###");
+
+	memset(&stRecDriving, 0x00, sizeof(DriveDataTypeDef));
+
+	stRecDriving.u8DriveCode = g_Setting.tDrvInfo[0].u8DrvStatus;
+
+	memset(stRecDriving.u8DriverName, '\0', sizeof(stRecDriving.u8DriverName));
+
+	memcpy(stRecDriving.u8DriverName, &g_Setting.tDrvInfo[0].u32DrvIdNum, 4);
+
+	memcpy(stRecDriving.u8DriveDateBCD, u8SpeedDateBCD, 7);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+
+	V161_RecordDriving(stRecDriving);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+
+	memset(&stRecDriving, 0x00, sizeof(DriveDataTypeDef));
+
+	stRecDriving.u8DriveCode = g_Setting.tDrvInfo[1].u8DrvStatus;
+
+	memset(stRecDriving.u8DriverName, '\0', sizeof(stRecDriving.u8DriverName));
+
+	memcpy(stRecDriving.u8DriverName, &g_Setting.tDrvInfo[1].u32DrvIdNum, 4);
+
+	memcpy(stRecDriving.u8DriveDateBCD, u8SpeedDateBCD, 7);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+
+	V161_RecordDriving(stRecDriving);
+	
+	taskInfo[TASK_LOG_PROC].u16TaskStep++;
+
+	V161_WriteDrvStatusToVDR(u8SpeedDateBCD);
+
+	//LOGprintf("\r\n> ### One Min Rec OK ###");
+
+	// Gary Test
+	//u32PosFileSize = SD_GetFileSize(FILENAME_POSITION_DAY_TMP);
+	//LOGprintf("\r\n> ### Pos_size: %d ###", u32PosFileSize);
+}
+
+//============================================================================//
+// @brief  Writing record to extended record file.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_RecordExternslData(void)
+{
+	ExternalDataTypeDef stExternalData;
+	uint8_t u8BCDTime[7];
+	//uint16_t u16Idx;
+	time_t ttBuf;
+	
+	
+	//RTOSprintf("\r\n> ### V161 Record Externsl Data ###");
+	
+	memset(&stExternalData, 0x00, sizeof(ExternalDataTypeDef));
+	
+	ttBuf = System_GetTime();
+	
+	SecToBCDTime(ttBuf, u8BCDTime);
+	
+	memcpy(stExternalData.u8DateBCD, u8BCDTime, 7);
+	
+	stExternalData.u8IOStatus = g_SysInfo.tEXTIO.word;
+	
+	stExternalData.u32Distance = (uint32_t)(g_SysInfo.tVehicleState.dDistance / 100);
+	
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternalData.u16BlockIndex, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_EXTERNAL_TMP, &stExternalData.u16BlockIndex);
+	#endif
+	
+	stExternalData.u16BlockIndex++;
+	
+	#if !ENABLE_INDEX_BUFFER
+	SD_WriteBuffToFile(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternalData.u16BlockIndex, HEADLENS);
+	#else
+	V161_SaveFileIdx(FILENAME_EXTERNAL_TMP, stExternalData.u16BlockIndex);
+	#endif
+	
+	//RTOSprintf("\r\n> Dist log: %d (0x%08X)", stExternalData.u32Distance, stExternalData.u32Distance);
+	
+	SD_WriteBuffToAddr(FILENAME_EXTERNAL_TMP, (uint8_t *)&stExternalData.u8DateBCD, EXTLENS,
+	                   HEADLENS + ((stExternalData.u16BlockIndex - 1) * EXTLENS));
+/*	
+	// Record to Day File
+	#if !ENABLE_INDEX_BUFFER
+	SD_ReadFileToBuff(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&u16Idx, HEADLENS);
+	#else
+	V161_GetFileIdx(FILENAME_EXTERNAL_DAY_TMP, &u16Idx);
+	#endif
+	
+	u16Idx++;
+	
+	#if !ENABLE_INDEX_BUFFER
+	SD_WriteBuffToFile(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&u16Idx, HEADLENS);
+	#else
+	V161_SaveFileIdx(FILENAME_EXTERNAL_DAY_TMP, u16Idx);
+	#endif
+	
+	SD_WriteBuffToAddr(FILENAME_EXTERNAL_DAY_TMP, (uint8_t *)&stExternalData.u8DateBCD, EXTLENS,
+	                   HEADLENS + ((u16Idx - 1) * EXTLENS));
+*/		
+	// Min-VDR Record
+	V161_WriteExternalToVDR(stExternalData);
+}
+#endif
+
+void V161_CheckVDRHeader(void)
+{
+	bool bRes;
+	uint8_t u8VDRHeader[2];
+	
+	
+	u8VDRHeader[0] = 0xBB;
+	u8VDRHeader[1] = 0x00;
+	
+	bRes = SD_CheckFileExist(FILENAME_MIN_VDR_TMP);
+	
+	if(bRes == FALSE)
+	{
+		SD_CreateFile(FILENAME_MIN_VDR_TMP, HEADLENS, TRUE);
+		
+		SD_WriteBuffToAddr(FILENAME_MIN_VDR_TMP, u8VDRHeader, HEADLENS, 0);
+	}
+}
+
+/*
+time_t GetLastLogTime(void)
+{
+	time_t ttLogTime = 0;
+	DatalogV161_TypeDef dlSimple;
+	uint32_t u32FileSize;
+	bool bGetData;
+
+	u32FileSize = SD_GetFileSize(FILENAME_DATALOG_BIN);
+
+	if(u32FileSize > 0) 
+  {
+		bGetData = SD_ReadAddrToBuff(FILENAME_DATALOG_BIN, 
+                                 (uint8_t*)&dlSimple,
+							                   sizeof(DatalogV161_TypeDef), 
+                                 u32FileSize - sizeof(DatalogV161_TypeDef));
+		if(bGetData == TRUE) 
+    {
+			ttLogTime = dlSimple.UTC + g_Setting.i32TimeZoneOffset;
+		}
+	}
+
+	return ttLogTime;
+}
+*/
+
+/*
+void PrinterTable8(void)
+{
+	const char cDrvName[18] = {	0x67, 0x45, 0x23, 0xA1, 0x00, 0x00, 0x00, 0x00, 0x00,
+															0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+	const char cDrvName2[18] = {	0x87, 0x54, 0x22, 0xF2, 0x00, 0x00, 0x00, 0x00, 0x00,
+															  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+	//uint8_t u8Buf = 0;
+	uint8_t u8BCDTime2[7] = {0};
+	uint16_t u16Idx=0, u16Idx1=0, u16Idx2=0, u16Idx3=0;
+	uint16_t u16Buf, i;
+	uint32_t u32StartSec=0, u32Sec=0, u32EndSec=0;
+	time_t ttTa;
+	DriveDataTypeDef stDriveData, stDriveData2;
+
+
+	LOGprintf("\r\n> ### PrinterTable8 ###");
+
+	ttTa = HAL_GetTick();
+
+	SD_RemoveFile(FILENAME_DRIVE_BUF_TMP);
+
+	u32EndSec = System_GetTime();
+	
+	//u32StartSec = u32EndSec - HOUR_2_SECOND(u8GetHour);
+	
+	u32StartSec = u32EndSec - HOUR_2_SECOND(24);
+	
+	SecToBCDTime(u32EndSec, u8BCDTime2);
+	
+	LOGprintf("\r\n> ### End Time: %02X%02X/%02X/%02X %02X:%02X:%02X  Sec: %d ###",
+						 u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+						 u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], u32EndSec);
+
+	SecToBCDTime(u32StartSec, u8BCDTime2);
+	
+	LOGprintf("\r\n> ### Start Time: %02X%02X/%02X/%02X %02X:%02X:%02X Sec: %d ###",
+					  u8BCDTime2[0], u8BCDTime2[1], u8BCDTime2[2], u8BCDTime2[3],
+					  u8BCDTime2[4], u8BCDTime2[5], u8BCDTime2[6], u32StartSec);
+
+	SD_ReadFileToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&u16Idx, HEADLENS);
+
+	if(u16Idx > 0) 
+	{
+		u16Buf = u16Idx - 1;
+
+		u16Idx1 = 0;
+		u16Idx2 = u16Buf;
+
+		do 
+		{
+			u16Idx3 = u16Idx1 + ((u16Idx2 - u16Idx1)/2);
+			
+			SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+								        DRIVINGLENS, HEADLENS + (u16Idx3 * DRIVINGLENS));
+												
+			u32Sec = BCDTimeToSec(stDriveData.u8DriveDateBCD);
+
+			if(u32Sec > u32StartSec) 
+			{
+				u16Idx2 = u16Idx3;
+			} 
+			else 
+			{
+				u16Idx1 = u16Idx3;
+			}
+
+			if((u16Idx2 - u16Idx1) < 2) 
+			{
+				if(u32Sec > u32StartSec) 
+				{
+					u16Idx3 -= 2;
+				}
+				
+				break;
+			}
+		} 
+		while(u32Sec != u32StartSec);
+	}
+
+	LOGprintf("\r\n> Total: %d , Index: %d", u16Buf, u16Idx3);
+	LOGprintf("\r\n> DriverName: ");
+	
+	for(i = 0; i < 18; i++)
+	{
+		if(stDriveData.u8DriverName[i] != 0)
+		{
+			LOGprintf("%02X", stDriveData.u8DriverName[i]);
+		}
+	}
+	
+	LOGprintf("\r\n> DriveCode: %d", stDriveData.u8DriveCode);
+	
+	LOGprintf("\r\n> DriveDate: %02X%02X/%02X/%02X %02X:%02X:%02X",
+						stDriveData.u8DriveDateBCD[0], stDriveData.u8DriveDateBCD[1], stDriveData.u8DriveDateBCD[2],
+						stDriveData.u8DriveDateBCD[3], stDriveData.u8DriveDateBCD[4], stDriveData.u8DriveDateBCD[5],
+						stDriveData.u8DriveDateBCD[6]);
+
+  // Driver 1 List =============================================================================================
+	LOGprintf("\r\n> ### Driver 1 List ###");
+	
+	SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+										DRIVINGLENS, HEADLENS + (u16Idx3 * DRIVINGLENS));
+
+	memcpy(&stDriveData2, &stDriveData, sizeof(DriveDataTypeDef));
+	
+	stDriveData2.u16BlockIndex = 1;
+
+	for(i=(u16Idx3+2); i<(u16Buf+1); i++) 
+	{
+		SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+								      DRIVINGLENS, HEADLENS + (i * DRIVINGLENS));
+											
+		if(strcmp((char *)cDrvName, (char *)stDriveData.u8DriverName) == 0) 
+		{
+			if(stDriveData2.u8DriveCode == stDriveData.u8DriveCode) 
+			{
+				stDriveData2.u16BlockIndex++;
+			} 
+			else 
+			{
+				SD_AddBuffToFile(FILENAME_DRIVE_BUF_TMP, (uint8_t *)&stDriveData2.u16BlockIndex, sizeof(DriveDataTypeDef));
+				
+				LOGprintf("\r\n> Code: %d, Time: %d min", stDriveData2.u8DriveCode, stDriveData2.u16BlockIndex);
+				
+				memcpy(&stDriveData2, &stDriveData, sizeof(DriveDataTypeDef));
+				
+				stDriveData2.u16BlockIndex = 1;
+			}
+		}
+	}
+
+	SD_AddBuffToFile(FILENAME_DRIVE_BUF_TMP, (uint8_t *)&stDriveData2.u16BlockIndex, sizeof(DriveDataTypeDef));
+	
+	LOGprintf("\r\n> Code: %d, Time: %d min", stDriveData2.u8DriveCode, stDriveData2.u16BlockIndex);
+	
+  // Driver 2 List =============================================================================================
+	LOGprintf("\r\n> ### Driver 2 List ###");
+	
+	SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+								    DRIVINGLENS, HEADLENS + (u16Idx3 * DRIVINGLENS));
+
+	memcpy(&stDriveData2, &stDriveData, sizeof(DriveDataTypeDef));
+	
+	stDriveData2.u16BlockIndex = 1;
+
+	for(i = (u16Idx3+2); i < (u16Buf+1); i++) 
+	{
+		SD_ReadAddrToBuff(FILENAME_DRIVE_TMP, (uint8_t *)&stDriveData.u8DriverName,
+								      DRIVINGLENS, HEADLENS + (i * DRIVINGLENS));
+											
+		if(strcmp((char *)cDrvName2, (char *)stDriveData.u8DriverName) == 0) 
+		{
+			if(stDriveData2.u8DriveCode == stDriveData.u8DriveCode) 
+			{
+				stDriveData2.u16BlockIndex++;
+			} 
+			else 
+			{
+				SD_AddBuffToFile(FILENAME_DRIVE_BUF_TMP, (uint8_t *)&stDriveData2.u16BlockIndex, sizeof(DriveDataTypeDef));
+				
+				LOGprintf("\r\n> Code: %d, Time: %d min", stDriveData2.u8DriveCode, stDriveData2.u16BlockIndex);
+				
+				memcpy(&stDriveData2, &stDriveData, sizeof(DriveDataTypeDef));
+				
+				stDriveData2.u16BlockIndex = 1;
+			}
+		}
+	}
+
+	SD_AddBuffToFile(FILENAME_DRIVE_BUF_TMP, (uint8_t *)&stDriveData2.u16BlockIndex, sizeof(DriveDataTypeDef));
+	
+	LOGprintf("\r\n> Code: %d, Time: %d min", stDriveData2.u8DriveCode, stDriveData2.u16BlockIndex);
+  //============================================================================================================
+	LOGprintf("\r\n> Total used: %d ms", (HAL_GetTick()-ttTa));
+	LOGprintf("\r\n> ### PrinterTable8 OK ###");
+}
+*/
+
+#if ENABLE_INDEX_BUFFER
+//============================================================================//
+// @brief  Initialize index buffer mechanism.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_IndexFileNameInit(void)
+{
+  for(int i = 0; i < MAX_INDEXED_FILE_NUM; i++)
+  {
+	  memset(cIndexedFileName[i], 0x00, sizeof(cIndexedFileName[i]));
+	}
+	
+	sprintf(cIndexedFileName[0], "%s", FILENAME_DETAILSPEED_TMP);
+	
+	sprintf(cIndexedFileName[1], "%s", FILENAME_POSITION_TMP);
+	
+	sprintf(cIndexedFileName[2], "%s", FILENAME_DRIVE_TMP);
+	
+	sprintf(cIndexedFileName[3], "%s", FILENAME_EXTERNAL_TMP);
+}
+
+//============================================================================//
+// @brief  Save file indices from backup registers to SD card or IC MX25L.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_SaveFileIdxAll(void)
+{
+	bool bRes;
+	MX25L_StatusTypeDef mxlRes;
+	uint16_t u16IndexList[MAX_INDEXED_FILE_NUM] = {0};
+	
+	
+  for(int i = 0; i < MAX_INDEXED_FILE_NUM; i++)
+  {
+	  if(strlen(cIndexedFileName[i]) > 0)
+		{
+		  u16IndexList[i] = (uint16_t)HW_ReadBackupRegister(i + BKP_FILE_INDEX_START);
+			
+			bRes = SD_WriteBuffToAddr(cIndexedFileName[i], (uint8_t *)&u16IndexList[i], 2, 0);
+			
+			if(bRes == FALSE)
+			{
+			  RTOSprintf("\r\n> SD save index %d to file %s ERROR", u16IndexList[i], cIndexedFileName[i]);
+			}
+		}
+	}
+	
+	mxlRes = MX25L_SectorErase((uint16_t)(EXFLASH_FILE_INDEX_START_ADDR / MX25L_SECTOR_SIZE));
+	
+	if(mxlRes != MX25L_OK)
+	{
+	  RTOSprintf("\r\n MX25L erase sector at address %d ERROR %d", EXFLASH_FILE_INDEX_START_ADDR, mxlRes);
+		
+		return;
+	}
+	
+	mxlRes = MX25L_PageProgram(EXFLASH_FILE_INDEX_START_ADDR, (uint8_t *)&u16IndexList[0], sizeof(u16IndexList));
+	
+	if(mxlRes != MX25L_OK)
+	{
+	  RTOSprintf("\r\n MX25L save file index ERROR %d", mxlRes);
+	}
+}
+
+//============================================================================//
+// @brief  Load file indices from SD card or IC MX25L to backup registers.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_LoadFileIdxAll(void)
+{
+  bool bRes;
+	MX25L_StatusTypeDef mxlRes;
+	uint16_t u16IndexList[MAX_INDEXED_FILE_NUM] = {0};
+	
+	
+	for(int i = 0; i < MAX_INDEXED_FILE_NUM; i++)
+  {
+	  if(strlen(cIndexedFileName[i]) > 0)
+		{
+			bRes = SD_ReadAddrToBuff(cIndexedFileName[i], (uint8_t *)&u16IndexList[i], 2, 0);
+			
+			if(bRes == FALSE)
+			{
+				LOGprintf("\r\n SD get file %s index ERROR.", cIndexedFileName[i]);
+				
+				break;
+			}
+			
+		  HW_WriteBackupRegister(i + BKP_FILE_INDEX_START, u16IndexList[i]);
+			
+			//RTOSprintf("\r\n> File %s initial index:%d", cIndexedFileName[i], u16IndexList[i]);
+		}
+	}
+	
+	if(!bRes)
+	{
+	  mxlRes = MX25L_MultiBytesRead(EXFLASH_FILE_INDEX_START_ADDR, 
+		                              (uint8_t *)&u16IndexList[0], sizeof(u16IndexList));
+		
+		if(mxlRes != MX25L_OK)
+		{
+		  LOGprintf("\r\n MX25L get file index ERROR %d", mxlRes);
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Save a file index to a backup register.
+// @param  pcFileName: Pointer to a string storing file name.
+//         u16Idx: Index of the file.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool V161_SaveFileIdx(char *pcFileName, uint16_t u16Idx)
+{
+  bool bRes = FALSE;
+	uint8_t u8FileNum;
+	
+	
+	for(int i = 0; i < MAX_INDEXED_FILE_NUM; i++)
+	{
+	  if(strncmp(cIndexedFileName[i], pcFileName, strlen(cIndexedFileName[i])) == 0)
+		{
+		  bRes = TRUE;
+			
+			u8FileNum = i;
+			
+			break;
+		}
+	}
+	
+	if(bRes == FALSE)
+	{
+		LOGprintf("\r\n> Save file %s index FAIL.", pcFileName);
+		
+		return FALSE;
+	}
+	
+	HW_WriteBackupRegister(u8FileNum + BKP_FILE_INDEX_START, u16Idx);
+	
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Get a file index from backup register.
+// @param  pcFileName: Pointer to a string storing file name.
+//         pu16Idx: Pointer to a uint16_t variable to store index of the file.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool V161_GetFileIdx(char *pcFileName, uint16_t *pu16Idx)
+{
+  bool bRes = FALSE;
+	uint8_t u8FileNum;
+	
+	
+	for(int i = 0; i < MAX_INDEXED_FILE_NUM; i++)
+	{
+	  if(strncmp(cIndexedFileName[i], pcFileName, strlen(cIndexedFileName[i])) == 0)
+		{
+		  bRes = TRUE;
+			
+			u8FileNum = i;
+			
+			break;
+		}
+	}
+	
+	if(bRes == FALSE)
+	{
+		LOGprintf("\r\n> Get file %s index FAIL.", pcFileName);
+		
+		return FALSE;
+	}
+	
+	*pu16Idx = (uint16_t)HW_ReadBackupRegister(u8FileNum + BKP_FILE_INDEX_START);
+	
+	return TRUE;
+}
+#endif
+
+// Write Table Index 00
+//============================================================================//
+// @brief  Write Breakdown table to VDR file.
+// @param  stBreakdown: Breakdown data in BreakdownDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteBreakdownToVDR(BreakdownDataTypeDef stBreakDown)
+{
+	bool bRes;
+	VdrBreakdownDataTypeDef stVdrBkBuf;
+	
+	
+	memset(&stVdrBkBuf, '\0', sizeof(VdrBreakdownDataTypeDef));
+	 
+	stVdrBkBuf.u8TableCode = 0x00;
+	
+	strncpy((char *)stVdrBkBuf.u8Name, (char *)u8Table5Name, sizeof(u8Table5Name));
+	
+	stVdrBkBuf.u32Lens = sizeof(BreakdownDataTypeDef);
+	
+	memcpy(&stVdrBkBuf.stBK_DATA, &stBreakDown, sizeof(BreakdownDataTypeDef));
+	
+	stVdrBkBuf.stBK_DATA.u8BlockIndex = 1;
+
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrBkBuf, sizeof(VdrBreakdownDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteBreakdownToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteBreakdownToVDR NG. ");
+	}
+}
+
+// Write Table Index 01
+//============================================================================//
+// @brief  Write Event table to VDR file.
+// @param  stEvent: Event data in EventDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteEventToVDR(EventDataTypeDef stEvent)
+{
+	bool bRes;
+	VdrEventDataTypeDef stVdrEventBuf;
+	
+	
+	memset(&stVdrEventBuf, '\0', sizeof(VdrEventDataTypeDef));
+	
+	stVdrEventBuf.u8TableCode = 0x01;
+	
+	strncpy((char *)stVdrEventBuf.u8Name, (char *)u8Table5Name, sizeof(u8Table5Name));
+	
+	stVdrEventBuf.u32Lens = sizeof(EventDataTypeDef);
+	
+	memcpy(&stVdrEventBuf.stEvent, &stEvent, sizeof(EventDataTypeDef));
+	
+	stVdrEventBuf.stEvent.u8BlockIndex = 1;
+
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrEventBuf, sizeof(VdrEventDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteEventToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteEventToVDR NG. ");
+	}
+}
+
+// Write Table Index 02
+//============================================================================//
+// @brief  Write DetailSpeed table to VDR file.
+// @param  stDSpeed: DetailSpeed data in DetailSpeedTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteDetailSpeedToVDR(DetailSpeedTypeDef stDSpeed)
+{
+	bool bRes;
+	VdrDetailSpeedTypeDef stVdrDSpeed;
+	
+	
+	memset(&stVdrDSpeed, '\0', sizeof(VdrDetailSpeedTypeDef));
+	
+	stVdrDSpeed.u8TableCode = 0x02;
+	
+	strncpy((char *)stVdrDSpeed.u8Name, (char *)u8Table6Name, sizeof(u8Table6Name));
+	
+	stVdrDSpeed.u32Lens = sizeof(DetailSpeedTypeDef) - 1;
+	
+	stVdrDSpeed.u16BlockIndex = 1;
+	
+	memcpy(&stVdrDSpeed.u8DateBCD, &stDSpeed.u8DateBCD, 7);
+	
+	memcpy(&stVdrDSpeed.u8SpeedData, &stDSpeed.u8SpeedData, 120);
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrDSpeed, sizeof(VdrDetailSpeedTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteDetailSpeedToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteDetailSpeedToVDR NG. ");
+	}
+}
+
+// Write Table Index 03
+//============================================================================//
+// @brief  Write Technical table to VDR file.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_WriteTechnicalToVDR(void)
+{
+	bool bRes;
+	VdrTechnicalDataTypeDef stVdrTechnical;
+
+	
+	memset(&stVdrTechnical, '\0', sizeof(VdrTechnicalDataTypeDef));
+	
+	stVdrTechnical.u8TableCode = 0x03;
+	
+	strncpy((char *)stVdrTechnical.u8Name, (char *)u8Table7Name, sizeof(u8Table7Name));
+	
+	stVdrTechnical.u32Lens = sizeof(TechnicalDataTypeDef);
+
+	bRes = SD_ReadFileToBuff(FILENAME_TECHNICAL_TMP, (uint8_t *)&stVdrTechnical.stTechData, sizeof(TechnicalDataTypeDef));
+
+	if(bRes == TRUE)
+	{
+		V161_CheckVDRHeader();
+		
+		bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrTechnical, sizeof(VdrTechnicalDataTypeDef));
+	
+		if(bRes == TRUE)
+		{
+			//LOGprintf("\r\n> V161_WriteTechnicalToVDR OK. ");
+		}
+		else
+		{
+			//LOGprintf("\r\n> V161_WriteTechnicalToVDR NG. ");
+		}
+	}
+}
+
+// Write Table Index 04
+//============================================================================//
+// @brief  Write Calibration table to VDR file.
+// @param  stCalData: Calibration data in CalibrationDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteCalibrationToVDR(CalibrationDataTypeDef stCalData)
+{
+	bool bRes;
+	VdrCalibrationDataTypeDef stVdrCalData;
+	
+	
+	memset(&stVdrCalData, '\0', sizeof(VdrCalibrationDataTypeDef));
+	
+	stVdrCalData.u8TableCode = 4;
+	
+	strncpy((char *)stVdrCalData.u8Name, (char *)u8Table7Name, sizeof(u8Table7Name));
+	
+	stVdrCalData.u32Lens = sizeof(CalibrationDataTypeDef);
+	
+	memcpy(&stVdrCalData.stCalData, &stCalData, sizeof(CalibrationDataTypeDef));
+	
+	stVdrCalData.stCalData.u16BlockIndex = 1;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrCalData, sizeof(VdrCalibrationDataTypeDef));
+	
+	if (bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteCalibrationToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteCalibrationToVDR NG. ");
+	}
+}
+
+// Write Table Index 05
+//============================================================================//
+// @brief  Write Adjust table to VDR file.
+// @param  stAdjust: Adjust data in AdjustDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteAdjustToVDR(AdjustDataTypeDef stAdjust)
+{
+	bool bRes;
+	VdrAdjustDataTypeDef stVdrAdjust;
+	
+	
+	memset(&stVdrAdjust, '\0', sizeof(VdrAdjustDataTypeDef));
+	
+	stVdrAdjust.u8TableCode = 5;
+	
+	strncpy((char *)stVdrAdjust.u8Name, (char *)u8Table7Name, sizeof(u8Table7Name));
+	
+	stVdrAdjust.u32Lens = sizeof(AdjustDataTypeDef);
+	
+	memcpy(&stVdrAdjust.stAdjust, &stAdjust, sizeof(AdjustDataTypeDef));
+	
+	stVdrAdjust.stAdjust.u8BlockIndex = 1;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrAdjust, sizeof(VdrAdjustDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteAdjustToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteAdjustToVDR NG. ");
+	}
+}
+
+// Write Table Index 06
+//============================================================================//
+// @brief  Write DrivingTime table to VDR file.
+// @param  stDrivingTime: DrivingTime data in DrivingTimeTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteDrivingToVDR(DrivingTimeTypeDef stDrivingTime)
+{
+	bool bRes;
+	VdrDrivingTimeTypeDef stVdrDrvTime;
+	
+	
+	memset(&stVdrDrvTime, '\0', sizeof(VdrDrivingTimeTypeDef));
+	
+	stVdrDrvTime.u8TableCode = 6;
+	
+	strncpy((char *)stVdrDrvTime.u8Name, (char *)u8Table7Name, sizeof(u8Table7Name));
+	
+	stVdrDrvTime.u32Lens = sizeof(DrivingTimeTypeDef);
+	
+	memcpy(&stVdrDrvTime.stDrvTime, &stDrivingTime, sizeof(DrivingTimeTypeDef));
+	
+	stVdrDrvTime.stDrvTime.u8BlockIndex = 1;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrDrvTime, sizeof(VdrDrivingTimeTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteDrivingToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteDrivingToVDR NG. ");
+	}
+}
+
+// Write Table Index 07
+//============================================================================//
+// @brief  Write Rest data table to VDR file.
+// @param  stRestTime: Rest data in RestDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteRestToVDR(RestDataTypeDef stRestTime)
+{
+	bool bRes;
+	VdrRestDataTypeDef stVdrRestTime;
+	
+	
+	memset(&stVdrRestTime, '\0', sizeof(VdrRestDataTypeDef));
+	
+	stVdrRestTime.u8TableCode = 7;
+	
+	strncpy((char *)stVdrRestTime.u8Name, (char *)u8Table7Name, sizeof(u8Table7Name));
+	
+	stVdrRestTime.u32Lens = sizeof(RestDataTypeDef);
+	
+	memcpy(&stVdrRestTime.stRestTime, &stRestTime, sizeof(RestDataTypeDef));
+	
+	stVdrRestTime.stRestTime.u8BlockIndex = 1;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrRestTime, sizeof(VdrRestDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteRestToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteRestToVDR NG. ");
+	}
+}
+
+// Write Table Index 08
+//============================================================================//
+// @brief  Write DVR Status table to VDR file.
+// @param  pu8BCDTime: Pointer to a time data array.
+// @retval None.
+//============================================================================//
+void V161_WriteDrvStatusToVDR(uint8_t *pu8BCDTime)
+{
+	bool bRes;
+	VdrDriveDataTypeDef stVdrDriveData;
+	
+	
+	memset(&stVdrDriveData, '\0', sizeof(VdrDriveDataTypeDef));
+	
+	stVdrDriveData.u8TableCode = 8;
+	
+	strncpy((char *)stVdrDriveData.u8Name, (char *)u8Table8Name, sizeof(u8Table8Name));
+	
+	stVdrDriveData.u32Lens = 54;
+	
+	stVdrDriveData.u16BlockIndex = 2;
+	
+	memcpy(stVdrDriveData.u8DriveDateBCD, pu8BCDTime, 7);
+	
+	memcpy(stVdrDriveData.u8DriveDateBCD2, pu8BCDTime, 7);
+	
+	memcpy(stVdrDriveData.u8DriverName, &g_Setting.tDrvInfo[0].u32DrvIdNum, 4);
+	
+	memcpy(stVdrDriveData.u8DriverName2, &g_Setting.tDrvInfo[1].u32DrvIdNum, 4);
+	
+	stVdrDriveData.u8DriveCode = g_Setting.tDrvInfo[0].u8DrvStatus;
+	
+	stVdrDriveData.u8DriveCode2 = g_Setting.tDrvInfo[1].u8DrvStatus;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrDriveData, sizeof(VdrDriveDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteDrvStatusToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteDrvStatusToVDR NG. ");
+	}
+}
+
+// Write Table Index 09
+//============================================================================//
+// @brief  Write Position table to VDR file.
+// @param  stVdrPosition: Position data in VDR_POSITION_t format.
+// @retval None.
+//============================================================================//
+void V161_WritePositionToVDR(VdrPositionDataTypeDef stVdrPosition)
+{
+	bool bRes;
+	
+
+	stVdrPosition.u8TableCode = 9;
+	
+	strncpy((char *)stVdrPosition.u8Name, (char *)u8Table9Name, sizeof(u8Table9Name));
+	
+	stVdrPosition.u32Lens = 20;
+	
+	stVdrPosition.u16BlockIndex = 1;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrPosition, sizeof(VdrPositionDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WritePositionToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WritePositionToVDR NG. ");
+	}
+}
+
+// Write Table Index 10
+//============================================================================//
+// @brief  Write External table to VDR file.
+// @param  stExtData: External data in ExternalDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteExternalToVDR(ExternalDataTypeDef stExtData)
+{
+	bool bRes;
+	VdrExternalDataTypeDef stVdrExternal;
+
+	
+	memset(&stVdrExternal, '\0', sizeof(VdrExternalDataTypeDef));
+	
+	stVdrExternal.u8TableCode = 10;
+	
+	strncpy((char *)stVdrExternal.u8Name, (char *)u8Table10Name, sizeof(u8Table10Name));
+	
+	stVdrExternal.u32Lens = sizeof(ExternalDataTypeDef);
+	
+	memcpy(&stVdrExternal.stExtData, &stExtData, sizeof(ExternalDataTypeDef));
+	
+	stVdrExternal.stExtData.u16BlockIndex = 1;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrExternal, sizeof(VdrExternalDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteExternalToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteExternalToVDR NG. ");
+	}
+}
+
+// Write Table Index 11
+//============================================================================//
+// @brief  Write DataLog Event table to VDR file.
+// @param  stExtData: External data in ExternalDataTypedef format.
+// @retval None.
+//============================================================================//
+void V161_WriteDatalogEventToVDR(uint8_t *u8BCDTime, uint16_t u16EventCode)
+{
+	bool bRes;
+	VdrDatalogEventDataTypeDef stVdrDatalogEvent;
+
+
+	memset(&stVdrDatalogEvent, '\0', sizeof(VdrDatalogEventDataTypeDef));
+	
+	stVdrDatalogEvent.u8TableCode = 11;
+	
+	strncpy((char *)stVdrDatalogEvent.u8Name, (char *)u8Table11Name, sizeof(u8Table11Name));
+	
+	stVdrDatalogEvent.u32Lens = 11;
+	
+	stVdrDatalogEvent.u16DataLens = 1;
+	
+	memcpy(stVdrDatalogEvent.u8TimeBCD, u8BCDTime, 7);
+	
+	stVdrDatalogEvent.u16EventCode = u16EventCode;
+	
+	V161_CheckVDRHeader();
+	
+	bRes = SD_AddBuffToFile(FILENAME_MIN_VDR_TMP, (uint8_t *)&stVdrDatalogEvent, sizeof(VdrDatalogEventDataTypeDef));
+	
+	if(bRes == TRUE)
+	{
+		//LOGprintf("\r\n> V161_WriteDatalogEventToVDR OK. ");
+	}
+	else
+	{
+		//LOGprintf("\r\n> V161_WriteDatalogEventToVDR NG. ");
+	}
+}
+
+//============================================================================//
+// @brief  Add 1 minute data to VDR file.
+// @param  None.
+// @retval None.
+//============================================================================//
+void V161_Make1MinVDR(void)
+{
+	#if ENABLE_GSM_NET
+	bool bResult = FALSE;
+	#endif
+	char cFilename[40], cFtpFilename[40];
+	uint8_t	u8CheckSum, u8BCDTime[7], u8Buf;
+	uint16_t i;
+	uint32_t u32FileSize, u32DataSize, u32GetSize, u32TickTime;
+	time_t ttFileTime;
+	
+	
+	if(bDoVDR_HourFlag == TRUE)
+	{
+		u32TickTime = HAL_GetTick();
+	
+		RTOSprintf("\r\n> ### Make Hour VDR Start ###");
+
+		ttFileTime = g_SysInfo.ttNow;
+		
+		SecToBCDTime(ttFileTime, u8BCDTime);
+		
+		sprintf(cFilename, "%s/D%02X%02X%02X%02X_%02X%02X%02X_%s.VDR",
+						FOLDERNAME_VDR, u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3], 
+						u8BCDTime[4], u8BCDTime[5], u8BCDTime[6],	g_Setting.tBusInfo.cBus_ID);
+		
+		RTOSprintf("\r\n> ### Hour VDR filename: %s ###", cFilename);
+		
+		SD_RemoveFile(cFilename);
+
+		V161_CopyFile(FILENAME_MIN_VDR_TMP, cFilename);
+
+		V161_WriteTechnicalToFile(cFilename);
+		
+		RTOSprintf("\r\n> ### Make Hour VDR CheckSum ###");
+
+		u32FileSize = SD_GetFileSize(cFilename);
+
+		u32DataSize = 0;
+
+		u32GetSize = 0;
+
+		u8CheckSum = 0;
+
+		do
+		{
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(cFilename, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			for(i = 0; i < u32GetSize; i++)
+			{
+				u8CheckSum = u8CheckSum ^ u8VDR_Buf[i];
+			}
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+
+		RTOSprintf("\r\n> ### CheckSum Make OK!! ###");
+
+		SD_AddBuffToFile(cFilename, &u8CheckSum, SHORTHEAD);
+		
+		RTOSprintf("\r\n> ### Make Hour VDR OK, Used: %d ms ###", HAL_GetTick() - u32TickTime);
+
+		bIsDelVDRFileFlag = TRUE;
+			
+		USB_DownloadFile(cFilename);
+
+		RTOSprintf("\r\n> ### Make Hour VDR End ###");
+		
+		bDoVDR_HourFlag = FALSE;
+	}
+	else if(bDoVDR_DayFlag == TRUE)
+	{
+		u32TickTime = HAL_GetTick();
+	
+		RTOSprintf("\r\n> ### Make Day VDR Start ###");
+
+		RTOSprintf("\r\n> ### ttLastLogTime: %d ###", ttLastLogTime);
+		
+		ttFileTime = ttLastLogTime;
+		
+		SecToBCDTime(ttFileTime, u8BCDTime);
+		
+		sprintf(cFilename, "%s/D%02X%02X%02X%02X_235959_%s.VDR",
+						FOLDERNAME_VDR, u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3],
+						g_Setting.tBusInfo.cBus_ID);
+		
+		sprintf(cFtpFilename, "D%02X%02X%02X%02X_235959_%s.VDR",
+						u8BCDTime[0], u8BCDTime[1], u8BCDTime[2], u8BCDTime[3], g_Setting.tBusInfo.cBus_ID);
+
+		RTOSprintf("\r\n> ### Day VDR filename: %s ###", cFilename);
+		
+		SD_RemoveFile(cFilename);
+		
+		SD_Rename(FILENAME_MIN_VDR_TMP, cFilename);
+		
+		SD_CreateFile(FILENAME_MIN_VDR_TMP, HEADLENS, TRUE);
+		
+		u8Buf = 0xBB;
+		
+		SD_WriteBuffToAddr(FILENAME_MIN_VDR_TMP, &u8Buf, 1, 0);
+		
+		V161_RecordExternslData();
+
+		V161_WriteTechnicalToFile(cFilename);
+		
+		RTOSprintf("\r\n> ### Make Day VDR CheckSum ###");
+
+		u32FileSize = SD_GetFileSize(cFilename);
+
+		u32DataSize = 0;
+
+		u32GetSize = 0;
+
+		u8CheckSum = 0;
+
+		do
+		{
+			if((u32FileSize - u32DataSize) >= MOVE_DATA_MAX_SIZE)
+			{
+				u32GetSize = MOVE_DATA_MAX_SIZE;
+			}
+			else
+			{
+				u32GetSize = u32FileSize - u32DataSize;
+			}
+			
+			osStatus osRes = osMutexWait(mutex_data_buf1_user, S_2_mS(5));
+
+			if(osRes != osOK)
+			{
+				RTOSprintf("\r\n> Can't acquire DATA BUF1 mutex to transfer file. osRes:%d", osRes);
+		
+				return; 
+			}
+
+			memset(u8VDR_Buf, 0x00, sizeof(u8VDR_Buf));
+
+			SD_ReadAddrToBuff(cFilename, u8VDR_Buf, u32GetSize, u32DataSize);
+
+			for(i = 0; i < u32GetSize; i++)
+			{
+				u8CheckSum = u8CheckSum ^ u8VDR_Buf[i];
+			}
+			
+			osMutexRelease(mutex_data_buf1_user);
+			
+			HAL_Delay(2);
+
+			u32DataSize += u32GetSize;
+		}
+		while(u32DataSize < u32FileSize);
+
+		RTOSprintf("\r\n> ### CheckSum Make OK!! ###");
+
+		SD_AddBuffToFile(cFilename, &u8CheckSum, SHORTHEAD);
+		
+		RTOSprintf("\r\n> ### Make Day VDR OK, Used: %d ms ###", HAL_GetTick() - u32TickTime);
+		
+		#if ENABLE_GSM_NET
+		RTOSprintf("\r\n> ### Send Day VDR to FTP ###");
+		
+		bResult = GSM_FTP_FileUploadRequest(cFtpFilename, cFtpFilename, FOLDERNAME_VDR, FOLDERNAME_VDR, 0);
+			
+		if(bResult)
+			RTOSprintf("\r\n@ Request to upload file %s/%s to FTP server as %s/%s OK.",
+								 FOLDERNAME_VDR, cFtpFilename, FOLDERNAME_VDR, cFtpFilename);
+		else
+			RTOSprintf("\r\n@ Request to upload file %s/%s to FTP server as %s/%s ERROR.",
+								 FOLDERNAME_VDR, cFtpFilename, FOLDERNAME_VDR, cFtpFilename);
+		#endif
+		
+		RTOSprintf("\r\n> ### Make Day VDR End ###");
+		
+		bDoVDR_DayFlag = FALSE;
+	}
+}

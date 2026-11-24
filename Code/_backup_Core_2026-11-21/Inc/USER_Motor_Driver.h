@@ -1,0 +1,21 @@
+/*
+ * USER_MotorDriver.h
+ *
+ *  Created on: Mar 8, 2025
+ *      Author: PC
+ */
+
+#ifndef INC_USER_MOTOR_DRIVER_H_
+#define INC_USER_MOTOR_DRIVER_H_
+
+
+#include <USER_System.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdbool.h>
+void Motor_Init(void);
+bool Motor_SetParam(gMotorParameter MotorParam);
+bool Motor_Stop(gMotorParameter MotorParam);
+#endif /* INC_USER_MOTOR_DRIVER_H_ */

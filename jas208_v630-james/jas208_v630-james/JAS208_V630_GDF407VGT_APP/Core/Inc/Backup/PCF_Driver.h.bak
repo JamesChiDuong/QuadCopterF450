@@ -1,0 +1,105 @@
+#ifndef _PCF_DRIVER_H_
+#define _PCF_DRIVER_H_
+//============================================================================//
+
+
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include <time.h>
+
+#include "main.h"
+#include "DataType.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+#define PCF8563                         (0)
+
+#define PCF_TYPE                        PCF8563
+
+#if PCF_TYPE == PCF8563
+// PCF8563 I2C slave address
+#define PCF_SLAVE_ADDR                  0x51 // 01010001
+
+// PCF8563 when communicating using STM32 HAL I2C Driver
+#define PCF_ADDR_I2C                    PCF_SLAVE_ADDR << 1 // 0xA2 10100010
+
+// Register address
+#define PCF8563_REG_CTL1		            0x00 // Status control 
+#define PCF8563_REG_CTL2		            0x01
+#define PCF8563_REG_SECONDS		          0x02 // Date time
+#define PCF8563_REG_MINUTES		          0x03
+#define PCF8563_REG_HOURS   	          0x04
+#define PCF8563_REG_DAY    		          0x05
+#define PCF8563_REG_WDAY   		          0x06
+#define PCF8563_REG_MONTH 		          0x07
+#define PCF8563_REG_YEAR		            0x08
+#define PCF8563_REG_MIN_ALM		          0x09 // Alarm
+#define PCF8563_REG_HOUR_ALM	          0x0A
+#define PCF8563_REG_DAY_ALM		          0x0B
+#define PCF8563_REG_WDAY_ALM	          0x0C
+#define PCF8563_REG_CLKO	              0x0D // Clock output
+#define PCF8563_REG_TMR_CTL	            0x0E
+#define PCF8563_REG_TMR_CNT	            0x0F
+
+#define PCF8563_REG_TIME_START_ADDR     PCF8563_REG_SECONDS
+
+#define PCF8563_REG_DATE_START_ADDR     PCF8563_REG_DAY
+
+#define PCF8563_CLOCK_START_MASK        0xDF
+
+#define PCF8563_CLOCK_STOP_MASK         0x20
+
+#define PCF8563_SEC_MASK                0x7F;
+#define PCF8563_MIN_MASK                0x7F;
+#define PCF8563_HOUR_MASK               0x3F;
+#define PCF8563_DAY_MASK                0x3F;
+#define PCF8563_WDAY_MASK               0x07;
+#define PCF8563_MON_MASK                0x1F;
+#define PCF8563_YEAR_MASK               0xFF;
+#endif
+
+#define PCF_MAX_TRIALS                  3U
+
+#define PCF_MAX_TIMEOUT                 100U
+
+#define PCF_ERR_CNT_MAX                 3U
+
+#define PCF_RESTART_CNT_MAX             3U
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+
+extern bool g_bPCF_EN;
+extern bool bPCF_Stop;
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+
+#if PCF_TYPE == PCF8563
+void PCF_ReInit(void);
+void PCF_DeInit(void);
+void PCF_Restart(void);
+bool PCF_IsReady(void);
+bool PCF_ClockCtrl(bool bRun);
+bool PCF_SetTime(RTC_TimeTypeDef *rtcInit_Time, bool bIsBin);
+bool PCF_SetDate(RTC_DateTypeDef *rtcInit_Date, bool bIsBin);
+bool PCF_GetTime(RTC_TimeTypeDef *rtcRet_Time, bool bIsBin);
+bool PCF_GetDate(RTC_DateTypeDef *rtcRet_Date, bool bIsBin);
+bool PCF_InitTime(RTC_TimeTypeDef *prtcTime, RTC_DateTypeDef *prtcDate, bool bIsBin);
+bool PCF_WriteDateTime_BKP(void);
+DWORD PCF_ReadDateTime_BKP(void);
+void PCF_ResetDateTime_BKP(void);
+#endif
+
+
+//============================================================================//
+#endif //_PCF_DRIVER_H_

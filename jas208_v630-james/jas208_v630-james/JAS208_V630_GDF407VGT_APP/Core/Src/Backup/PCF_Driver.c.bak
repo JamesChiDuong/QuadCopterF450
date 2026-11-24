@@ -1,0 +1,846 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "PCF_Driver.h"
+
+#include "stm32fxxx_hal_user.h"
+#include "CommFunc.h"
+#include "HW_Config.h"
+#include "LCD_Key.h"
+#include "System.h"
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+
+bool g_bPCF_EN = 0;
+
+uint8_t u8PCF_ErrCnt = 0;
+
+bool bPCF_Stop = FALSE;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+#if PCF_TYPE == PCF8563
+//============================================================================//
+// @brief  Make the PCF IC ready to communicate again.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PCF_ReInit(void)
+{
+	HAL_I2C_DeInit(&hi2c2);
+
+	// Reconfig SCL and SDA
+	HW_PBClr(PCF_SCL);
+	HW_PBInit(PCF_SCL, FALSE);
+	HW_PBInit(PCF_SDA, FALSE);
+
+	// Send restart pulses to the IC
+	for(int i = 0; i < 9; i++)
+	{
+		HW_PBSet(PCF_SCL);
+		
+		Delay_uS(10);
+		
+		HW_PBClr(PCF_SCL);
+		
+		Delay_uS(10);
+	}
+
+	// Put SCL and SDA back to normal state
+	HW_PBDeInit(PCF_SCL, FALSE);
+	HW_PBDeInit(PCF_SDA, FALSE);
+
+	USER_I2C2_Init();
+}
+
+//============================================================================//
+// @brief  Deinit the PCF communication interface.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PCF_DeInit(void)
+{
+	HAL_I2C_DeInit(&hi2c2);
+}
+
+//============================================================================//
+// @brief  Restart IC PCF.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PCF_Restart(void)
+{
+  uint8_t u8PCF_RestartCnt = 0;
+	
+	
+	u8PCF_RestartCnt = HW_ReadBackupRegister(PCF_ERROR_CHK);
+	
+  if(bPCF_Stop == TRUE)
+		return;
+	
+	u8PCF_RestartCnt++;
+	
+	HW_WriteBackupRegister(PCF_ERROR_CHK, u8PCF_RestartCnt);
+	
+	if(u8PCF_RestartCnt >= PCF_RESTART_CNT_MAX)
+	{
+		RTOSprintf("\r\n> Maximum PCF restart reached. Report IC PCF ERROR!");
+		
+		u8PCF_RestartCnt = 0;
+		
+		HW_WriteBackupRegister(PCF_ERROR_CHK, u8PCF_RestartCnt);
+		
+		bPCF_Stop = TRUE;
+		
+		#if ENABLE_GSM_NET
+		GSM_TCP_ReportEvent(EVENT_PCF_FAIL, STR_NULL);
+		#endif
+		
+		LCD_SetShowAutoTestPage(55);
+		
+		return;
+	}
+	
+	if(bRTOS_En)
+	{
+		osMutexWait(mutex_setting_user, S_2_mS(5));
+	}
+	
+	System_Reset();
+}
+
+//============================================================================//
+// @brief  Check if the PCF IC is ready or not.
+// @param  None.
+// @retval TRUE: IC PCF is ready to communicate.
+//         FALSE: IC PCF is not ready.
+//============================================================================//
+bool PCF_IsReady(void)
+{
+	HAL_StatusTypeDef halRes;
+
+
+	//PCF_ReInit();
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_i2c2_user, S_2_mS(10));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	halRes = HAL_I2C_IsDeviceReady(&hi2c2, PCF_ADDR_I2C,
+	                               PCF_MAX_TRIALS, PCF_MAX_TIMEOUT);
+	
+	if(bRTOS_En)
+	  osMutexRelease(mutex_i2c2_user);
+
+	if(halRes == HAL_OK)
+		return TRUE;
+	else
+	{
+		u8PCF_ErrCnt++;
+		
+		if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		{
+		  u8PCF_ErrCnt = 0;
+			
+			if(bPCF_Stop == FALSE)
+			{
+			  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+			  PCF_Restart();
+			}
+		}
+		
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Start or stop PCF source clock.
+// @param  bRun: Clock start/stop: 1: Start
+//                                 0: Stop.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_ClockCtrl(bool bRun)
+{
+	uint8_t u8RegAddr = PCF8563_REG_CTL1;
+	uint8_t u8RegVal = 0;
+	uint8_t u8RegBuf[2];
+
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_i2c2_user, S_2_mS(10));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	// Send control register 1 address
+	if(HAL_I2C_Master_Transmit(&hi2c2, PCF_ADDR_I2C, &u8RegAddr,
+	                           1, PCF_MAX_TIMEOUT ) != HAL_OK)
+	{
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		u8PCF_ErrCnt++;
+		
+		if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		{
+		  u8PCF_ErrCnt = 0;
+			
+			if(bPCF_Stop == FALSE)
+			{
+			  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+			  PCF_Restart();
+			}
+		}
+		
+		return FALSE;
+	}
+
+	//PCF_ReInit();
+
+	// Read control register 1 value
+	if(HAL_I2C_Master_Receive(&hi2c2, PCF_ADDR_I2C, &u8RegVal,
+	                          1, PCF_MAX_TIMEOUT) != HAL_OK)
+	{
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		u8PCF_ErrCnt++;
+		
+		if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		{
+		  u8PCF_ErrCnt = 0;
+			
+			if(bPCF_Stop == FALSE)
+			{
+			  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+			  PCF_Restart();
+			}
+		}
+		
+		return FALSE;
+  }
+	
+	u8RegBuf[0] = u8RegAddr;
+
+	if(bRun)
+		// Reset source clock control bit
+		u8RegBuf[1] = u8RegVal & PCF8563_CLOCK_START_MASK;
+	else
+		// Set source clock control bit
+		u8RegBuf[1] = u8RegVal | PCF8563_CLOCK_STOP_MASK;
+
+	if(HAL_I2C_Master_Transmit(&hi2c2, PCF_ADDR_I2C, u8RegBuf,
+	                           sizeof(u8RegBuf)/sizeof(u8RegBuf[0]), PCF_MAX_TIMEOUT ) == HAL_OK)
+  {
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		return TRUE;
+	}
+	else
+	{
+    if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		u8PCF_ErrCnt++;
+		
+		if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		{
+		  u8PCF_ErrCnt = 0;
+			
+			if(bPCF_Stop == FALSE)
+			{
+			  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+			  PCF_Restart();
+			}
+		}
+		
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Set time parameters for the PCF IC.
+// @param  prtcInit_Time: Pointer to RTC_TimeTypeDef struct, using BCD format.
+// @param  bIsBin: Is the input time struct in the Binary format or not.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_SetTime(RTC_TimeTypeDef *prtcInit_Time, bool bIsBin)
+{
+	uint8_t u8TimeBuf[4];
+
+
+	// Make sure the pointer is not null
+	if(!prtcInit_Time)
+		return FALSE;
+
+	//PCF_ReInit();
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_i2c2_user, S_2_mS(10));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	u8TimeBuf[0] = PCF8563_REG_TIME_START_ADDR; // 0x02
+	u8TimeBuf[1] = prtcInit_Time->Seconds; // 0x02 Seconds
+	u8TimeBuf[2] = prtcInit_Time->Minutes; // 0x03 Minute
+	u8TimeBuf[3] = prtcInit_Time->Hours; // 0x04 Hours
+
+	// If the input time is in the Binary format
+	if(bIsBin)
+		for(int i = 1; i < 4; i++)
+			u8TimeBuf[i] = Bin_2_BCD(u8TimeBuf[i]);
+
+	// Reset bit 7 of the VL_seconds register
+	u8TimeBuf[1] &= PCF8563_SEC_MASK;
+
+	if(HAL_I2C_Master_Transmit(&hi2c2, PCF_ADDR_I2C, u8TimeBuf,
+	                           sizeof(u8TimeBuf)/sizeof(u8TimeBuf[0]), PCF_MAX_TIMEOUT ) == HAL_OK)
+  {
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		return TRUE;
+	}
+  else
+	{
+    if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		u8PCF_ErrCnt++;
+		
+		if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		{
+		  u8PCF_ErrCnt = 0;
+			
+			if(bPCF_Stop == FALSE)
+			{
+			  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+			  PCF_Restart();
+			}
+		}
+		
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Set date parameters for the PCF IC.
+// @param  prtcInit_Date: Pointer to RTC_DateTypeDef struct, using BCD format.
+// @param  bIsBin: Is the input date struct in the Binary format or not.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_SetDate(RTC_DateTypeDef *prtcInit_Date, bool bIsBin)
+{
+	uint8_t u8DateBuf[5];
+
+
+	// Make sure the pointer is not null
+	if(!prtcInit_Date)
+		return FALSE;
+
+	//PCF_ReInit();
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_i2c2_user, S_2_mS(10));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	u8DateBuf[0] = PCF8563_REG_DATE_START_ADDR; // 0x05
+	u8DateBuf[1] = prtcInit_Date->Date; // 0x05 Day
+	u8DateBuf[2] = prtcInit_Date->WeekDay; // 0x06 Week Day
+	u8DateBuf[3] = prtcInit_Date->Month; // 0x07 Month
+	u8DateBuf[4] = prtcInit_Date->Year; // 0x08 Year
+
+	// If the input date is in the Binary format
+	if(bIsBin)
+		for(int i = 1; i < 5; i++)
+			u8DateBuf[i] = Bin_2_BCD(u8DateBuf[i]);
+
+	// Reset bit 7 in the Century_months register
+	u8DateBuf[3] &= PCF8563_MON_MASK;
+
+	// Send 3 bytes of time to PCF corresponding register
+	if(HAL_I2C_Master_Transmit(&hi2c2, PCF_ADDR_I2C, u8DateBuf,
+	                           sizeof(u8DateBuf)/sizeof(u8DateBuf[0]), PCF_MAX_TIMEOUT) == HAL_OK)
+  {
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		return TRUE;
+	}
+	else
+	{
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		u8PCF_ErrCnt++;
+		
+		if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		{
+		  u8PCF_ErrCnt = 0;
+			
+			if(bPCF_Stop == FALSE)
+			{
+			  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+			  PCF_Restart();
+			}
+		}
+		
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Get time values from the PCF IC.
+// @param  prtcRet_Time: Pointer to RTC_TimeTypeDef struct.
+// @param  bIsBin: Is the returned time struct required to be
+//                 in the Binary format or not.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_GetTime(RTC_TimeTypeDef *prtcRet_Time, bool bIsBin)
+{
+	HAL_StatusTypeDef halRes;
+	uint8_t start_addr = PCF8563_REG_TIME_START_ADDR;
+	uint8_t u8TimeBuf[3] = {0};
+
+
+	// Make sure the pointer is not null
+	if(!prtcRet_Time)
+		return FALSE;
+
+	//PCF_ReInit();
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_i2c2_user, S_2_mS(10));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+	
+	// Send start address
+	halRes = HAL_I2C_Master_Transmit(&hi2c2, PCF_ADDR_I2C, &start_addr,
+	                                 1, PCF_MAX_TIMEOUT);
+	
+	if(halRes != HAL_OK)
+  {
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+    if(halRes == HAL_BUSY)
+		{
+		  PCF_ReInit();
+		}
+		else
+    {  		
+		  u8PCF_ErrCnt++;
+		
+		  if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		  {
+		    u8PCF_ErrCnt = 0;
+			
+		  	if(bPCF_Stop == FALSE)
+		  	{
+		  	  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+		  	  PCF_Restart();
+		  	}
+		  }
+		}
+		
+		return FALSE;
+	}
+	
+  // Read 3 bytes of seconds, minutes, hours
+	halRes = HAL_I2C_Master_Receive(&hi2c2, (uint16_t)PCF_ADDR_I2C, u8TimeBuf,
+	                                3, PCF_MAX_TIMEOUT);
+	
+	if(halRes != HAL_OK)
+	{
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		if(halRes == HAL_BUSY)
+		{
+		  PCF_ReInit();
+		}
+		else
+		{
+		  u8PCF_ErrCnt++;
+		
+		  if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+		  {
+		    u8PCF_ErrCnt = 0;
+			
+		  	if(bPCF_Stop == FALSE)
+		  	{
+		  	  RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+			
+		  	  PCF_Restart();
+		  	}
+		  }
+		}
+		
+		return FALSE;
+	}
+
+	u8TimeBuf[0] &= PCF8563_SEC_MASK; // Seconds
+	u8TimeBuf[1] &= PCF8563_MIN_MASK;	// Minutes
+	u8TimeBuf[2] &= PCF8563_HOUR_MASK; // Hours
+
+	// If the returned time is required in the Binary format
+	if(bIsBin)
+		for(int i = 0; i < 3; i++)
+			u8TimeBuf[i] = BCD_2_Bin(u8TimeBuf[i]);
+
+	prtcRet_Time->Seconds = u8TimeBuf[0]; // Seconds
+	prtcRet_Time->Minutes = u8TimeBuf[1]; // Minutes
+	prtcRet_Time->Hours = u8TimeBuf[2]; // Hours
+
+	if(bRTOS_En)
+	  osMutexRelease(mutex_i2c2_user);
+	
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Set date values from the PCF IC.
+// @param  prtcRet_Date: Pointer to RTC_DateTypeDef struct.
+// @param  bIsBin: Is the returned date struct required to be
+//                 in the Binary format or not.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_GetDate(RTC_DateTypeDef *prtcRet_Date, bool bIsBin)
+{
+	HAL_StatusTypeDef halRes;
+ 	uint8_t start_addr = PCF8563_REG_DATE_START_ADDR;
+	uint8_t u8DateBuf[4] = {0};
+
+
+	// Make sure the pointer is not null
+	if(!prtcRet_Date)
+		return FALSE;
+
+	//PCF_ReInit();
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_i2c2_user, S_2_mS(10));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	// Send start address
+	halRes = HAL_I2C_Master_Transmit(&hi2c2, PCF_ADDR_I2C, &start_addr,
+	                                 1, PCF_MAX_TIMEOUT);
+	
+	if(halRes != HAL_OK)
+	{
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		if(halRes == HAL_BUSY)
+		{
+		  PCF_ReInit();
+		}
+		else
+		{
+			u8PCF_ErrCnt++;
+			
+			if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+			{
+				u8PCF_ErrCnt = 0;
+				
+				if(bPCF_Stop == FALSE)
+				{
+					RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+				
+					PCF_Restart();
+				}
+			}
+	  }
+		
+		return FALSE;
+  }
+	
+	// Read 4 bytes of day, week day, month, year
+	if(HAL_I2C_Master_Receive(&hi2c2, PCF_ADDR_I2C, u8DateBuf,
+	                          4, PCF_MAX_TIMEOUT) != HAL_OK)
+	{
+		if(bRTOS_En)
+	    osMutexRelease(mutex_i2c2_user);
+		
+		if(halRes == HAL_BUSY)
+		{
+		  PCF_ReInit();
+		}
+		else
+		{
+			u8PCF_ErrCnt++;
+			
+			if(u8PCF_ErrCnt >= PCF_ERR_CNT_MAX)
+			{
+				u8PCF_ErrCnt = 0;
+				
+				if(bPCF_Stop == FALSE)
+				{
+					RTOSprintf("\r\n> Maximum PCF errors reached. Restart IC PCF.");
+				
+					PCF_Restart();
+				}
+			}
+	  }
+		
+		return FALSE;
+  }
+	
+	u8DateBuf[0] &= PCF8563_DAY_MASK; // Day
+	u8DateBuf[1] &= PCF8563_WDAY_MASK; // Week Day
+	u8DateBuf[2] &= PCF8563_MON_MASK; // Month
+	u8DateBuf[3] &= PCF8563_YEAR_MASK; // Year
+
+	// If the returned date is required in the Binary format
+	if(bIsBin)
+		for(int i = 0; i < 4; i++)
+			u8DateBuf[i] = BCD_2_Bin(u8DateBuf[i]);
+
+	prtcRet_Date->Date = u8DateBuf[0]; // Day
+	prtcRet_Date->WeekDay = u8DateBuf[1]; // Week Day
+	prtcRet_Date->Month = u8DateBuf[2]; // Month
+	prtcRet_Date->Year = u8DateBuf[3]; // Year
+
+	if(bRTOS_En)
+	  osMutexRelease(mutex_i2c2_user);
+	
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Setting date time for IC PCF as default system time.
+// @param  prtcTime: Pointer to RTC_TimeTypeDef struct.
+//         prtcDate: Pointer to RTC_DateTypeDef struct.
+//         bIsBin: Is the returned date struct required to be
+//                 in the Binary format or not.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_InitTime(RTC_TimeTypeDef *prtcTime, RTC_DateTypeDef *prtcDate, bool bIsBin)
+{
+	g_bPCF_EN = 0;
+
+	//PCF_ReInit();
+
+	Delay_mS(100);
+
+	if(PCF_IsReady())
+	{
+		RTOSprintf("\r\n> IC PCF is ready.");
+
+		if(PCF_SetTime(prtcTime, bIsBin))
+		{
+			RTOSprintf("\r\n> Setting time for IC PCF successfully.");
+
+			if(PCF_SetDate(prtcDate, bIsBin))
+			{
+				RTOSprintf("\r\n> Setting date for IC PCF successfully.");
+
+				g_bPCF_EN = 1;
+
+				return TRUE;
+			}
+			else
+			{
+				RTOSprintf("\r\n> Setting date for IC PCF fail.");
+
+				return FALSE;
+			}
+		}
+		else
+		{
+			RTOSprintf("\r\n> Setting time for IC PCF fail.");
+
+			return FALSE;
+		}
+	}
+	else
+	{
+		RTOSprintf("\r\n> IC PCF is not ready.");
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Save date time values from PCF IC to a backup register.
+// @param  None.
+// @retval TRUE: Operation success.
+//         FALSE: Operation failed.
+//============================================================================//
+bool PCF_WriteDateTime_BKP(void)
+{
+	RTC_TimeTypeDef rtcTime = {0};
+	RTC_DateTypeDef rtcDate = {0};
+	struct tm tmPCFTimeInfo, *ptmLocalTimeInfo;
+	time_t ttTimeNow;
+	DWORD dwTemp, dwTimeBKP = 0, dwDateBKP = 0;
+
+
+	// Get date time
+	if(!PCF_GetTime(&rtcTime, 1) || !PCF_GetDate(&rtcDate, 1))
+		return FALSE;
+
+	// Year in tm struct is counted from 1900
+	tmPCFTimeInfo.tm_year	= rtcDate.Year + 2000 - 1900U;
+	// Month in tm struct is counted from 0 corresponding to Jan
+	tmPCFTimeInfo.tm_mon	= rtcDate.Month - 1U;
+	tmPCFTimeInfo.tm_mday	= rtcDate.Date;
+	tmPCFTimeInfo.tm_hour	= rtcTime.Hours;
+	tmPCFTimeInfo.tm_min	= rtcTime.Minutes;
+	tmPCFTimeInfo.tm_sec	= rtcTime.Seconds;
+	tmPCFTimeInfo.tm_isdst = -1;
+
+	// Convert time from calendar format to time to second
+	ttTimeNow = mktime(&tmPCFTimeInfo);
+
+	// Add timezone offset to time in second
+	ttTimeNow += g_Setting.i32TimeZoneOffset;
+
+	// Convert local time in second to local time in calendar format
+	ptmLocalTimeInfo = localtime(&ttTimeNow);
+
+	// Copy date values to dwDateBKP
+	// bit15:9, Year from 1980 (0..127)
+	dwTemp = ptmLocalTimeInfo->tm_year + 1900U - 1980U;
+	dwDateBKP |= dwTemp << 9;
+
+	// bit8:5, Month (1..12)
+	dwTemp = ptmLocalTimeInfo->tm_mon + 1U;
+	dwDateBKP |= dwTemp << 5;
+
+	// bit4:0, Day in month(1..31)
+	dwTemp = ptmLocalTimeInfo->tm_mday;
+	dwDateBKP |= dwTemp;
+
+	// Copy time values to dwTimeBKP
+	// bit15:11, Hour (0..23)
+	dwTemp = ptmLocalTimeInfo->tm_hour;
+	dwTimeBKP |= dwTemp << 11;
+
+	// bit10:5, Minute (0..59)
+	dwTemp = ptmLocalTimeInfo->tm_min;
+	dwTimeBKP |= dwTemp << 5;
+
+	// bit4:0, Second / 2 (0..29)
+	dwTemp = ptmLocalTimeInfo->tm_sec / 2;
+	dwTimeBKP |= dwTemp;
+
+	// Enable access to backup domain
+	//HAL_PWR_EnableBkUpAccess();
+
+	// Save date values to BKP_DR3
+	HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR3, dwDateBKP);
+
+	// Save time values to BKP_DR4
+	HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR4, dwTimeBKP);
+
+	// Disable access to backup domain
+	//HAL_PWR_DisableBkUpAccess();
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Read date time from backup register.
+// @param  None.
+// @retval Result: Date time in DWORD format.
+//============================================================================//
+DWORD PCF_ReadDateTime_BKP(void)
+{
+	DWORD dwDateTime = 0, dwTimeBKP, dwDateBKP;
+
+
+	// Read date values from BKP_DR3
+	dwDateBKP = HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR3) ;
+
+	// Read time values from BKP_DR3
+	dwTimeBKP = HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR4);
+
+	// Date values is stored in the upper 16 bits
+	dwDateTime |= dwDateBKP << 16;
+
+	// Time values is stored in the lower 16 bits
+	dwDateTime |= dwTimeBKP;
+
+	return dwDateTime;
+}
+
+//============================================================================//
+// @brief  Reset date time values in backup register.
+// @param  None.
+// @retval None.
+//============================================================================//
+void PCF_ResetDateTime_BKP(void)
+{
+	// Enable access to backup domain
+	//HAL_PWR_EnableBkUpAccess();
+
+	// Reset BKP_DR3
+	HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR3, 0);
+
+	// Reset BKP_DR4
+	HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR4, 0);
+
+	// Disable access to backup domain
+	//HAL_PWR_DisableBkUpAccess();
+}
+#endif

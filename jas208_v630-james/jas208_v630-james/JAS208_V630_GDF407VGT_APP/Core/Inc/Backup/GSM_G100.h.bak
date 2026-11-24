@@ -1,0 +1,78 @@
+#ifndef _GSM_G100_H_
+#define _GSM_G100_H_
+//============================================================================//
+
+//============================================================================//
+// Public typedef
+//============================================================================//
+
+//============================================================================//
+// Public define
+//============================================================================//
+
+//============================================================================//
+// Public macro or Function
+//============================================================================//
+
+//============================================================================//
+// Public variables
+//============================================================================//
+// 重置 GSM, 可設定重新啟動的時間, 單位為秒
+void G100_Reset(uint8_t RestartTime);
+//
+void G100_Init(void);
+
+//
+void G100_SendData(GSM_SOCKET_DATA_t SocketData);
+//
+uint8_t G100_GetSocketNum(uint8_t BankNum);
+
+//
+bool G100_GetPowerStatus(void);
+//
+bool G100_ChkCmdBusy(void);
+//
+bool G100_GetOperatorStatus(void);
+//
+bool G100_GetNetStatus(void);
+//
+GSM_NET_MODE_t G100_GetNetMode(void);
+//
+bool G100_GetDialStatus(void);
+//
+bool G100_GetCallStatus(void);
+//
+bool G100_GetSendStatus(void);
+//
+bool G100_GetSQ(uint8_t *GSM_SQ);
+
+//
+void G100_SetSpeakerGain(void);
+//
+void G100_SetMicrophoneGain(void);
+//
+void G100_CallDialNum(char *pStr);
+//
+void G100_CallAnswer(void);
+//
+void G100_CallHangUp(void);
+
+//
+void G100_SendMessage(GSM_MSG_DATA_t MsgData);
+//
+bool G100_SendMessageEvent(char *pStr);
+
+//
+void G100_BuildCmdData(GSM_CMD_DATA_t CmdData);
+//
+void G100_BuildTestCmd(char *CMD);
+
+//
+bool G100_SystemUpgrade(void);
+//
+bool G100_SystemBackup(time_t BackupTime);
+//
+bool G100_SystemPhoto(time_t PhotoTime);
+
+//============================================================================//
+#endif /* _GSM_G100_H_ */

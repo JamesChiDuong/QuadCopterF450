@@ -1,0 +1,75 @@
+#ifndef _GSM_SIM968_H_
+#define _GSM_SIM968_H_
+//============================================================================//
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "stm32fxxx_hal_user.h"
+#include "DataType.h"
+#include "GSM_Driver.h"
+
+
+//============================================================================//
+// Public Function Prototypes
+//============================================================================//
+#if ENABLE_GSM_SIM968
+// 重置 GSM, 可設定重新啟動的時間, 單位為秒
+void SIM968_Reset(uint8_t RestartTime);
+//
+void SIM968_Init(void);
+
+//
+void SIM968_SendData(GSM_SOCKET_DATA_t SocketData);
+//
+uint8_t SIM968_GetSocketNum(uint8_t BankNum);
+
+//
+bool SIM968_GetPowerStatus(void);
+//
+bool SIM968_ChkCmdBusy(void);
+//
+bool SIM968_GetOperatorStatus(void);
+//
+bool SIM968_GetNetStatus(void);
+//
+GSM_NET_MODE_t SIM968_GetNetMode(void);
+//
+bool SIM968_GetDialStatus(void);
+//
+bool SIM968_GetCallStatus(void);
+//
+bool SIM968_GetSendStatus(void);
+//
+bool SIM968_GetSQ(uint8_t *GSM_SQ);
+
+//
+void SIM968_SetSpeakerGain(void);
+//
+void SIM968_SetMicrophoneGain(void);
+//
+void SIM968_CallDialNum(char *pStr);
+//
+void SIM968_CallAnswer(void);
+//
+void SIM968_CallHangUp(void);
+
+//
+void SIM968_SendMessage(GSM_MSG_DATA_t MsgData);
+//
+bool SIM968_SendMessageEvent(char *pStr);
+
+//
+void SIM968_BuildCmdData(GSM_CMD_DATA_t CmdData);
+//
+void SIM968_BuildTestCmd(char *CMD);
+
+//
+bool SIM968_SystemUpgrade(void);
+//
+bool SIM968_SystemBackup(time_t BackupTime);
+//
+bool SIM968_SystemPhoto(time_t PhotoTime);
+#endif
+//============================================================================//
+#endif /* _GSM_SIM968_H_ */

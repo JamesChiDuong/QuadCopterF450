@@ -1,0 +1,2870 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "SD_Module.h"
+
+#include <stdarg.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Default.h"
+#include "diskio.h"
+#include "fatfs.h"
+#include "PCF_Driver.h"
+#include "System.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+//#define	TIMER_SD_PROC			    S_2_mS(1)
+
+#define PROC_SD_ERROR_START		0
+
+#define PROC_SD_ERROR_SETP1		1
+
+#define PROC_SD_ERROR_SETP2		2
+
+//#define PROC_SD_ERROR_STOP		PROC_SD_ERROR_SETP2
+
+#define COUNT_SD_RETRY_MAX		(PROC_SD_ERROR_SETP2 + 1)
+
+#define SD_READ_COUNT_MAX			10
+
+#define SD_ERROR_MAX_CNT      50
+
+#define SD_CMD_DELAY					5
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+FRESULT frRes;
+
+DIR dirSD_Handle;
+
+char cSD_FilePath[128];
+
+uint8_t u8SD_Buf[SD_BUFFER_SIZE];
+
+uint8_t u8SD_ReadCount = 0;
+
+uint8_t u8SD_InitCount = 0;
+
+uint8_t u8SD_NoInit = 0;
+
+bool bSD_ReInit = TRUE;
+
+static uint8_t u8SD_Err = 0;
+
+SD_RequestTypeDef sdRequest;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Get SD Card Info.
+// @param  None.
+// @retval None
+//============================================================================//
+void SD_GetInfo(void)
+{
+	SD_CardInfo sdCardInfo;
+	SD_Error sdStat;
+
+
+	//Delay_mS(10);
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return;
+	}
+
+	sdStat = SD_GetCardInfo(&sdCardInfo);
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	//#if ENABLE_DEBUG_MSG
+	if(sdStat == SD_RESPONSE_NO_ERROR)
+	{
+		RTOSprintf("\r\n> SD disk Product name: %c%c%c%c%c!",
+		           (sdCardInfo.SD_cid.ProdName1 >> 24) & 0xFF,
+		           (sdCardInfo.SD_cid.ProdName1 >> 16) & 0xFF,
+		           (sdCardInfo.SD_cid.ProdName1 >> 8) & 0xFF,
+		           sdCardInfo.SD_cid.ProdName1 & 0xFF,
+		           sdCardInfo.SD_cid.ProdName2);
+
+		RTOSprintf("\r\n> SD disk ManufactDate: 20%02d.%d!",
+		           (sdCardInfo.SD_cid.ManufactDate & 0x0ff0) >> 4,
+		           (sdCardInfo.SD_cid.ManufactDate & 0x0f));
+
+		RTOSprintf("\r\n> SD disk capacity : %d MB\r\n",
+		           (uint32_t)((long long)sdCardInfo.CardCapacity * sdCardInfo.CardBlockSize / 1024768));
+	}
+	else
+		RTOSprintf("\r\nSD get information ERROR %d.", sdStat);
+	//#endif
+
+	HAL_Delay(1);
+}
+
+//============================================================================//
+// @brief  Check SD card status.
+// @param  bInit: Initialize SD card or not.
+// @retval Result: TRUE: SD card works normally.
+//                 FALSE: SD card not present/ work normally.
+//============================================================================//
+static bool SD_FS_Check(bool bInit)
+{
+	bool bRes;
+	DSTATUS dsStat;
+	static uint8_t u8RetryCnt = 0;
+
+
+	if(bInit == TRUE)
+	{
+		dsStat = disk_initialize(DRV_SD);
+	}
+	else if(bSD_ReInit == TRUE)
+	{
+		if(SD_GetStatus() == SD_RESPONSE_NO_ERROR)
+		{
+			dsStat = STA_READY;
+		}
+		else
+		{
+			dsStat = disk_initialize(DRV_SD);
+		}
+	}
+	else
+	{
+		dsStat = disk_status(DRV_SD);
+	}
+
+	//#if ENABLE_DEBUG_MSG
+	//RTOSprintf("\r\n> dsStat:%d.", dsStat);
+	//#endif
+
+	switch(dsStat)
+	{
+		case STA_OK:
+			{
+				FRESULT frRes;
+
+
+				SD_GetInfo();
+
+				frRes = f_mount(&USERFatFS, (TCHAR const*)USERPath, 1);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD file system initialized OK.");
+#endif
+
+					g_u8HwInfo = (g_u8HwInfo | 0x08);
+
+					RTOSprintf("\r\n> Check SD Card OK. (0x%02X)", g_u8HwInfo);
+
+					bRes = TRUE;
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD initialization mounting result:%d.", frRes);
+					//#endif
+
+					u8SD_ReadCount++;
+
+					if(u8SD_ReadCount >= SD_READ_COUNT_MAX)
+					{
+						bRes = FALSE;
+
+						System_Reset();
+					}
+					else
+					{
+						//#if ENABLE_DEBUG_MSG
+						RTOSprintf("\r\n> SD file system initializing ERROR.");
+						//#endif
+
+						g_u8HwInfo = (g_u8HwInfo & 0xF7);
+
+						RTOSprintf("\r\n> Check SD Card FAIL. (0x%02X)", g_u8HwInfo);
+
+						bRes = FALSE;
+					}
+				}
+			}
+			break;
+
+		case STA_READY:
+
+			u8SD_NoInit = 0;
+
+			bRes = TRUE;
+			break;
+
+		case STA_NOINIT:
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD initializing ERROR % d TIMES.", u8SD_NoInit);
+			//#endif
+
+			u8SD_NoInit ++;
+			if(u8SD_NoInit >= 10 )
+			{
+				u8SD_NoInit = 0;
+
+				//#if ENABLE_DEBUG_MSG
+				RTOSprintf("\r\n> System Restart due to SD ISSUE...");
+				//#endif
+
+				System_Reset();
+			}
+
+			bRes = FALSE;
+			break;
+
+		case STA_NODISK:
+
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD card is NOT DETECTED.");
+			//#endif
+
+			bRes = FALSE;
+			break;
+
+		default:
+			bRes = FALSE;
+			break;
+	}
+
+	if(bInit == TRUE)
+		return bRes;
+
+	if(bRes == TRUE)
+	{
+		bSD_ReInit = FALSE;
+
+		u8RetryCnt = 0;
+	}
+	else
+	{
+		bSD_ReInit = TRUE;
+
+#if ENABLE_GSM_NET && ENABLE_EVENT_SD_ERROR
+		if(u8RetryCnt == PROC_SD_ERROR_START)
+		{
+			if(GSM_GetNetStatus() == TRUE)
+			{
+				if(GSM_ChkCmdBusy() == TRUE)
+					return RESULT;
+
+				GSM_TCP_SendDATA(STR_EVENT_SD_ERROR, STR_NULL);
+			}
+		}
+
+		if(u8RetryCnt == PROC_SD_ERROR_SETP1)
+		{
+			if(GSM_GetOperatorStatus() == TRUE)
+			{
+				if(GSM_ChkCmdBusy() == TRUE)
+					return RESULT;
+
+				GSM_TCP_SendDATA(STR_EVENT_SD_ERROR, STR_EVENT_ARGUMENT_SMS);
+			}
+		}
+
+		if(u8RetryCnt == PROC_SD_ERROR_SETP2)
+		{
+			if(GSM_ChkCmdBusy() == TRUE)
+				return RESULT;
+		}
+#endif
+
+		if(u8RetryCnt < COUNT_SD_RETRY_MAX)
+		{
+			u8RetryCnt++;
+		}
+		else
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n>>> System_Reset due to SD ISSUE...");
+			//#endif
+
+			System_Reset();
+		}
+	}
+
+	return bRes;
+}
+
+//============================================================================//
+// @brief  Get SD card status with reinitialization.
+// @param  None.
+// @retval Result: TRUE: SD card works normally.
+//                 FALSE: SD card not present/ work normally.
+//============================================================================//
+bool SD_FS_GetStatus(void)
+{
+	bool bResult;
+
+
+	bSD_ReInit = TRUE;
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	bResult = SD_FS_Check(FALSE);
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	return bResult;
+}
+
+//============================================================================//
+// @brief  Initialize SD card.
+// @param  None.
+// @retval Result: TRUE: SD card is initialized successfully.
+//                 FALSE: SD card initialization is fail.
+//============================================================================//
+bool SD_Init(void)
+{
+	Delay_mS(S_2_mS(1));
+
+	if(SD_FS_Check(TRUE) == TRUE)
+	{
+		/*
+		if(SD_CheckFileExist((char *)FILENAME_SYSLOG))
+		{
+			bool bRes = SD_RemoveFile((char *)FILENAME_SYSLOG);
+
+			if(bRes)
+			  RTOSprintf("\r\n> Remove file SYSLOG OK.");
+			else
+				RTOSprintf("\r\n> Remove file SYSLOG ERROR.");
+		}
+		*/
+
+		return TRUE;
+	}
+	else
+		return FALSE;
+
+	/*
+	//
+	do
+	{
+		//
+		Delay_mS(S_2_mS(1));
+
+	}while(SD_FS_Check(TRUE) == FALSE);
+
+	//
+	System_Reset();
+	*/
+}
+
+//============================================================================//
+// @brief  Deinitialize SD card.
+// @param  None.
+// @retval Result: TRUE: SD card deinitialization success.
+//                 FALSE: SD card deinitialization is fail.
+//============================================================================//
+bool SD_Deinit(void)
+{
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	if(disk_status(DRV_SD) == STA_READY)
+	{
+		if(f_mount(NULL, (TCHAR const*)USERPath, 0) == FR_OK)
+		{
+			if(bRTOS_En)
+				osMutexRelease(mutex_spi2_user);
+
+			HAL_Delay(1);
+
+			return TRUE;
+		}
+		else
+		{
+			if(bRTOS_En)
+				osMutexRelease(mutex_spi2_user);
+
+			HAL_Delay(1);
+
+			return FALSE;
+		}
+	}
+	else
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+}
+
+//============================================================================//
+// @brief  Check if a directory exists.
+// @param  pcDirName: Pointer to a char array storing the directory name.
+// @retval Result: TRUE: The directory exists.
+//                 FALSE: The directory does not exist/ the operation is fail.
+//============================================================================//
+bool SD_CheckDirExist(char *pcDirName)
+{
+	//FRESULT frRes;
+	uint8_t u8TryCnt = 0;
+
+
+	if(strlen(pcDirName) == 0)
+		return FALSE;
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+		return FALSE;
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	do
+	{
+		// Try to open directory
+		frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+		u8TryCnt++;
+
+	}
+	while((frRes != FR_OK) && (u8TryCnt < 2));
+
+	if(frRes == FR_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(frRes != 5)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD open directory %s ERROR %d.", pcDirName, frRes);
+			//#endif
+		}
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Create a new directory.
+// @param  pcDirName: Pointer to a char array storing the directory name.
+// @retval Result: TRUE: The operation is successful.
+//                 FALSE: The operation is fail.
+//============================================================================//
+bool SD_MakeDir(char *pcDirName)
+{
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcDirName);
+
+	frRes = f_mkdir(cSD_FilePath);
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	if(frRes == FR_OK)
+		return TRUE;
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD make new directory %s ERROR %d.", pcDirName, frRes);
+		//#endif
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Remove a directory if it exists.
+// @param  pcDirName: Pointer to a char array storing the directory name.
+// @retval Result: TRUE: The operation is successful.
+//                 FALSE: The operation is fail.
+//============================================================================//
+bool SD_RemoveDir(char *pcDirName)
+{
+	if(SD_CheckDirExist(pcDirName) == FALSE)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD file %s does not exist anymore.", pcDirName);
+#endif
+
+		return TRUE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcDirName);
+
+	frRes = f_unlink(cSD_FilePath);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD remove directory %s OK.", pcDirName);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD remove directory %s ERROR %d.", pcDirName, frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Check if a file name matches with a name or not.
+// @param  pcFileName: Pointer to the file name to be checked.
+//         pcFilter: Name to be compared with.
+// @retval Result: TRUE: The name is matched.
+//                 FALSE: The name is not matched.
+//============================================================================//
+static bool SD_CheckFileByName(char *pcFileName, char *pcFilter)
+{
+	char *pcStr;
+	uint8_t u8DataBuf[128];
+
+
+	pcStr = (char *)u8DataBuf;
+
+	strcpy(pcStr, pcFileName);
+
+	// Get file name only
+	StopChar(pcStr, '.');
+
+	if(strncmp(pcStr, pcFilter, strlen(pcFilter)) != 0)
+		return FALSE;
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Check if a file name matches with an extension or not.
+// @param  pcFileName: Pointer to the file name to be checked.
+//         pcFilter: Extension to be compared with.
+// @retval Result: TRUE: The extension is matched.
+//                 FALSE: The extension is not matched.
+//============================================================================//
+static bool SD_CheckFileByExten(char *pcFileName, char *pcFilter)
+{
+	uint8_t u8DataBuf[128];
+	char *pcStr;
+
+
+	pcStr = (char *)u8DataBuf;
+
+	strcpy(pcStr, pcFileName);
+
+	// Get file extension only
+	StopChar(pcStr, '.');
+
+	pcStr += strlen(pcStr) + 1;
+
+	if(strncmp(pcStr, pcFilter, strlen(pcFilter)) != 0)
+		return FALSE;
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Check if a file is existing.
+// @param  pcFileName: Pointer to the file name to be checked.
+// @retval Result: TRUE: The file exists.
+//                 FALSE: The file not exist/ operation ERRORed.
+//============================================================================//
+bool SD_CheckFileExist(char *pcFileName)
+{
+	//FRESULT frRes;
+	uint8_t u8TryCnt = 0;
+
+
+	if(strlen(pcFileName) == 0)
+		return FALSE;
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+		return FALSE;
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	// Open directory
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d.", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...", u8SD_Err);
+			//#endif
+
+			System_Reset();
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	do
+	{
+		// Try to open file
+		frRes = f_open(&USERFile, cSD_FilePath, FA_READ);
+
+		u8TryCnt++;
+
+	}
+	while((frRes != FR_OK) && (u8TryCnt < 2));
+
+	if(frRes == FR_OK)
+	{
+		for(int i = 0; i < 3; i++)
+		{
+			frRes = f_close(&USERFile);
+
+			if(frRes == FR_OK)
+				break;
+		}
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(frRes != 4)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD open file %s ERROR %d.", pcFileName, frRes);
+			//#endif
+		}
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Find a file having a suggested name.
+// @param  pcFindName: Pointer to the file name to find.
+//         pcReturnName: Pointer to the name of the found file.
+// @retval Result: TRUE: A suitable file is found.
+//                 FALSE: No file is found.
+//============================================================================//
+bool SD_FindFileName(char *pcFindName, char *pcReturnName)
+{
+	bool bRes = FALSE;
+	FILINFO finfoHandle;
+	char cName[50] = {0}, cExten[5] = {0};
+	char *pcFileName, *pcStr;
+
+
+	if(strlen(pcFindName) == 0)
+		return FALSE;
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	strcpy(cSD_FilePath, pcFindName);
+
+	pcStr = cSD_FilePath;
+
+	// Split name and extension
+	StopChar(pcStr, '.');
+
+	strcpy(cName, pcStr);
+
+#if ENABLE_DEBUG_MSG
+	RTOSprintf("\r\n> SD find file with name:\"%s\".", cName);
+#endif
+
+	if(strlen(pcStr) < strlen(pcFindName)) // If there is extension
+	{
+		pcStr += strlen(pcStr) + 1;
+
+		strcpy(cExten, pcStr);
+	}
+	else // If there is no extension
+		sprintf(cExten, "*");
+
+#if ENABLE_DEBUG_MSG
+	RTOSprintf("\r\n> SD find file with extension:\"%s\".", cExten);
+#endif
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...", u8SD_Err);
+			//#endif
+			System_Reset();
+
+			Delay_mS(500);
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	// If use long file name format
+#if _USE_LFN
+	char cLFN[_MAX_LFN + 1];
+	finfoHandle.lfname = cLFN;
+	finfoHandle.lfsize = sizeof(cLFN);
+#endif
+
+	// Check files through the SD card
+	while(f_readdir(&dirSD_Handle, &finfoHandle) == FR_OK)
+	{
+		// If file attribute is AM_ARC then continue
+		if((finfoHandle.fattrib & AM_ARC) == 0)
+			continue;
+
+		// If encounter no name files then stop
+		if(finfoHandle.fname[0] == 0)
+			break;
+
+#if _USE_LFN
+		pcFileName = *finfoHandle.lfname ? finfoHandle.lfname : finfoHandle.fname;
+#else
+		pcFileName = finfoHandle.fname;
+#endif
+
+		//#if ENABLE_DEBUG_MSG
+		//RTOSprintf("\r\n> SD check file name:%s.", pcFileName);
+		//#endif
+
+		// If find a random file
+		if((strcmp(cName, (char *)"*") == 0) && (strcmp(cExten, (char *)"*") == 0))
+		{
+			sprintf(pcReturnName, "%s", pcFileName);
+
+			bRes = TRUE;
+
+			break;
+		}
+		else if(strcmp(cExten, (char *)"*") == 0) // If not care about file extension
+		{
+			if(SD_CheckFileByName(pcFileName, cName) == TRUE)
+			{
+				sprintf(pcReturnName, "%s", pcFileName);
+
+				bRes = TRUE;
+
+				break;
+			}
+		}
+		else if(strcmp(cName, (char *)"*") == 0) // If not care about file name
+		{
+			if(SD_CheckFileByExten(pcFileName, cExten) == TRUE)
+			{
+				sprintf(pcReturnName, "%s", pcFileName);
+
+				bRes = TRUE;
+
+				break;
+			}
+		}
+		else // If both name and extension have to be matched
+		{
+			if((SD_CheckFileByName(pcFileName, cName) == TRUE) &&
+			        (SD_CheckFileByExten(pcFileName, cExten) == TRUE))
+			{
+				sprintf(pcReturnName, "%s", pcFileName);
+
+				bRes = TRUE;
+
+				break;
+			}
+		}
+	}
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	return bRes;
+}
+
+//============================================================================//
+// @brief  Get size of a file.
+// @param  pcFileName: Pointer to file name for getting size.
+// @retval File size in the uint32_t format.
+//============================================================================//
+uint32_t SD_GetFileSize(char *pcFileName)
+{
+	uint32_t u32FileSize = 0;
+
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return 0;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...", u8SD_Err);
+			//#endif
+
+			System_Reset();
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	frRes = f_open(&USERFile, cSD_FilePath, FA_READ);
+
+	// Try to open file
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD open file %s ERROR %d.", pcFileName, frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return 0;
+	}
+
+	// Get file size
+	u32FileSize = f_size(&USERFile);
+
+	f_close(&USERFile);
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	return u32FileSize;
+}
+
+//============================================================================//
+// @brief  Print a list of files in the SD card.
+// @param  None.
+// @retval TRUE: Operation success.
+//         FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_FileList(void)
+{
+	//DIR dirSD_Handle;
+	FILINFO finfoHandle;
+	char *pcFileName;
+	struct tm tmTimeInfo;
+
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...", u8SD_Err);
+			//#endif
+
+			System_Reset();
+
+			Delay_mS(500);
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	// If use long name format
+#if _USE_LFN
+	char cLFN[_MAX_LFN + 1];
+	finfoHandle.lfname = cLFN;
+	finfoHandle.lfsize = sizeof(cLFN);
+#endif
+
+	RTOSprintf("\r\n@ SD file list:");
+
+	// Check files through the SD card
+	while(f_readdir(&dirSD_Handle, &finfoHandle) == FR_OK)
+	{
+		// If file attribute is AM_ARC then continue
+		if((finfoHandle.fattrib & AM_ARC) == 0)
+			continue;
+
+		//if(finfoHandle.fsize < 1)
+		//	continue;
+
+		// If encounter no name files then stop
+		if(finfoHandle.fname[0] == 0)
+			break;
+
+		// Check file name
+#if _USE_LFN
+		pcFileName = *finfoHandle.lfname ? finfoHandle.lfname : finfoHandle.fname;
+#else
+		pcFileName = finfoHandle.fname;
+#endif
+
+		tmTimeInfo.tm_year = ((finfoHandle.fdate >> 9) & 0x7F) + 1980;
+		tmTimeInfo.tm_mon	= ((finfoHandle.fdate >> 5) & 0x0F);
+		tmTimeInfo.tm_mday = finfoHandle.fdate & 0x1F;
+		tmTimeInfo.tm_hour = (finfoHandle.ftime >> 11) & 0x1F;
+		tmTimeInfo.tm_min = (finfoHandle.ftime >> 5) & 0x3F;
+		tmTimeInfo.tm_sec = (finfoHandle.ftime & 0x1F) * 2;
+
+		if(tmTimeInfo.tm_year > 2100)
+			continue;
+
+		RTOSprintf("\r\n> #NAME:\"%s\",     #SIZE: %d,     #LAST MODIFIED DATE: %04d/%02d/%02d - %02d:%02d:%02d.",
+		           pcFileName, finfoHandle.fsize,
+		           tmTimeInfo.tm_year, tmTimeInfo.tm_mon, tmTimeInfo.tm_mday,
+		           tmTimeInfo.tm_hour, tmTimeInfo.tm_min, tmTimeInfo.tm_sec);
+	}
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Get the last time when a file is modified in local time.
+// @param  pcFileName: Pointer to file name to be checked.
+// @retval Time in time_t format
+//============================================================================//
+static time_t GetFileTime(FILINFO *pfinfoHandle)
+{
+	struct tm tmTimeInfo;
+
+
+	tmTimeInfo.tm_year = ((pfinfoHandle->fdate >> 9) & 0x7F) + 1980 - 1900;
+	tmTimeInfo.tm_mon	= ((pfinfoHandle->fdate >> 5) & 0x0F) - 1;
+	tmTimeInfo.tm_mday = pfinfoHandle->fdate & 0x1F;
+	tmTimeInfo.tm_hour = (pfinfoHandle->ftime >> 11) & 0x1F;
+	tmTimeInfo.tm_min = (pfinfoHandle->ftime >> 5) & 0x3F;
+	tmTimeInfo.tm_sec = (pfinfoHandle->ftime & 0x1F) * 2;
+	tmTimeInfo.tm_isdst = -1;
+
+	return mktime(&tmTimeInfo);
+}
+
+//============================================================================//
+// @brief  Delete a file existing longer than a keeptime period.
+// @param  pcFileNames: Pointer to file name for deleting.
+//         u8KeepTime: Time period to keep file in days.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_ClearUp(char *pcFileNames, uint8_t u8KeepTime)
+{
+	FILINFO finfoHandle;
+	char cFileName[50], cFileExten[5];
+	char *pcStr;
+
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	strcpy(cSD_FilePath, pcFileNames);
+
+	pcStr = cSD_FilePath;
+
+	StopChar(pcStr, '.');
+
+	// Get file name
+	strcpy(cFileName, pcStr);
+
+	pcStr += strlen(pcStr) + 1;
+
+	// Get file extension
+	strcpy(cFileExten, pcStr);
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...", u8SD_Err);
+			//#endif
+
+			System_Reset();
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	// Check files through the SD card
+	while(f_readdir(&dirSD_Handle, &finfoHandle) == FR_OK)
+	{
+		time_t ttTimeNow;
+
+
+		// If file attribute is AM_ARC then continue
+		if((finfoHandle.fattrib & AM_ARC) == 0)
+			continue;
+
+		// If encounter no name files then stop
+		if(finfoHandle.fname[0] == 0)
+			break;
+
+		ttTimeNow = System_GetTime();
+
+		// If file date is within KeepTime day, don't delete
+		if((ttTimeNow - GetFileTime(&finfoHandle)) < DAY_2_SECOND(u8KeepTime))
+			continue;
+
+		// If delete all files
+		if(strcmp(cFileName, "*") == 0 &&
+		        strcmp(cFileExten, "*") == 0)
+		{
+			sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+			frRes = f_unlink(cSD_FilePath);
+
+			if(frRes == FR_OK)
+			{
+#if ENABLE_DEBUG_MSG
+				RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+			}
+			else
+			{
+				//#if ENABLE_DEBUG_MSG
+				RTOSprintf("\r\n> SD delete file %s ERROR %d", finfoHandle.fname, frRes);
+				//#endif
+			}
+		}
+		else if(strcmp(cFileName, "*") == 0) // If delete files with matched extension
+		{
+			if(SD_CheckFileByExten(finfoHandle.fname, cFileExten) == TRUE)
+			{
+				sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+				frRes = f_unlink(cSD_FilePath);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s ERROR %d", finfoHandle.fname, frRes);
+					//#endif
+				}
+			}
+		}
+		else if(strcmp(cFileExten, "*") == 0) // If delete files with matched name
+		{
+			if(SD_CheckFileByName(finfoHandle.fname, cFileName) == TRUE)
+			{
+				sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+				frRes = f_unlink(cSD_FilePath);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s ERROR %d", finfoHandle.fname, frRes);
+					//#endif
+				}
+			}
+		}
+		else // If both name and extension have to be matched
+		{
+			if(strncmp(finfoHandle.fname, pcFileNames, strlen(pcFileNames)) == 0)
+			{
+				sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+				frRes = f_unlink(cSD_FilePath);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s ERROR %d", finfoHandle.fname, frRes);
+					//#endif
+				}
+			}
+		}
+	}
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Delete a file/ files.
+// @param  pcNames: Name or extension of the files to be deleted.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_Delete(char *pcNames)
+{
+	return SD_ClearUp(pcNames, 0);
+}
+
+//============================================================================//
+// @brief  Delete all files in SD card except a file having a chosen name or
+//         extension.
+// @param  pcNames: Name or extension of the file to be kept.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_DelExcept(char *pcNames)
+{
+	FILINFO finfoHandle;
+	char cFileName[50], cFileExten[10];
+	char *pcStr;
+
+
+	// Check USB disk status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	strcpy(cSD_FilePath, pcNames);
+
+	pcStr = cSD_FilePath;
+
+	StopChar(pcStr, '.');
+
+	// Get file name
+	strcpy(cFileName, pcStr);
+
+	pcStr += strlen(pcStr) + 1;
+
+	// Get file extension
+	strcpy(cFileExten, pcStr);
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...", u8SD_Err);
+			//#endif
+
+			System_Reset();
+
+			Delay_mS(500);
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	// Check files through the SD card
+	while(f_readdir(&dirSD_Handle, &finfoHandle) == FR_OK)
+	{
+		// If file attribute is AM_ARC then continue
+		if((finfoHandle.fattrib & AM_ARC) == 0)
+			continue;
+
+		// If encounter no name files then stop
+		if(finfoHandle.fname[0] == 0)
+			break;
+
+		// If keep all files
+		if(strcmp(cFileName, "*") == 0 &&
+		        strcmp(cFileExten, "*") == 0)
+		{
+			break;
+		}
+		else if(strcmp(cFileName, "*") == 0) // If only keep file with same extension
+		{
+			if(SD_CheckFileByExten(finfoHandle.fname, cFileExten) == FALSE)
+			{
+				sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+				frRes = f_unlink(cSD_FilePath);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file%s ERROR %d", finfoHandle.fname, frRes);
+					//#endif
+				}
+			}
+		}
+		else if(strcmp(cFileExten, "*") == 0) // If only keep files with same name
+		{
+			if(SD_CheckFileByName(finfoHandle.fname, cFileExten) == FALSE)
+			{
+				sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+				frRes = f_unlink(cSD_FilePath);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s ERROR %d", finfoHandle.fname, frRes);
+					//#endif
+				}
+			}
+		}
+		else // If only keep a file with exactly matched name and extension
+		{
+			if(strncmp(finfoHandle.fname, pcNames, strlen(pcNames)) != 0)
+			{
+				sprintf(cSD_FilePath, "%d:/%s", DRV_SD, finfoHandle.fname);
+
+				frRes = f_unlink(cSD_FilePath);
+
+				if(frRes == FR_OK)
+				{
+#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s OK.", finfoHandle.fname);
+#endif
+				}
+				else
+				{
+					//#if ENABLE_DEBUG_MSG
+					RTOSprintf("\r\n> SD delete file %s ERROR %d", finfoHandle.fname);
+					//#endif
+				}
+			}
+		}
+	}
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Format SD card.
+// @param  None.
+// @retval Result: TRUE: SD card is formatted successsfully.
+//                 FALSE: SD card is not formatted successfully.
+//============================================================================//
+bool SD_Format(void)
+{
+	uint8_t u8FormatCnt = 0;
+
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+		{
+			u8FormatCnt++;
+
+			return FALSE;
+		}
+	}
+
+	do
+	{
+		RTOSprintf("\r\n> Format %d times.", (u8FormatCnt + 1));
+
+		frRes = f_mkfs((TCHAR const*)USERPath, 0, 0);
+
+		u8FormatCnt++;
+
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> Format %d times result: %d", u8FormatCnt, frRes);
+		//#endif
+
+		Delay_mS(500);
+
+		if(u8FormatCnt >= 15)
+		{
+			break;
+		}
+	}
+	while(frRes != FR_OK);
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	if(u8FormatCnt >= 15)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD format ERROR %d", frRes);
+		//#endif
+
+		return FALSE;
+	}
+	else
+	{
+		g_Setting.bSD_FormatFlag = TRUE;
+
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD format OK.");
+		//#endif
+
+		return TRUE;
+	}
+}
+
+//============================================================================//
+// @brief  Remove a file in the SD card.
+// @param  pcFileName: Pointer to an array storing the file name.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is fail.
+//============================================================================//
+bool SD_RemoveFile(char *pcFilename)
+{
+	if(SD_CheckFileExist(pcFilename) == FALSE)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD file %s does not exist anymore.", pcFilename);
+#endif
+
+		return TRUE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFilename);
+
+	frRes = f_unlink(cSD_FilePath);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD remove file %s OK.", pcFilename);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD remove file %s ERROR %d.", pcFilename, frRes);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Remove a file in the SD card.
+// @param  pcFileName: Pointer to an array storing the file name.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is fail.
+//============================================================================//
+bool SD_Rename(char *pcOldName, char *pcNewName)
+{
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcOldName);
+
+	frRes = f_rename(cSD_FilePath, pcNewName);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_spi2_user);
+
+	if(frRes == FR_OK)
+		return TRUE;
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD rename file %s to %s ERROR %d", pcOldName, pcNewName, frRes);
+		//#endif
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Write to the bottom of a file.
+// @param  pcFileName: Pointer to the file name for writing.
+//         pu8SD_Buf: Pointer to the data buffer for writing.
+//         u16BufLen: Length of the data for writing.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_AddBuffToFile(char *pcFileName, uint8_t *pu8SD_Buf, uint16_t u16BufLen)
+{
+	UINT uBw;
+	uint16_t u16BufSize, u16DataSize;
+
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...\r\n", u8SD_Err);
+			//#endif
+
+			System_Reset();
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	// Open file
+	frRes = f_open(&USERFile, cSD_FilePath, FA_WRITE);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+		f_lseek(&USERFile, f_size(&USERFile));
+
+		//HAL_Delay(SD_CMD_DELAY);
+	}
+	else // If the specified file is not exist then create a new file
+	{
+		f_close(&USERFile);
+
+		frRes = f_open(&USERFile, cSD_FilePath, FA_CREATE_ALWAYS | FA_WRITE);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD open file %s ERROR %d", pcFileName, frRes);
+			//#endif
+
+			if(bRTOS_En)
+				osMutexRelease(mutex_spi2_user);
+
+			return 0;
+		}
+	}
+
+	/*
+	u16BufSize = u16DataSize = 0;
+
+	// Write data from the buffer to the file
+	do
+	{
+		u8SD_Buf[u16DataSize++] = pu8SD_Buf[u16BufSize++];
+
+		if((u16DataSize < sizeof(u8SD_Buf)) && (u16BufSize < u16BufLen))
+			continue;
+
+		frRes = f_write(&USERFile, &u8SD_Buf, u16DataSize, &uBw);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+			break;
+
+		u16DataSize = 0;
+
+	}while(u16BufSize < u16BufLen);
+	*/
+
+	frRes = f_write(&USERFile, pu8SD_Buf, u16BufLen, &uBw);
+
+	FRESULT fRes;
+
+	for(int i = 0; i < 3; i++)
+	{
+		fRes = f_close(&USERFile);
+
+		if(fRes == FR_OK)
+			break;
+	}
+
+	if(fRes != FR_OK)
+		RTOSprintf("\r\n> SD close file %s ERROR %d.", pcFileName, fRes);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file %s OK.", pcFileName);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		//HAL_Delay(1);
+
+		return TRUE;
+	}
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file %s at address %d ERROR %d.",
+		           pcFileName, f_size(&USERFile) + u16BufSize - u16DataSize, frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Write a string to the bottom of a file.
+// @param  pcFileName: Pointer to the file name for writing.
+//         pcString: Pointer to string for writing.
+// @retval Result: TRUE:.
+//============================================================================//
+bool SD_AddStrToFile(char *pcFileName, char *pcString)
+{
+	return SD_AddBuffToFile(pcFileName, (uint8_t *)pcString, strlen(pcString));
+}
+
+//============================================================================//
+// @brief  Read from an address in a file.
+// @param  pcFileName: Pointer to the file name for reading.
+//         pu8SD_Buf: Pointer to the data buffer for storing.
+//         u16BufLen: Length of the data buffer for reading.
+//         u32Addr: Address to read from in the file.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_ReadAddrToBuff(char *pcFileName, uint8_t *pu8SD_Buf,
+                       uint16_t u16BufLen, uint32_t u32Addr)
+{
+	//uint16_t BufSize, DataSize;
+	//uint16_t u16DatCnt = 0, u16DatSize;
+	UINT uBr;
+
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...\r\n", u8SD_Err);
+			//#endif
+
+			System_Reset();
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	frRes = f_open(&USERFile, cSD_FilePath, FA_READ);
+
+	// Open file for reading
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD open file %s ERROR %d.", pcFileName, frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return 0;
+	}
+
+	// Put cursor to the start address
+	f_lseek(&USERFile, u32Addr);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	/*
+	BufSize = DataSize = 0;
+
+	// Read data from file to the buffer
+	do
+	{
+		if(DataSize == 0)
+		{
+			frRes = f_read(&USERFile, &u8SD_Buf, sizeof(u8SD_Buf), &uBr);
+
+			if(frRes != FR_OK)
+				break;
+		}
+
+		pu8SD_Buf[BufSize++] = u8SD_Buf[DataSize++];
+
+		if((DataSize < sizeof(u8SD_Buf)) && (BufSize < u16BufLen))
+		{
+			continue;
+		}
+
+		DataSize = 0;
+
+	}
+	while(BufSize < u16BufLen);
+	*/
+	/*
+	u16DatCnt = 0;
+
+	do
+	{
+	  u16DatSize = u16BufLen - u16DatCnt;
+
+		if(u16DatSize > sizeof(u8SD_Buf))
+		{
+		  u16DatSize = sizeof(u8SD_Buf);
+		}
+
+		frRes = f_read(&USERFile, u8SD_Buf, u16DatSize, &uBr);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+			break;
+
+		memcpy(pu8SD_Buf, u8SD_Buf, u16DatSize);
+
+		pu8SD_Buf += u16DatSize;
+
+		u16DatCnt += u16DatSize;
+
+	}while(u16DatCnt < u16BufLen);
+	*/
+	frRes = f_read(&USERFile, pu8SD_Buf, u16BufLen, &uBr);
+
+	FRESULT fRes;
+
+	for(int i = 0; i < 3; i++)
+	{
+		fRes = f_close(&USERFile);
+
+		if(fRes == FR_OK)
+			break;
+	}
+
+	if(fRes != FR_OK)
+		RTOSprintf("\r\n> SD close file %s ERROR %d.", pcFileName, fRes);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD read file %s OK.", pcFileName);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD read file %s at address %d ERROR %d.",
+		           pcFileName, u32Addr, frRes);
+
+		RTOSprintf("\r\n> SD number of bytes read:%d.", uBr);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Read from the beginning of a file.
+// @param  pcFileName: Pointer the to file name for reading.
+//         pu8SD_Buf: Pointer to the data buffer for storing.
+//         u16BufLen: Length of the data for reading.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_ReadFileToBuff(char *pcFileName, uint8_t *pu8SD_Buf, uint16_t u16BufLen)
+{
+	return SD_ReadAddrToBuff(pcFileName, pu8SD_Buf, u16BufLen, 0);
+}
+
+//============================================================================//
+// @brief  Write to an address in a file.
+// @param  pcFileName: Pointer to the file name for writing.
+//         pu8SD_Buf: Pointer to the data buffer for writing.
+//         u16BufLen: Length of the data for writing.
+//         u32Addr: Address to start write to.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_WriteBuffToAddr(char *pcFileName, uint8_t *pu8SD_Buf,
+                        uint16_t u16BufLen, uint32_t u32Addr)
+{
+	//uint16_t u16BufSize, u16DataSize;
+	//uint16_t u16DatCnt = 0, u16DatSize;
+	UINT uBw;
+
+
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...\r\n", u8SD_Err);
+			//#endif
+
+			System_Reset();
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	// Open file
+	if(f_open(&USERFile, cSD_FilePath, FA_WRITE) != FR_OK)
+	{
+		f_close(&USERFile);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		frRes = f_open(&USERFile, cSD_FilePath, FA_CREATE_ALWAYS | FA_WRITE);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD open file %s ERROR %d.", pcFileName, frRes);
+			//#endif
+
+			if(bRTOS_En)
+				osMutexRelease(mutex_spi2_user);
+
+			return 0;
+		}
+	}
+
+	// Put cursor to the start address
+	f_lseek(&USERFile, u32Addr);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	/*
+	u16BufSize = u16DataSize = 0;
+
+	// Write data from the buffer to the file
+	do
+	{
+		u8SD_Buf[u16DataSize++] = pu8SD_Buf[u16BufSize++];
+
+		if((u16DataSize < sizeof(u8SD_Buf)) && (u16BufSize < u16BufLen))
+			continue;
+
+		frRes = f_write(&USERFile, &u8SD_Buf, u16DataSize, &uBw);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+			break;
+
+		u16DataSize = 0;
+	}while(u16BufSize < u16BufLen);
+
+	f_lseek(&USERFile, f_size(&USERFile));
+	*/
+	//HAL_Delay(SD_CMD_DELAY);
+
+	frRes = f_write(&USERFile, pu8SD_Buf, u16BufLen, &uBw);
+
+	FRESULT fRes;
+
+	for(int i = 0; i < 3; i++)
+	{
+		fRes = f_close(&USERFile);
+
+		if(fRes == FR_OK)
+			break;
+	}
+
+	if(fRes != FR_OK)
+		RTOSprintf("\r\n> SD close file %s ERROR %d.", pcFileName, fRes);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file %s OK.", pcFileName);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file %s at address %d ERROR %d.",
+		           pcFileName, u32Addr, frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Write to a file from the beginning.
+// @param  pcFileName: Pointer to the file name for writing.
+//         pu8SD_Buf: Pointer to the data buffer for writing.
+//         u16BufLen: Length of data for writing.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_WriteBuffToFile(char *pcFileName, uint8_t *pu8SD_Buf, uint16_t u16BufLen)
+{
+	return SD_WriteBuffToAddr(pcFileName, pu8SD_Buf, u16BufLen, 0);
+}
+
+bool SD_OpenFile(char *pcFileName)
+{
+	// Check SD card status
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf(MSG_SD_DISK_INVALID);
+		//#endif
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...\r\n", u8SD_Err);
+			//#endif
+
+			System_Reset();
+
+			Delay_mS(500);
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	// Open file for reading
+	if(f_open(&USERFile, cSD_FilePath, FA_READ) != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD open file %s ERROR.", pcFileName);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+bool SD_ReadFile(uint8_t *pu8SD_Buf, uint16_t u16BufLen, uint32_t u32Addr)
+{
+	uint16_t u16DatCnt = 0, u16DatSize;
+	UINT uBr;
+
+
+	// Put cursor to the start address
+	f_lseek(&USERFile, u32Addr);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	u16DatCnt = 0;
+
+	do
+	{
+		u16DatSize = u16BufLen - u16DatCnt;
+
+		if(u16DatSize > sizeof(u8SD_Buf))
+		{
+			u16DatSize = sizeof(u8SD_Buf);
+		}
+
+		frRes = f_read(&USERFile, u8SD_Buf, u16DatSize, &uBr);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+			break;
+
+		memcpy(pu8SD_Buf, u8SD_Buf, u16DatSize);
+
+		pu8SD_Buf += u16DatSize;
+
+		u16DatCnt += u16DatSize;
+
+	}
+	while(u16DatCnt < u16BufLen);
+
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD read file ERROR %d.", frRes);
+		//#endif
+
+		return FALSE;
+	}
+	else
+		return TRUE;
+}
+
+bool SD_WriteFile(uint8_t *pu8SD_Buf, uint16_t u16BufLen, uint32_t u32Addr)
+{
+	uint16_t u16BufSize, u16DataSize;
+	//uint16_t u16DatCnt = 0, u16DatSize;
+	UINT uBw;
+
+
+	// Put cursor to the start address
+	f_lseek(&USERFile, u32Addr);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	u16BufSize = u16DataSize = 0;
+
+	// Write data from the buffer to the file
+	do
+	{
+		u8SD_Buf[u16DataSize++] = pu8SD_Buf[u16BufSize++];
+
+		if((u16DataSize < sizeof(u8SD_Buf)) && (u16BufSize < u16BufLen))
+			continue;
+
+		frRes = f_write(&USERFile, &u8SD_Buf, u16DataSize, &uBw);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+			break;
+
+		u16DataSize = 0;
+	}
+	while(u16BufSize < u16BufLen);
+
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file ERROR %d.", frRes);
+		//#endif
+
+		return FALSE;
+	}
+	else
+		return TRUE;
+}
+
+bool SD_CloseFile(void)
+{
+	frRes = f_close(&USERFile);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD close file OK.");
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+	}
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD close file ERROR %d.", frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Create a file having empty space for writing.
+// @param  pcFileName: Pointer to the file name for creating.
+//         u32Addr: Start address to write the content.
+//         bClearFlag: Where to put the cursor after creating.
+//                     TRUE: Put the cursor after the empty area.
+//                     FALSE: Put the cursor at the beginning address.
+// @retval Result: TRUE: Operation success.
+//                 FALSE: Operation ERRORed.
+//============================================================================//
+bool SD_CreateFile(char *pcFileName, uint32_t u32Addr, bool bClearFlag)
+{
+	UINT uBw;
+	uint16_t u16BufSize, u16DataSize;
+
+
+	if(SD_FS_Check(FALSE) == FALSE)
+	{
+		RTOSprintf(MSG_SD_DISK_INVALID);
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_spi2_user, S_2_mS(10));
+
+		if(osRes == osEventTimeout)
+			return FALSE;
+	}
+
+	sprintf(cSD_FilePath, "%d:/", DRV_SD);
+
+	frRes = f_opendir(&dirSD_Handle, cSD_FilePath);
+
+	// Open directory
+	if(frRes != FR_OK)
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("%s ERROR CODE %d", MSG_SD_OPEN_DIR_ERROR, frRes);
+		//#endif
+
+		u8SD_Err++;
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		if(u8SD_Err >= SD_ERROR_MAX_CNT)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD ERROR %d TIMES. Reset system due to SD ISSUE...\r\n", u8SD_Err);
+			//#endif
+
+			System_Reset();
+
+			Delay_mS(500);
+		}
+
+		return FALSE;
+	}
+	else
+	{
+		u8SD_Err = 0;
+	}
+
+	sprintf(cSD_FilePath, "%d:/%s", DRV_SD, pcFileName);
+
+	if(f_open(&USERFile, cSD_FilePath, FA_WRITE) != FR_OK)
+	{
+		//f_close(&USERFile);
+
+		frRes = f_open(&USERFile, cSD_FilePath, FA_CREATE_ALWAYS | FA_WRITE);
+
+		//HAL_Delay(SD_CMD_DELAY);
+
+		if(frRes != FR_OK)
+		{
+			//#if ENABLE_DEBUG_MSG
+			RTOSprintf("\r\n> SD create file %s ERROR.", pcFileName);
+			//#endif
+
+			if(bRTOS_En)
+				osMutexRelease(mutex_spi2_user);
+
+			return 0;
+		}
+	}
+
+	f_lseek(&USERFile, 0);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	u16BufSize = u16DataSize = 0;
+
+	memset(u8SD_Buf, 0x00, sizeof(u8SD_Buf));
+
+	if(bClearFlag == TRUE)
+	{
+		do
+		{
+			if((u32Addr - u16BufSize) > sizeof(u8SD_Buf))
+			{
+				u16DataSize = sizeof(u8SD_Buf);
+			}
+			else
+			{
+				u16DataSize = u32Addr - u16BufSize;
+			}
+
+			frRes = f_write(&USERFile, &u8SD_Buf, u16DataSize, &uBw);
+
+			//HAL_Delay(SD_CMD_DELAY);
+
+			if(frRes != FR_OK)
+				break;
+
+			u16BufSize += u16DataSize;
+		}
+
+		while(u16BufSize < u32Addr);
+
+		f_lseek(&USERFile, f_size(&USERFile));
+
+		//HAL_Delay(SD_CMD_DELAY);
+	}
+	else
+	{
+		if(u32Addr < sizeof(u8SD_Buf))
+		{
+			frRes = f_write(&USERFile, &u8SD_Buf, u32Addr, &uBw);
+
+			//HAL_Delay(SD_CMD_DELAY);
+		}
+		else
+		{
+			frRes = f_write(&USERFile, &u8SD_Buf, sizeof(u8SD_Buf), &uBw);
+
+			//HAL_Delay(SD_CMD_DELAY);
+		}
+
+		f_lseek(&USERFile, u32Addr);
+
+		//HAL_Delay(SD_CMD_DELAY);
+	}
+
+	f_close(&USERFile);
+
+	//HAL_Delay(SD_CMD_DELAY);
+
+	if(frRes == FR_OK)
+	{
+#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file %s OK.", pcFileName);
+#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return TRUE;
+
+	}
+	else
+	{
+		//#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> SD write to file %s ERROR %d.", pcFileName, frRes);
+		//#endif
+
+		if(bRTOS_En)
+			osMutexRelease(mutex_spi2_user);
+
+		return FALSE;
+	}
+}
+
+void SD_RequestInit(void)
+{
+  sdRequest.bInUse = FALSE;
+	sdRequest.sdCmd = SD_NULL;
+
+	for(int i = 0; i < 5; i++)
+		sdRequest.u32Arg[i] = 0;
+
+	sdRequest.pu32RetVal = NULL;
+}
+
+FRESULT SD_RequestDo(SD_FUNCTION_TypeDef sdCmd, uint8_t u8ArgNum,...)
+{
+	va_list valist;
+	uint32_t u32RetVal;
+
+
+	if(sdCmd == QTEC21_NULL)
+		return FR_OK;
+
+	while(sdRequest.bInUse == TRUE)
+	{
+	}
+
+	sdRequest.bInUse = TRUE;
+
+	sdRequest.pu32RetVal = &u32RetVal;
+
+	va_start(valist, u8ArgNum);
+
+	for(int i = 0; i < u8ArgNum; i++)
+	{
+		sdRequest.u32Arg[i] = va_arg(valist, uint32_t);
+	}
+
+	va_end(valist);
+
+	sdRequest.sdCmd = sdCmd;
+	
+	while(sdRequest.sdCmd != SD_NULL)
+	{
+	}
+	
+	sdRequest.bInUse = FALSE;
+	
+	return (FRESULT)u32RetVal;
+}
+
+void SD_RequestHandle(void)
+{
+	uint32_t u32Arg[5];
+	uint32_t u32RetVal;
+	
+	
+  if(sdRequest.sdCmd == SD_NULL)
+		return;
+	
+	u32Arg[0] = sdRequest.u32Arg[0];
+	u32Arg[1] = sdRequest.u32Arg[1];
+	u32Arg[2] = sdRequest.u32Arg[2];
+	u32Arg[3] = sdRequest.u32Arg[3];
+	u32Arg[4] = sdRequest.u32Arg[4];
+	
+	switch((uint8_t)sdRequest.sdCmd)
+	{
+	  case SD_OPEN:
+		{
+			u32RetVal = (uint8_t)f_open ((FIL *)u32Arg[0], (const TCHAR *)u32Arg[1], (BYTE)u32Arg[2]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_CLOSE:
+		{
+			u32RetVal = (uint8_t)f_close ((FIL *)u32Arg[0]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_READ:
+		{
+			u32RetVal = (uint8_t)f_read ((FIL *)u32Arg[0], (void *)u32Arg[1], (UINT)u32Arg[2], (UINT *)u32Arg[3]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_WRITE:
+		{
+			u32RetVal = (uint8_t)f_write ((FIL *)u32Arg[0], (const void *)u32Arg[1], (UINT)u32Arg[2], (UINT *)u32Arg[3]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_LSEEK:
+		{
+			u32RetVal = (uint8_t)f_lseek ((FIL *)u32Arg[0], (DWORD)u32Arg[1]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_OPENDIR:
+		{
+			u32RetVal = (uint8_t)f_opendir ((DIR *)u32Arg[0], (const TCHAR *)u32Arg[1]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_CLOSEDIR:
+		{
+			u32RetVal = (uint8_t)f_closedir ((DIR *)u32Arg[0]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_READDIR:
+		{
+			u32RetVal = (uint8_t)f_readdir ((DIR *)u32Arg[0], (FILINFO *)u32Arg[1]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_MKDIR:
+		{
+			u32RetVal = (uint8_t)f_mkdir ((const TCHAR *)u32Arg[0]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_UNLINK:
+		{
+			u32RetVal = (uint8_t)f_unlink ((const TCHAR *)u32Arg[0]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_RENAME:
+		{
+			u32RetVal = (uint8_t)f_rename ((const TCHAR *)u32Arg[0], (const TCHAR *)u32Arg[1]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_MOUNT:
+		{
+			u32RetVal = (uint8_t)f_mount ((FATFS *)u32Arg[0], (const TCHAR *)u32Arg[1], (BYTE)u32Arg[2]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_MKFS:
+		{
+			u32RetVal = (uint8_t)f_mkfs ((const TCHAR *)u32Arg[0], (BYTE)u32Arg[1], (UINT)u32Arg[2]);
+			
+			if(sdRequest.pu32RetVal != NULL)
+				*(sdRequest.pu32RetVal) = u32RetVal;
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_TELL:
+		{
+			u32RetVal = f_tell((FIL *)u32Arg[0]);
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		case SD_SIZE:
+		{
+			u32RetVal = f_size((FIL *)u32Arg[0]);
+			
+			sdRequest.sdCmd = SD_NULL;
+		}
+		
+		default:
+			break;
+	}
+}
+
+

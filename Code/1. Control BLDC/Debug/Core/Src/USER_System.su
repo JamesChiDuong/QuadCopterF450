@@ -1,0 +1,6 @@
+USER_System.c:43:6:Sys_Init	200	static
+USER_System.c:70:6:Sys_Motor_Mixing_Algorithm	88	static
+USER_System.c:137:6:Sys_InnerLoop	72	static
+USER_System.c:169:13:Sys_WorldToBodyConversion	48	static
+USER_System.c:176:6:Sys_OuterLoop	48	static
+USER_System.c:198:6:Sys_Controller	64	static

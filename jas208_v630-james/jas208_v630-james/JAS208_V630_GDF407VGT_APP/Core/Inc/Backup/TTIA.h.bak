@@ -1,0 +1,64 @@
+#ifndef _TTIA_H_
+#define _TTIA_H_
+//============================================================================//
+/*
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "GSM_Driver.h"
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+typedef enum
+{
+	MSG_BREAK,
+	MSG_INIT,
+	MSG_SEND_REGISTER,
+	MSG_REPLY_REGISTER,
+	MSG_SEND_ROUTE,
+	MSG_REPLY_ROUTE,
+	MSG_SEND_REPORT,
+	MSG_REPLY_REPORT,
+	MSG_SEND_ALARM,
+	MSG_REPLY_ALARM,
+	MSG_SEND_EVENT,
+	MSG_REPLY_EVENT,
+	MSG_SEND_SHUTDOWN,
+	MSG_REPLY_SHUTDOWN,
+	MSG_SEND_TROUBLE,
+	MSG_REPLY_TROUBLE,
+	MSG_SEND_OD,
+	MSG_REPLY_OD
+
+}TTIA_MSG_PROC_t;
+
+typedef enum
+{
+	EVENT_TYPE_0001,	// EventType:0x0001, 進出站回報
+	EVENT_TYPE_0002,	// EventType:0x0002, 超速超轉回報
+	EVENT_TYPE_0004,	// EventType:0x0004, 急加/減速回報
+	EVENT_TYPE_0008,	// EventType:0x0008, 行駛中前門/後門開啟回報
+	EVENT_TYPE_0010,	// EventType:0x0010, 車輛異常回報
+	EVENT_TYPE_0020,	// EventType:0x0020, 車輛狀態回報
+	EVENT_TYPE_0040,	// EventType:0x0040, 異常發車回報
+	EVENT_TYPE_0080,	// EventType:0x0080, 司機回覆回報
+	EVENT_TYPE_0100,	// EventType:0x0100, 進出特定區域回報
+	EVENT_TYPE_8000	// EventType:0x8000, 路線外營運回報
+
+}TTIA_EVENT_TYPE_t;
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+bool TTIA_MsgAppendQueue(TTIA_MSG_PROC_t MsgProc, uint16_t MsgArg);
+void TTIA_MsgAppendEvent(TTIA_EVENT_TYPE_t EventType, uint8_t EventFlag);
+void TTIA_MsgHandle(uint8_t *MsgPkg);
+void TTIA_MsgReply(GSM_SocketDataTypeDef SocketData);
+bool TTIA_MsgChkCmdBusy(void);
+*/
+
+//============================================================================//
+#endif /* _TTIA_H_ */

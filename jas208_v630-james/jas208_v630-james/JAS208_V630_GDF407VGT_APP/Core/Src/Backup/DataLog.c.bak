@@ -1,0 +1,1362 @@
+//============================================================================//
+// Includes
+//============================================================================//
+#include "DataLog.h"
+
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "CAN_Driver.h"
+#include "Default.h"
+#include "diskio.h"
+#include "ff.h"
+#include "GSM_Driver.h"
+#include "main.h"
+#include "RuleV161.h"
+#include "SD_Module.h"
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+//static DatalogSimpleTypeDef g_dlSimple = {0};	// Heinz
+
+static time_t ttDatalog = 0;
+
+//uint32_t u32StartTickCnt;
+//uint32_t u32UseTickCnt;
+
+//GpsCoordTypeDef Location_Log;
+
+//uint8_t gLog_SaveBuf[SD_BLOCK_SIZE * 8] = {0};  // Heinz  4
+//uint8_t gLog_SaveBuf[SD_BLOCK_SIZE * 4] = {0};
+
+uint16_t u16Log_SaveBufLen;
+
+uint32_t u32FileIdxBk = 0;
+
+char szFileNameBk[32];
+
+bool bLog_Ready = FALSE;
+
+//bool bLog_BuildAll;
+
+bool bDatalog_Stop_REC = 0; // Heinz
+
+bool bDTRfileErrorFlag;
+
+//uint16_t bUploadDataTypeDefTick = 0;
+
+time_t ttReUploadIdxTime = 0;
+time_t ttReUploadBegin = 0;
+time_t ttReUploadEnd = 0;
+
+bool bDatalogTickFlag = FALSE;
+
+#if ENABLE_GSM_NET
+DatalogUploadTypeDef datalogHandle[MAX_SOCKET_BANK], 
+                     datalogHandleTemp[MAX_SOCKET_BANK];
+
+uint8_t u8DATALOG_UPLOAD_MAX[MAX_SOCKET_BANK] = {DATALOG_UPLOAD_MAX_30};
+#endif
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Prepare for datalog process.
+// @param  None.
+// @retval None.
+//============================================================================//
+void Datalog_Init(void)
+{
+	ttDatalog = 0;
+
+	//memset(gLog_SaveBuf, 0x00, sizeof(gLog_SaveBuf));
+
+	u16Log_SaveBufLen = 0;
+
+	//bLog_BuildAll = TRUE;
+
+	bLog_Ready = TRUE;
+
+	bDatalog_Stop_REC = 0;
+}
+
+//============================================================================//
+// @brief  Reset for datalog process.
+// @param  None.
+// @retval None.
+//============================================================================//
+void Datalog_Reset(void)
+{
+	Datalog_Init();
+
+	//SD_Delete(FILENAME_DATALOG_BIN);
+	SD_RemoveFile(FILENAME_DATALOG_BIN);
+}
+
+#if 0
+//============================================================================//
+// @brief  Save datalog to buffer.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+static bool Datalog_SaveBuf_Proc(void)
+{
+	bool RESULT;
+
+
+	if(u16Log_SaveBufLen == 0)
+		return TRUE;
+
+	RESULT = SD_AddBuffToFile(FILENAME_DATALOG_BIN, gLog_SaveBuf, u16Log_SaveBufLen);
+
+	if(RESULT == TRUE)
+	{
+		memset(gLog_SaveBuf, 0x00, sizeof(gLog_SaveBuf));
+
+		u16Log_SaveBufLen = 0;
+	}
+
+	return RESULT;
+}
+#endif
+
+#if 0
+//============================================================================//
+// @brief  Direct save datalog.
+// @param  None.
+// @retval None.
+//============================================================================//
+void Datalog_DirectSave(void)
+{
+	//Datalog_SaveBuf_Proc();
+}
+#endif
+
+//============================================================================//
+// @brief  Backup datalog.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void Datalog_Backup(time_t BackupTime)
+{
+	char *pOld, *pNew, BufStr[256] = {0};
+
+
+	// DTR file
+	
+	RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_SYS_RENAME2);
+
+	pOld = pNew = BufStr;
+
+	//sprintf(pOld, "%d:/%s", DRV_USER, FILENAME_DATALOG_BIN);
+	sprintf(pOld, "%s", FILENAME_DATALOG_BIN);
+
+	pNew = pOld + strlen(pOld) + 1; // pNew is place after pOld
+
+	strftime(pNew, sizeof(BufStr) - strlen(pOld), "DTR/%Y%m%d.DTR", localtime(&BackupTime));
+
+	SD_RemoveFile(pNew); // delete [/DTR/YYYYMMDD.DTR]
+	
+	V161_CopyFile(pOld, pNew); // copy [/DATALOG.BIN] to [DTR/YYYYMMDD.DTR]
+	
+	SD_RemoveFile(pOld); // delete [/DATALOG.BIN]
+
+	LOGprintf("\r\n> SD card file name %s rename %s.", pOld, pNew);
+	
+	// Event file
+	
+	memset(BufStr, 0x00, sizeof(BufStr));
+	
+	pOld = pNew = BufStr;
+	
+	sprintf(pOld, "%s", FILENAME_DATALOG_EVENT_BIN);
+
+	pNew = pOld + strlen(pOld) + 1; // pNew is place after pOld
+
+	strftime(pNew, sizeof(BufStr) - strlen(pOld), "DTR/%Y%m%d_Event.DTR", localtime(&BackupTime));
+
+	SD_RemoveFile(pNew); // delete [/DTR/YYYYMMDD_Event.DTR]
+	
+	V161_CopyFile(pOld, pNew); // copy [/DATALOG_EVENT.BIN] to [/DTR/YYYYMMDD_Event.DTR]
+
+	SD_RemoveFile(pOld); // delete [/DATALOG_EVENT.BIN]
+	
+	LOGprintf("\r\n> SD card file name %s rename %s.", pOld, pNew);
+}
+
+#if 0
+//============================================================================//
+// @brief  Initialize the required parameters to handle the GSM blocking requests.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void Datalog_Build(uint8_t *Buf, uint16_t BufLen)
+{
+	if(BufLen == 0)
+		return;
+
+	if(u16Log_SaveBufLen + BufLen > sizeof(gLog_SaveBuf))
+	{
+		memset(gLog_SaveBuf, 0x00, sizeof(gLog_SaveBuf));
+
+		u16Log_SaveBufLen = 0;
+
+		RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_DATALOG_SAVE_ERROR);
+	}
+
+	if((u16Log_SaveBufLen + BufLen) > SD_BLOCK_SIZE)
+	{
+		//Datalog_SaveBuf_Proc(); //u16Log_SaveBufLen will set to zero after file saving
+	}
+
+	memcpy(&gLog_SaveBuf[u16Log_SaveBufLen], Buf, BufLen);
+
+	u16Log_SaveBufLen += BufLen;
+}
+#endif
+
+//============================================================================//
+// ttDatalog=0, read the last data log and save into g_SysInfo.VehicleState
+// if not the same day, save DATALOG.BIN to YYYYMMDD.DTR
+// set ttDatalog = ttLocal;
+//============================================================================//
+bool Datalog_ChkData(void)
+{
+	time_t ttLocal = 0;
+	//DatalogV161_TypeDef dlSimple;
+	DatalogSimpleTypeDef dlSimple;
+	uint32_t u32FileSize;
+	bool bGetData;
+	uint8_t u8ErrCnt, u8BCD[7];
+
+
+	//RTOSprintf("\r\n> ### Datalog_ChkData ###");
+	
+	memset(&dlSimple, 0x00, sizeof(DatalogSimpleTypeDef));
+
+	ttLocal = System_GetTime();
+
+	if(ttDatalog == 0)
+	{
+		u8ErrCnt = 0;
+
+		do
+		{
+			u32FileSize = SD_GetFileSize(FILENAME_DATALOG_BIN);
+			
+			//RTOSprintf("\r\n> DATALOG_BIN filesize: %d ", u32FileSize);
+
+			if(u32FileSize <= 0)
+			{
+				RTOSprintf("\r\n> ### DATALOG_BIN NG or NULL ###");
+				
+				RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_DATALOG_FILE_NG);
+				
+				break;
+			}
+
+			// 讀取最後一筆記錄
+			bGetData = SD_ReadAddrToBuff(FILENAME_DATALOG_BIN, (uint8_t*)&dlSimple,
+			                   sizeof(DatalogSimpleTypeDef), u32FileSize - sizeof(DatalogSimpleTypeDef));
+			
+			if(bGetData == TRUE)
+			{
+				if(dlSimple.HEAD.CMD == CMD_DATALOG_SIMPLE)
+				{
+					ttDatalog = dlSimple.HEAD.UTC + g_Setting.i32TimeZoneOffset;
+					
+					SecToBCDTime(ttDatalog, u8BCD);
+					//RTOSprintf("\r\n> ### (1)ttDatalog %02X%02X/%02X/%02X %02X:%02X:%02X ###",
+					//						u8BCD[0],u8BCD[1],u8BCD[2],u8BCD[3],u8BCD[4],u8BCD[5],u8BCD[6]);
+
+					g_SysInfo.tVehicleState.dDistance = dlSimple.HEAD.dwDistance;
+
+					g_SysInfo.tVehicleState.dDistBase = g_SysInfo.tVehicleState.dDistance;
+
+					g_SysInfo.tVehicleState.u32DistCount = 0;
+
+					g_SysInfo.tVehicleState.u32DistCount_AGain = 0;
+
+					g_SysInfo.tVehicleState.dDistBase_GPS = 0;
+
+					g_SysInfo.tVehicleState.dDistance_GPS = 0;
+				}
+				else
+				{
+					RTOSprintf("\r\n> ### Remove DATALOG_BIN ###");
+					
+					RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_DATALOG_HEAD_NG);
+					
+					SD_RemoveFile(FILENAME_DATALOG_BIN);
+				}
+
+				break;
+			} 
+			else
+			{
+				RTOSprintf("\r\n> ### Read DATALOG_BIN Fail ###");
+				
+				RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_DATALOG_READ_NG);
+				
+				memset(&dlSimple, 0x00, sizeof(DatalogSimpleTypeDef));
+			}
+
+			u8ErrCnt++;
+
+		}while(u8ErrCnt < DATALOG_MAX_ERR_CNT);
+	}
+
+	if(ttDatalog != 0)
+	{
+		if((ttDatalog  / DAY_2_SECOND(1)) != (ttLocal / DAY_2_SECOND(1)))
+		{
+			RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_SYS_RENAME1);
+
+			// Make DTR File
+			Datalog_Backup(ttDatalog);
+		}
+		
+		if(((ttDatalog - 10) / DAY_2_SECOND(1)) != ((ttLocal - 10) / DAY_2_SECOND(1)))
+		{
+			RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_SYS_RENAME2);
+
+			ttLastLogTime = ttDatalog - MINUTE_2_SECOND(1);
+
+			SecToBCDTime(ttDatalog, u8BCD);
+			RTOSprintf("\r\n> ### (2)ttLastLogTime %02X%02X/%02X/%02X %02X:%02X:%02X ###",
+											u8BCD[0],u8BCD[1],u8BCD[2],u8BCD[3],u8BCD[4],u8BCD[5],u8BCD[6]);
+			
+			// Make V161 one Min VDR File
+			bDoVDR_DayFlag = TRUE;
+		}
+		
+    /*
+		if(((ttDatalog + MINUTE_2_SECOND(1)) / DAY_2_SECOND(1)) != ((ttLocal+MINUTE_2_SECOND(1)) / DAY_2_SECOND(1)))
+		{
+			RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_SYS_RENAME2);
+
+			// Add 161 Make VDR File
+			//V161_MoveDataProc();
+			
+			bKeepDayDataFlag = FALSE;
+	
+			bDoVDRFlag = TRUE;
+		}
+    */
+	}
+
+	if(ttDatalog == ttLocal)
+		return FALSE;
+
+	ttDatalog = ttLocal;
+
+	return TRUE;
+}
+
+#if 0
+//============================================================================//
+// @brief  Get datalog info.
+// @param  None.
+// @retval None.
+//============================================================================//
+/*
+void Datalog_GetInfo(void)
+{
+	DatalogInfoTypeDef INFO;
+
+
+	memset(&INFO, 0x00, sizeof(DatalogInfoTypeDef));
+
+	INFO.CMD = CMD_DATALOG_INFO;
+
+  #if CUSTOMER_TYPE == CUSTOMER_ARTC
+	INFO.u32DRV_IN = g_SysInfo.ttNow;
+  #else
+	INFO.u32DRV_IN = g_Setting.u32DrvIdNum;
+  #endif
+
+  #if HW_TYPE == HW_JAS211 || HW_TYPE == HW_JAS106 || HW_TYPE == HW_JAS208 || HW_TYPE == HW_JAS306
+	INFO.EXTIO.bit._7 = (g_SysInfo.VehicleState.ACC_ON == TRUE) ? 1 : 0;
+
+	INFO.EXTIO.bit._6 = g_SysInfo.EXTIO.bits.IN_1;
+
+	INFO.EXTIO.bit._5 = g_SysInfo.EXTIO.bits.IN_2;
+
+	INFO.EXTIO.bit._4 = g_SysInfo.EXTIO.bits.IN_3;
+
+	INFO.EXTIO.bit._3 = g_SysInfo.EXTIO.bits.IN_4;
+
+	INFO.EXTIO.bit._2 = g_SysInfo.EXTIO.bits.IN_5;
+
+	INFO.EXTIO.bit._1 = g_SysInfo.EXTIO.bits.IN_7;
+
+	INFO.EXTIO.bit._0 = g_SysInfo.EXTIO.bits.IN_8;
+  #endif
+
+	INFO.u8Speed = M_2_KM(g_SysInfo.VehicleState.u32Speed);
+
+	INFO.u16RPM = g_SysInfo.VehicleState.u16RPM;
+
+	INFO.dwhmDistance = M_2_100M(g_SysInfo.VehicleState.dDistance);
+
+	Datalog_Build((uint8_t*)&INFO, sizeof(DatalogInfoTypeDef));
+}
+*/
+
+//============================================================================//
+// @brief  Get datalog extended info.
+// @param  None.
+// @retval None.
+//============================================================================//
+/*
+void Datalog_Ext2_Info(void)
+{
+	DatalogExt2_TypeDef  EXT2_INFO;
+
+
+	memset(&EXT2_INFO, 0x00, sizeof(DatalogExt2_TypeDef));
+
+	EXT2_INFO.CMD = CMD_DATALOG_EXT2; // 0xD5
+
+	EXT2_INFO.EXT2_IO.bit._7 = g_SysInfo.EXTIO.bits.IN_9;
+
+	EXT2_INFO.EXT2_IO.bit._6 = g_SysInfo.EXTIO.bits.IN_10;
+
+	EXT2_INFO.EXT2_IO.bit._5 = g_SysInfo.EXTIO.bits.IN_11;
+
+	EXT2_INFO.EXT2_IO.bit._4 = g_SysInfo.EXTIO.bits.IN_SOS;
+
+	EXT2_INFO.EXT2_IO.bit._3 = 0;
+
+	EXT2_INFO.EXT2_IO.bit._2 = 0;
+
+	EXT2_INFO.EXT2_IO.bit._1 = 0;
+
+	EXT2_INFO.EXT2_IO.bit._0 = 0;
+
+	Datalog_Build((uint8_t*)&EXT2_INFO, sizeof(DatalogExt2_TypeDef));
+}
+*/
+#endif
+
+//============================================================================//
+// @brief  Handle the process of saving datalog.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool Datalog_Save_Proc(void)
+{
+	DatalogSimpleTypeDef dlSimple;
+
+
+	if(bDatalogTickFlag == TRUE)
+	{
+		bDatalogTickFlag = FALSE;
+
+		if(bLog_Ready == FALSE)
+			return FALSE;
+
+		if(Datalog_ChkData() == TRUE)
+		{
+			memset(&dlSimple, 0x00, sizeof(DatalogSimpleTypeDef));
+
+			dlSimple.HEAD.CMD = CMD_DATALOG_SIMPLE;
+			
+			dlSimple.HEAD.u16Version = DATALOG_VERSION_DEF;
+
+			dlSimple.HEAD.UTC = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+			dlSimple.HEAD.dwDistance = g_SysInfo.tVehicleState.dDistance;
+			
+			dlSimple.HEAD.u32DRV_IN = g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrvIdNum;
+			
+			dlSimple.HEAD.u8DataCnt = 1;
+			
+			dlSimple.DATA.i32Longitude = g_SysInfo.tGPS_Data.gpsLocation.dLongitude * 1000000;
+			
+			dlSimple.DATA.i32Latitude = g_SysInfo.tGPS_Data.gpsLocation.dLatitude * 1000000;
+			
+			dlSimple.DATA.u8Course = g_SysInfo.tGPS_Data.u16Course / 10;
+			
+			dlSimple.DATA.u8Speed = M_2_KM(g_SysInfo.tSpeedInfo.u32RealSpeed);
+			
+			dlSimple.DATA.b50RPM = g_SysInfo.tVehicleState.u16RPM / 50;
+
+			dlSimple.DATA.EXTIO.bit._7 = g_SysInfo.tEXTIO.bits.IN_ACC;
+			
+			dlSimple.DATA.EXTIO.bit._6 = g_SysInfo.tEXTIO.bits.IN_1;
+			
+			dlSimple.DATA.EXTIO.bit._5 = g_SysInfo.tEXTIO.bits.IN_2;
+			
+			dlSimple.DATA.EXTIO.bit._4 = g_SysInfo.tEXTIO.bits.IN_3;
+			
+			dlSimple.DATA.EXTIO.bit._3 = g_SysInfo.tEXTIO.bits.IN_4;
+			
+			dlSimple.DATA.EXTIO.bit._2 = g_SysInfo.tEXTIO.bits.IN_5;
+			
+			dlSimple.DATA.EXTIO.bit._1 = g_SysInfo.tEXTIO.bits.IN_6;
+			
+			dlSimple.DATA.EXTIO.bit._0 = g_SysInfo.tEXTIO.bits.IN_7;
+			
+			dlSimple.DATA.u8Speed_GPS = (uint8_t)M_2_KM(g_SysInfo.tGPS_Data.u32Speed);
+
+			SD_AddBuffToFile(FILENAME_DATALOG_BIN, (uint8_t *)&dlSimple, sizeof(DatalogSimpleTypeDef));
+			
+			//Datalog_Build((uint8_t*)&g_dlSimple, sizeof(DatalogV161_TypeDef));
+		}
+
+		//RTOSprintf("\r\n> ### Log Bin record ###");
+
+		return TRUE;
+	}
+	else
+	{
+		return FALSE;
+	}
+}
+
+#if 0
+//============================================================================//
+// @brief  Create datalog report message to upload.
+// @param  pUPLOAD: UploadDataTypeDef variable which contains upload data.
+// @retval None.
+//============================================================================//
+/*
+void Datalog_UploadBuild(UploadDataTypeDef *pUPLOAD)
+{
+  #if ((CUSTOMER_TYPE == CUSTOMER_SKYEYE) ||\
+       (CUSTOMER_TYPE == CUSTOMER_NORMAL) ||\
+       (CUSTOMER_TYPE == CUSTOMER_EUPFIN_B) ||\
+       (CUSTOMER_TYPE == CUSTOMER_ARTC) ||\
+       (CUSTOMER_TYPE == CUSTOMER_TESTB)) // CUSTOMER_SKYEYE	STAR
+	GPS_DataTypeDef GPS_AllData; // Heinz
+	uint8_t *pBuf, Buf[GSM_MAX_BUFFER_SIZE];
+	uint16_t BufLen;
+	char szDateStr[10];
+	char szTimeStr[10];
+	uint8_t *pData;
+	uint16_t i, crc;
+	uint8_t  Upload_len = 0; // Heinz
+
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime((time_t*)&pUPLOAD->HEAD.UTC));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime((time_t*)&pUPLOAD->HEAD.UTC));
+
+	pBuf = Buf;
+
+	BufLen = 0;
+
+	Upload_len = (pUPLOAD->HEAD.u8DataCnt) + 1; // Heinz
+
+	GPS_GetAllData(&GPS_AllData);	// Heinz
+
+	sprintf((char*)pBuf,"$LOG,%s,%s,%s,%c,%02d,%02d,%09d,%02d,",
+          #if ((CUSTOMER_TYPE == CUSTOMER_EUPFIN_B) || (CUSTOMER_TYPE == CUSTOMER_NORMAL) || (CUSTOMER_TYPE == CUSTOMER_ARTC) || (CUSTOMER_TYPE == CUSTOMER_TESTB))
+	        g_Setting.tBusInfo.cBus_ID,
+          #else
+	        g_Setting.szBus_SN,	// Heinz
+          #endif
+	        szDateStr,
+	        szTimeStr,
+	        (GPS_AllData.bStatus == TRUE) ? 'A' : 'V',
+	        g_Setting.GSM_SET.NET_SET.u8GSM_CSQ,
+	        GPS_AllData.u8StlNum, // Heinz
+	        pUPLOAD->HEAD.dwDistance,
+	        Upload_len); // Heinz
+
+	BufLen += strlen((char*)pBuf);
+
+	pBuf += strlen((char*)pBuf);
+
+	memcpy(pBuf, pUPLOAD->DATA, sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF]);
+
+	BufLen += sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF];
+
+	pBuf += sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF];
+
+	pData = (uint8_t*)pUPLOAD->DATA;
+
+	CRC16_Reset(&crc);
+
+	for(i = 0; i < sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF]; i++)
+	{
+		crc = CRC16_Calc(*pData++);
+	}
+
+	sprintf((char*)pBuf, ",%04X#\r\n", crc);
+
+	BufLen += strlen((char*)pBuf);
+
+	DataStream_BuffBuild(SOCKET_BANK_DEF, Buf, BufLen);
+  #else
+	uint8_t *pBuf, Buf[GSM_MAX_BUFFER_SIZE];
+	uint16_t BufLen;
+	char szDateStr[10];
+	char szTimeStr[10];
+	uint8_t *pData;
+	uint16_t i, crc;
+
+
+	strftime(szDateStr, sizeof(szDateStr), "%d%m%y", localtime((time_t*)&pUPLOAD->HEAD.UTC));
+
+	strftime(szTimeStr, sizeof(szTimeStr), "%H%M%S", localtime((time_t*)&pUPLOAD->HEAD.UTC));
+
+	pBuf = Buf;
+
+	BufLen = 0;
+
+	sprintf((char*)pBuf, "$LOG,%s,%s,%s,%09d,%02d,",
+	        g_Setting.szBus_ID,
+	        szDateStr,
+	        szTimeStr,
+	        pUPLOAD->HEAD.dwDistance,
+	        pUPLOAD->HEAD.u8DataCnt);
+
+	BufLen += strlen((char*)pBuf);
+
+	pBuf += strlen((char*)pBuf);
+
+	memcpy(pBuf, pUPLOAD->DATA, sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF]);
+
+	BufLen += sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF];
+
+	pBuf += sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF];
+
+	pData = (uint8_t*)pUPLOAD->DATA;
+
+	CRC16_Reset(&crc);
+
+	for(i = 0; i < sizeof(UploadDataTypeDef) * u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF]; i++)
+	{
+		crc = CRC16_Calc(*pData++);
+	}
+
+	sprintf((char*)pBuf, ",%04X#\r\n", crc);
+
+	BufLen += strlen((char*)pBuf);
+
+	DataStream_BuffBuild(SOCKET_BANK_DEF, Buf, BufLen);
+  #endif
+}
+*/
+//============================================================================//
+// @brief  Upload datalog message to the server.
+// @param  None.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+/*
+bool Datalog_UploadData(time_t *pttUpload)
+{
+	static UploadDataTypeDef UPLOAD = {0};
+
+
+	if(UPLOAD.HEAD.u8DataCnt >= (u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF] - 1)) // Heinz
+	{
+		time_t rawtime1;
+
+
+		rawtime1 = System_GetTime() - g_Setting.i32TimeZoneOffset;
+
+		UPLOAD.HEAD.CMD = CMD_DATALOG_SIMPLE;
+		UPLOAD.HEAD.u16Version = DATALOG_VERSION_DEF;
+		UPLOAD.HEAD.UTC = rawtime1; // Heinz
+		UPLOAD.HEAD.dwDistance = g_SysInfo.VehicleState.dDistance;
+		UPLOAD.HEAD.u32DRV_IN = g_Setting.u32DrvIdNum;
+	}
+
+	memcpy(&UPLOAD.DATA[UPLOAD.HEAD.u8DataCnt], &g_dlSimple.DATA, sizeof(UploadDataTypeDef));
+
+	if(UPLOAD.HEAD.u8DataCnt >= (u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF] - 1))
+	{
+		Datalog_UploadBuild(&UPLOAD);
+
+		//memset(&UPLOAD, 0x00, sizeof(UploadDataTypeDef));
+		memset(&UPLOAD, 0x20, sizeof(UploadDataTypeDef));
+
+		UPLOAD.HEAD.u8DataCnt = 0; // Heinz
+
+		return TRUE;
+	}
+	else
+	{
+		UPLOAD.HEAD.u8DataCnt++;
+
+		return FALSE;
+	}
+}
+*/
+
+//============================================================================//
+// @brief  Handle datalog upload process.
+// @param  None.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+/*
+bool Datalog_Upload_Proc(void)
+{
+	static time_t ttUploadStart = 0;
+
+  #if ENABLE_GSM_NET
+	if(g_Setting.tUpgrade.bUpgradeFlag == TRUE)
+		return FALSE;
+  #endif
+
+  //if(bUploadDataTypeDefTick == 0)
+  //{
+  //	return FALSE;
+  //}
+
+	if(bLog_Ready == FALSE
+	        || ((System_GetTime() - g_Setting.i32TimeZoneOffset) == 0))
+	{
+		ttUploadStart = 0;
+
+		return FALSE;
+	}
+
+  #if ENABLE_UPLOAD_LOG	// Heinz
+	if((ttAccOff > 0) && ((System_GetTime() - g_Setting.i32TimeZoneOffset) > ttAccOff))
+	{
+		bDatalog_Stop_REC = 1; // Heinz 07242018
+		return FALSE;
+	}
+  #endif
+
+	if(ttUploadStart == 0)
+	{
+		//RTOSprintf("\r\n> Upload Data Staring...");
+
+		ttUploadStart = System_GetTime() - g_Setting.i32TimeZoneOffset;
+	}
+
+	//if((ttNow) >= ttUpload )
+	{
+		bDatalog_Stop_REC = 0;
+
+		if(Datalog_UploadData(&ttUploadStart) == TRUE)
+		{
+			//ttUpload += u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF];
+
+			ttUploadStart = System_GetTime() - g_Setting.i32TimeZoneOffset;
+		}
+	}
+
+  //bUploadDataTypeDefTick = 0;
+
+	return TRUE;
+}
+*/
+
+//============================================================================//
+// @brief  Reupload datalog message.
+// @param  pttReUpload: Pointer to a a set of time_t variable which indicates 
+//         the time interval of the datalog need to be uploaded.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+/*
+bool Datalog_ReUploadData(time_t *pttReUpload)
+{
+	static UploadDataTypeDef stUpLoad = {0};
+	DatalogReUploadTypeDef dlSimple;
+	uint8_t i;
+  #if DATALOG_FAST_LOAD == 1
+	char szPath[128];
+	UINT br;
+	FIL fFile;
+	FRESULT res;
+  #endif
+	//char szTimeStr[30];
+
+
+	//RTOSprintf("\r\n===========================");
+	//RTOSprintf("\r\n> ### PKG pttReUpload: %d ###", *pttReUpload);
+
+	//u32StartTickCnt = GetSysTickCount();
+
+	if(stUpLoad.HEAD.u8DataCnt == 0)
+	{
+		if(Datalog_GetLogByTime(pttReUpload, &dlSimple) == FALSE)
+		{
+			++(*pttReUpload);
+
+			return FALSE;
+		}
+
+		stUpLoad.HEAD.CMD = dlSimple.HEAD.CMD;
+		stUpLoad.HEAD.u16Version = dlSimple.HEAD.u16Version;
+		stUpLoad.HEAD.dwDistance = dlSimple.HEAD.dwDistance;
+		stUpLoad.HEAD.u32DRV_IN = dlSimple.HEAD.u32DRV_IN;
+
+		memcpy(&stUpLoad.DATA[stUpLoad.HEAD.u8DataCnt], &dlSimple.DATA, sizeof(UploadDataTypeDef));
+
+		//strftime(szTimeStr, sizeof(szTimeStr), "%H:%M:%S", localtime(&dlSimple.HEAD.UTC));
+
+		//RTOSprintf("\r\n> %02d: %s", stUPLOAD.HEAD.u8DataCnt, szTimeStr);
+
+		stUpLoad.HEAD.u8DataCnt++;
+
+		//return FALSE;
+	}
+  #if DATALOG_FAST_LOAD == 1
+	sprintf(szPath, "%d:/%s", DRV_USER, szFileNameBk);
+
+	if(f_open(&fFile, szPath, FA_READ) != FR_OK)
+	{
+		return FALSE;
+	}
+
+	u32FileIdxBk++;
+
+	f_lseek(&fFile, sizeof(DatalogSimpleTypeDef) * u32FileIdxBk);
+
+	for(i = 1; i < u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF]; i++)
+	{
+		if((sizeof(DatalogSimpleTypeDef) * u32FileIdxBk) <= SD_GetFileSize(szFileNameBk))
+		{
+			res = f_read(&fFile, (uint8_t *)&dlSimple, sizeof(DatalogSimpleTypeDef), &br);
+
+			if(res != FR_OK)
+				break;
+
+			if(dlSimple.HEAD.UTC <= ttReUploadEnd)
+			{
+				memcpy(&stUpLoad.DATA[stUpLoad.HEAD.u8DataCnt], &dlSimple.DATA, sizeof(UploadDataTypeDef));
+
+				//strftime(szTimeStr, sizeof(szTimeStr), "%H:%M:%S", localtime(&dlSimple.HEAD.UTC));
+
+				//RTOSprintf("\r\n> %02d: %s", stUPLOAD.HEAD.u8DataCnt, szTimeStr);
+
+				ttReUploadIdxTime = dlSimple.HEAD.UTC;
+
+				stUpLoad.HEAD.u8DataCnt++;
+			}
+			else
+			{
+				ttReUploadIdxTime = ttReUploadEnd + 1;
+
+				break;
+			}
+		}
+		else
+			break;
+
+		u32FileIdxBk++;
+	}
+
+	f_close(&fFile);
+  #else
+	for(i = 0; i < (u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF] - 1); i++)
+	{
+		u32FileIdxBk++;
+
+		if((sizeof(DatalogSimpleTypeDef) * u32FileIdxBk) <= SD_GetFileSize(szFileNameBk))
+		{
+			SD_ReadAddrToBuff(szFileNameBk, (uint8_t *)&dlSimple, sizeof(DatalogSimpleTypeDef), sizeof(DatalogSimpleTypeDef) * u32FileIdxBk);
+
+			if(dlSimple.HEAD.UTC <= ttReUploadEnd)
+			{
+				memcpy(&stUpLoad.DATA[stUpLoad.HEAD.u8DataCnt], &dlSimple.DATA, sizeof(UploadDataTypeDef));
+
+				//strftime(szTimeStr, sizeof(szTimeStr), "%H:%M:%S", localtime(&dlSimple.HEAD.UTC));
+
+				//RTOSprintf("\r\n> %02d: %s", stUPLOAD.HEAD.u8DataCnt, szTimeStr);
+
+				ttReUploadIdxTime = dlSimple.HEAD.UTC;
+
+				stUpLoad.HEAD.u8DataCnt++;
+			}
+			else
+			{
+				ttReUploadIdxTime = ttReUploadEnd + 1;
+
+				break;
+			}
+		}
+		else
+			break;
+	}
+  #endif
+
+	//RTOSprintf("\r\n===========================");
+
+	stUpLoad.HEAD.UTC = *pttReUpload + (stUpLoad.HEAD.u8DataCnt - 1);
+
+	Datalog_UploadBuild(&stUpLoad);
+
+	memset(&stUpLoad, 0x20, sizeof(UploadDataTypeDef));
+
+	stUpLoad.HEAD.u8DataCnt = 0;
+
+	//u32UseTickCnt = GetSysTickCount() - u32StartTickCnt;
+
+	//RTOSprintf("\r\n> ### u32UseTickCnt: %d ###", u32UseTickCnt);
+
+	return TRUE;
+}
+*/
+
+//============================================================================//
+// @brief  Handle the process to reupload datalog.
+// @param  None.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+/*
+static bool Datalog_ReUpload_Proc(void)
+{
+	if(ttReUploadBegin == 0
+	        && ttReUploadEnd == 0)
+	{
+		return FALSE;
+	}
+
+	if(ttReUploadBegin > ttReUploadEnd)
+	{
+		ttReUploadBegin = 0;
+
+		ttReUploadEnd = 0;
+	}
+	else
+	{
+		if(Datalog_ReUploadData(&ttReUploadBegin) == TRUE)
+		{
+			//ttReUploadBegin += u8DATALOG_UPLOAD_MAX[SOCKET_BANK_DEF];
+			
+			ttReUploadBegin = ttReUploadIdxTime + 1;
+		}
+	}
+
+	if(bDTRfileErrorFlag == TRUE)
+	{
+		ttReUploadBegin = 0;
+
+		ttReUploadEnd = 0;
+
+		bDTRfileErrorFlag = FALSE;
+	}
+
+	return TRUE;
+}
+*/
+/*
+bool Datalog_UploadQuery(time_t ttBegin, time_t ttEnd)
+{
+	if(ttBegin > ttEnd)
+		return FALSE;
+
+	//RTOSprintf("\r\n> ### ttBegin: %d, ttEnd: %d ###", ttBegin, ttEnd);
+
+	ttReUploadBegin = ttBegin;
+
+	ttReUploadEnd = ttEnd;
+
+	return TRUE;
+}
+*/
+/*
+#if ENABLE_UPLOAD_LOG	// Heinz		
+//============================================================================//
+// @brief  Build simple info message.
+// @param  None.
+// @retval None.
+//============================================================================//
+
+void Datalog_Simple_Info(void)
+{
+	DatalogSimpleInfoTypeDef  SIMPLE_INFO = {0};	// Heinz
+
+	SIMPLE_INFO.CMD	= CMD_SIMPLE_INFO;
+
+	sprintf(SIMPLE_INFO.Version, "%s%s,FW-%d.%03d%s",
+	        g_Setting.cJAS_Ver,
+	        STR_CUST,
+	        (VERSION_BUILD / 1000),
+					(VERSION_BUILD % 1000),
+	        FW_VERSION_CHK );
+
+	SIMPLE_INFO.SPD_GAIN = g_Setting.tSpeedSet.fGain,
+	SIMPLE_INFO.SPD_DIV = g_Setting.tRPM_Set.u16DIV;
+
+	if(g_Setting.tENABLE_SET.bits.CAN_SPEED)
+		SIMPLE_INFO.CAN_SPD = 1;
+
+	if( g_Setting.tENABLE_SET.bits.CAN_RPM)
+		SIMPLE_INFO.CAN_RPM = 1;
+
+	SIMPLE_INFO.SPD_LIMIT1 = g_Setting.tSpeedSet.u32Limit[0];
+	SIMPLE_INFO.SPD_LIMIT2 = g_Setting.tSpeedSet.u32Limit[1];
+	SIMPLE_INFO.SPD_LIMIT3 = g_Setting.tSpeedSet.u32Limit[2];
+
+	strcpy(SIMPLE_INFO.szDNS, g_Setting.tGSM_SET.tServerName[SOCKET_BANK_DEF].szADDR);
+	//g_Setting.TempSet.tServerName[SOCKET_BANK_DEF].u16Port);
+
+	SIMPLE_INFO.IP_ADD[0] = g_Setting.tGSM_SET.tServerInfo[SOCKET_BANK_DEF].u32ADDR._U8[3];
+	SIMPLE_INFO.IP_ADD[1] = g_Setting.tGSM_SET.tServerInfo[SOCKET_BANK_DEF].u32ADDR._U8[2];
+	SIMPLE_INFO.IP_ADD[2] = g_Setting.tGSM_SET.tServerInfo[SOCKET_BANK_DEF].u32ADDR._U8[1];
+	SIMPLE_INFO.IP_ADD[3] = g_Setting.tGSM_SET.tServerInfo[SOCKET_BANK_DEF].u32ADDR._U8[0];
+
+	SIMPLE_INFO.IP_PORT[0] = g_Setting.tGSM_SET.tServerInfo[SOCKET_BANK_DEF].u16Port;
+
+	Datalog_Build((uint8_t*)&SIMPLE_INFO, sizeof(DatalogSimpleInfoTypeDef));
+}
+#endif
+*/
+
+//============================================================================//
+// @brief  Build all messages.
+// @param  None.
+// @retval None.
+//============================================================================//
+/*
+void Datalog_BuildAll(void)
+{
+	//bLog_BuildAll = TRUE;
+}
+*/
+//============================================================================//
+// @brief  Clean all datalog data.
+// @param  None.
+// @retval None.
+//============================================================================//
+/*
+static bool Datalog_ClearUp(void)
+{
+	if((System_GetTime() - g_Setting.i32TimeZoneOffset) == 0)
+		return FALSE;
+
+	LOGprintf("\r\n> > Datalog clear up begin.");
+
+	SD_ClearUp("*.DTR", DATALOG_FILE_MAX); // 90, keep the latest 90 files
+
+	LOGprintf("\r\n> Datalog clear up end.");
+
+	g_SysInfo.VehicleState.u32DistCount_AGain = 0;
+	g_SysInfo.VehicleState.dDistBase_GPS = 0;
+	g_SysInfo.VehicleState.dDistance_GPS = 0;
+
+	return TRUE;
+}
+*/
+#endif
+
+#if ENABLE_CAN == 1 && CAN_CUSTOM == CAN_CUSTOM_GDBUS
+//============================================================================//
+// @brief  Get CAN battery data for datalog.
+// @param  None.
+// @retval None.
+//============================================================================//
+void Datalog_GetBatInfo(void)
+{
+	Datalog_BAT_InfoTypeDef tBAT_INFO;
+	
+	
+	memset(&tBAT_INFO, 0x00, sizeof(Datalog_BAT_InfoTypeDef));
+	
+	tBAT_INFO.CMD = CMD_DATALOG_BATTERY;
+
+	tBAT_INFO.MOT_SPEED = CAN_GetMotSpeed();
+
+	tBAT_INFO.CHG_STATE = CAN_GetBatChg();
+
+	tBAT_INFO.BAT_VOL = CAN_GetBatVoltage();
+
+	tBAT_INFO.BAT_CUR = CAN_GetBatCurrent();
+
+	tBAT_INFO.BAT_SOC = CAN_GetSOC();
+
+	tBAT_INFO.BAT_CELL_VMAX = CAN_GetCellVolMax();
+
+	tBAT_INFO.BAT_CELL_VMIN = CAN_GetCellVolMin();
+
+	tBAT_INFO.BAT_CELL_TMAX = CAN_GetCellTmpMax();
+
+	tBAT_INFO.BAT_CELL_TMIN = CAN_GetCellTmpMin();
+}
+#endif
+
+#if ENABLE_GSM_NET
+//============================================================================//
+// @brief  Resend LOG messages in a time interval.
+// @param  ttStart: Indicate the starting point of the interval in which LOG 
+//         messages need to be sent again.
+//         ttStop: Indicate the end point of the interval in which LOG messages
+//         need to be sent again.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+bool Datalog_ResendLog(time_t ttStart, time_t ttStop, uint8_t u8SocketBank)
+{
+	bool bRes;
+	char cFileName[40];
+	time_t ttNow;
+	uint8_t u8Cnt;
+	uint32_t u32FileSize, u32LogBegin, u32LogIdx, u32LogEnd;
+	DatalogSimpleTypeDef stGetDTRDataLog;
+	DatalogUploadTypeDef reUploadDataLog;
+	
+
+	//RTOSprintf("\r\n> ttStart: %d, ttStop: %d", ttStart, ttStop);
+
+	ttNow = System_GetTime();
+	
+	if((ttNow - ttStop) < DAY_2_SECOND(1))
+	{
+		sprintf(cFileName, "%s", FILENAME_DATALOG_BIN);
+	}
+	else
+	{
+		strftime(cFileName, sizeof(cFileName), "DTR/%Y%m%d.DTR", localtime(&ttStop));
+	}
+
+	u32FileSize = SD_GetFileSize(cFileName);
+	
+	printf("\r\n> ### File: %s, Size: %d ###", cFileName, u32FileSize);
+
+	if(u32FileSize == 0) 
+	{
+		RTOSprintf("\r\n> DataLog File Has No Data.\r\n");
+		
+		//bDTRfileErrorFlag = TRUE;
+		
+		return TRUE;
+	}
+
+	bRes = SD_ReadAddrToBuff(cFileName, (uint8_t *)&stGetDTRDataLog, sizeof(DatalogSimpleTypeDef), 0);
+	
+	if(bRes != TRUE)
+	{
+		RTOSprintf("\r\n> DataLog File Error.\r\n");
+		
+		return FALSE;
+	}
+	
+	if((bRes == TRUE) && (stGetDTRDataLog.HEAD.CMD != CMD_DATALOG_SIMPLE))
+	{
+		RTOSprintf("\r\n> DataLog Head Error.\r\n");
+		
+		return FALSE;
+	}
+
+	memset(&stGetDTRDataLog, 0x00, sizeof(DatalogSimpleTypeDef));
+	
+	u32LogIdx = 0;
+	u32LogBegin = 0;
+	
+	u32LogEnd = u32FileSize / sizeof(DatalogSimpleTypeDef);
+	
+	do
+	{
+		u32LogIdx = (u32LogEnd - u32LogBegin) / 2 + u32LogBegin;
+
+		if((u32LogIdx <= u32LogBegin) || (u32LogIdx >= u32LogEnd))
+			break;
+
+		bRes = SD_ReadAddrToBuff(cFileName, (uint8_t*)&stGetDTRDataLog,
+		                         sizeof(DatalogSimpleTypeDef), sizeof(DatalogSimpleTypeDef) * u32LogIdx);
+
+		if((bRes == TRUE) &&
+			 (stGetDTRDataLog.HEAD.CMD == CMD_DATALOG_SIMPLE) &&
+			 (stGetDTRDataLog.HEAD.UTC == ttStop)) 
+		{
+			RTOSprintf("\r\n> Stop Index Get it.");
+			
+			break;
+		}
+
+		if(stGetDTRDataLog.HEAD.UTC > ttStop)
+		{
+			u32LogEnd = u32LogIdx;
+		}
+
+		if(stGetDTRDataLog.HEAD.UTC < ttStop)
+		{
+			u32LogBegin = u32LogIdx;
+		}
+		
+	}while(u32LogEnd != u32LogBegin);
+	
+	//RTOSprintf("\r\n> Stop Index: %d, Addr: %08X\r\n", u32LogIdx, sizeof(DatalogSimpleTypeDef) * u32LogIdx);
+	
+	HAL_Delay(100);
+	
+	//SD_RemoveFile("ReSendFile.TMP");
+	
+	memset(&reUploadDataLog, 0x00, sizeof(DatalogUploadTypeDef));
+	
+	u8Cnt = 0;
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+		
+		
+		// Acquire GSM_SD synchronization
+		osRes = osMutexWait(mutex_gsm_sd_user, S_2_mS(10));
+
+		if(osRes != osOK)
+		{
+			return FALSE;
+		}
+	}
+	
+	do
+	{
+		bRes = SD_ReadAddrToBuff(cFileName, (uint8_t*)&stGetDTRDataLog,
+						                 sizeof(DatalogSimpleTypeDef), sizeof(DatalogSimpleTypeDef) * u32LogIdx);
+		
+		u32LogIdx--;
+
+		if(stGetDTRDataLog.HEAD.UTC >= ttStart)
+		{
+			if(u8Cnt == 0)
+			{
+				memcpy(&reUploadDataLog.HEAD, &stGetDTRDataLog.HEAD, sizeof(stGetDTRDataLog.HEAD));
+			}
+			
+			memcpy(&reUploadDataLog.DATA[u8Cnt], &stGetDTRDataLog.DATA, sizeof(stGetDTRDataLog.DATA));
+			
+			u8Cnt++;
+			
+			if(u8Cnt >= u8DATALOG_UPLOAD_MAX[u8SocketBank])
+			{
+				reUploadDataLog.HEAD.u8DataCnt = u8Cnt;
+				
+				GSM_TCP_ReSendLOG(&reUploadDataLog, u8SocketBank);
+				
+				u8Cnt = 0;
+				
+				memset(&reUploadDataLog, 0x00, sizeof(DatalogUploadTypeDef));
+			}
+		}
+		else
+		{
+			reUploadDataLog.HEAD.u8DataCnt = u8Cnt;
+			
+			GSM_TCP_ReSendLOG(&reUploadDataLog, u8SocketBank);
+			
+			u8Cnt = 0;
+			
+			memset(&reUploadDataLog, 0x00, sizeof(DatalogUploadTypeDef));
+		}
+		
+		//RTOSprintf("\r\n> UTC: %d, ttStart: %d", stGetDTRDataLog.HEAD.UTC, ttStart);
+		
+	} while(stGetDTRDataLog.HEAD.UTC >= ttStart);
+	
+	if(bRTOS_En)
+		// Release GSM SD synchronization
+		osMutexRelease(mutex_gsm_sd_user);
+	
+	RTOSprintf("\r\n> ### ReSend OK!! ###\r\n");
+	
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Resend EVENT messages in a time interval.
+// @param  ttStart: The starting point of the time interval in which the EVENT
+//         messages need to be sent again.
+//         ttEnd: The end point of the time interval in which the EVENT messages
+//         need to be sent again.
+// @retval TRUE: The operation is successful.
+//         FALSE: The operation is failed.
+//============================================================================//
+bool Datalog_ResendEvent(time_t ttStart, time_t ttStop, uint8_t u8SocketBank)
+{
+	bool bRes;
+	char cFileName[40];
+	time_t ttNow;
+	uint32_t u32FileSize, u32LogIdx, u32LogEnd;
+	DatalogEventlogTypeDef stDatalogEvent;
+
+	
+	ttStart = ttStart - g_Setting.i32TimeZoneOffset;
+	
+	ttStop = ttStop - g_Setting.i32TimeZoneOffset;
+	
+	//RTOSprintf("\r\n> [Datalog_ResendEvent] ttStart: %d, ttStop: %d", ttStart, ttStop);
+	
+	ttNow = System_GetTime();
+	
+	if((ttNow - ttStop) < DAY_2_SECOND(1))
+	{
+		sprintf(cFileName, "%s", FILENAME_DATALOG_EVENT_BIN);
+	}
+	else
+	{
+		strftime(cFileName, sizeof(cFileName), "DTR/%Y%m%d_Event.DTR", localtime(&ttStop));
+	}
+	
+	u32FileSize = SD_GetFileSize(cFileName);
+	
+	//printf("\r\n> ### File: %s, Size: %d ###", cFileName, u32FileSize);
+	
+	if(u32FileSize == 0) 
+	{
+		RTOSprintf("\r\n> DataEvent File Has No Data.\r\n");
+		
+		return TRUE;
+	}
+	
+	memset(&stDatalogEvent, 0x00, sizeof(DatalogEventlogTypeDef));
+	
+	u32LogIdx = 0;
+	u32LogEnd = u32FileSize / sizeof(DatalogEventlogTypeDef);
+	
+	//RTOSprintf("\r\n> ### u32LogIdx: %d, u32LogEnd: %d ###", u32LogIdx, u32LogEnd);
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+		
+		
+		// Acquire GSM_SD synchronization
+		osRes = osMutexWait(mutex_gsm_sd_user, S_2_mS(10));
+
+		if(osRes != osOK)
+		{
+			return FALSE;
+		}
+	}
+	
+	do
+	{
+		bRes = SD_ReadAddrToBuff(cFileName, (uint8_t *)&stDatalogEvent,
+		                         sizeof(DatalogEventlogTypeDef), sizeof(DatalogEventlogTypeDef) * u32LogIdx);
+		
+		if((bRes == TRUE) && (stDatalogEvent.CMD == CMD_DATALOG_EVENT))
+		{
+			if((stDatalogEvent.UTC >= ttStart) && (stDatalogEvent.UTC <= ttStop))
+			{
+				//RTOSprintf("\r\n> ### ReSend Data ###");
+				
+				GSM_TCP_ReSendEVENT(stDatalogEvent, u8SocketBank);
+			}
+		}
+		
+		u32LogIdx++;
+		
+	} while(u32LogIdx < u32LogEnd);
+	
+	if(bRTOS_En)
+		// Release GSM SD synchronization
+		osMutexRelease(mutex_gsm_sd_user);
+	
+	RTOSprintf("\r\n> ### Datalog_ResendEvent OK!! ###\r\n");
+	
+	return TRUE;
+}
+#endif

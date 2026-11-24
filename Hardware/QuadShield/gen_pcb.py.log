@@ -1,0 +1,68 @@
+placed 37 footprints; 138 nets
+  /BST         -> U1.6   4 segs 0 vias
+  /VBAT_F      -> F1.2   1 segs 0 vias
+  /VBAT_RAW    -> J3.1   9 segs 0 vias
+  /SW          -> U1.5   2 segs 2 vias
+  /SW          -> C3.2   4 segs 0 vias
+  /VBAT        -> U1.3   8 segs 0 vias
+  /VBAT        -> U1.2   1 segs 0 vias
+  /VBAT        -> C2.1   1 segs 0 vias
+  /VBAT        -> C1.1   3 segs 0 vias
+  /VBAT        -> D1.1   17 segs 0 vias
+  /+5V_BUCK    -> C5.1   8 segs 0 vias
+  /+5V_BUCK    -> C4.1   1 segs 0 vias
+  /+5V_BUCK    -> L1.2   1 segs 0 vias
+  /+5V_BUCK    -> D2.2   1 segs 0 vias
+  /+5V_BUCK    -> U1.1   15 segs 0 vias
+  /+5V         -> J12.2   1 segs 0 vias
+  /+5V         -> J13.2   2 segs 0 vias
+  /+5V         -> J9.1   1 segs 0 vias
+  /+5V         -> BZ1.1   6 segs 0 vias
+  /+5V         -> D4.1   10 segs 0 vias
+  /+5V         -> J11.2   14 segs 0 vias
+  /+5V         -> J10.2   5 segs 0 vias
+  /+5V         -> J1.2   2 segs 0 vias
+  /+5V         -> J1.1   1 segs 0 vias
+  /+5V         -> C6.1   10 segs 2 vias
+  /+5V         -> D2.1   10 segs 0 vias
+  /RC5         -> J1.11  10 segs 1 vias
+  /RC4         -> J1.14  13 segs 1 vias
+  /RC3         -> J1.13  8 segs 2 vias
+  /RC2         -> J1.16  13 segs 1 vias
+  /RC1         -> J1.15  16 segs 0 vias
+  /GPS_TX      -> J1.40  11 segs 0 vias
+  /GPS_RX      -> J1.43  20 segs 0 vias
+  /ESC4        -> J2.48  15 segs 0 vias
+  /ESC3        -> J2.28  14 segs 1 vias
+  /ESC2        -> J1.53  10 segs 0 vias
+  /ESC1        -> J1.25  8 segs 1 vias
+  /BUZZER      -> J1.38  24 segs 1 vias
+  /LED_PWR     -> R1.2   3 segs 0 vias
+  /BZ_N        -> Q1.3   4 segs 2 vias
+  /BZ_N        -> BZ1.2   4 segs 0 vias
+  /BZ_B        -> R4.2   5 segs 0 vias
+  /BZ_B        -> Q1.1   1 segs 0 vias
+  /I2C_SDA     -> J8.4   6 segs 0 vias
+  /I2C_SDA     -> J9.5   18 segs 1 vias
+  /I2C_SDA     -> J1.7   16 segs 1 vias
+  /I2C_SCL     -> J8.3   11 segs 1 vias
+  /I2C_SCL     -> J9.4   19 segs 1 vias
+  /I2C_SCL     -> J1.8   12 segs 1 vias
+  /VBAT_SENSE  -> R3.1   3 segs 2 vias
+  /VBAT_SENSE  -> R2.2   5 segs 0 vias
+  /VBAT_SENSE  -> J2.15  1 segs 0 vias
+  /+3V3        -> R6.1   2 segs 2 vias
+  /+3V3        -> J8.1   4 segs 0 vias
+  /+3V3        -> J2.1   13 segs 1 vias
+  /+3V3        -> J2.2   1 segs 0 vias
+saved routed board (before pours)
+zone 0
+ outline
+ added
+zone 31
+ outline
+ added
+GND pad vias: 11
+stitch vias 266 (zones are filled by fill_zones.py: ZONE_FILLER crashes on a board without a project)
+stitching vias: 266
+saved QuadShield.kicad_pcb | unrouted: none

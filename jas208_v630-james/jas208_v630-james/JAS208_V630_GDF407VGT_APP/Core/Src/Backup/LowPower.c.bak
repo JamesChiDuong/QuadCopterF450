@@ -1,0 +1,70 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "LowPower.h"
+
+#include "stm32fxxx_hal_user.h"
+#include "main.h"
+#include "System.h"
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Put the system into standby mode.
+// @param  None.
+// @retval None.
+//============================================================================//
+void LowPwr_EnterStandbyMode(void)
+{
+	__HAL_RCC_PWR_CLK_ENABLE();
+
+	// If Standby flag is set
+	if(__HAL_PWR_GET_FLAG(PWR_FLAG_SB) != RESET)
+	{
+		// Clear Standby flag
+		__HAL_PWR_CLEAR_FLAG(PWR_FLAG_SB);
+	}
+
+	// If Reset flag is set
+	if(__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST))
+	{
+		// Clear Reset flag
+		__HAL_RCC_CLEAR_RESET_FLAGS();
+	}
+
+	//HAL_SuspendTick();
+
+	// Disable all used wakeup sources: Pin1(PA.0)
+	HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1);
+
+	// Clear all related wakeup flags
+	__HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
+
+	// Re-enable all used wakeup sources: Pin1(PA.0)
+	HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN1);
+
+	//HAL_RTC_ALARM_ENABLE_IT(hrtc,RTC_IT_ALRA);
+
+	/*  RTC Wakeup Interrupt Generation:
+	  Wakeup Time Base = (RTC_WAKEUPCLOCK_RTCCLK_DIV /(LSE or LSI))
+	  Wakeup Time = Wakeup Time Base * WakeUpCounter
+	              = (RTC_WAKEUPCLOCK_RTCCLK_DIV /(LSE or LSI)) * WakeUpCounter
+	  ==> WakeUpCounter = Wakeup Time / Wakeup Time Base
+
+	  To configure the wake up timer to 4s the WakeUpCounter is set to 0x1FFF:
+	    RTC_WAKEUPCLOCK_RTCCLK_DIV = RTCCLK_Div16 = 16
+	    Wakeup Time Base = 16 /(~32.768KHz) = ~0,410 ms
+	    Wakeup Time = ~4s = 0,488ms  * WakeUpCounter
+	    ==> WakeUpCounter = ~4s/0,488ms*/
+	// Configure RTC wakeup for 5s
+	//HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, 0x2800, RTC_WAKEUPCLOCK_RTCCLK_DIV16);
+
+	RTOSprintf("\nEnter standby mode.");
+
+	// Enter standby mode
+	HAL_PWR_EnterSTANDBYMode();
+	//HAL_PWR_EnterSTOPMode(PWR_MAINREGULATOR_ON, PWR_STOPENTRY_WFI);
+}

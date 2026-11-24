@@ -1,0 +1,239 @@
+#ifndef _COMM_FUNC_H_
+#define _COMM_FUNC_H_
+//============================================================================//
+
+
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "stm32fxxx_hal_user.h"
+#include "DataType.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+#define PI						              3.14159265358979323e0
+
+// radius(®|«×) = PI/180
+#define radius					            1.74532925199432957e-002
+
+// radian(©·«× or Ñy«×) = 180/PI
+#define radian					            5.72957795130823208e1
+
+#define EarthRadius				          6378137ul
+
+#define mS_2_uS(mS)				          ((mS) * 1000) // Millisecond to microsecond
+
+#define mS_2_S(mS)				          ((mS) / 1000) // Millisecond to second
+
+#define mS_2_Hz(mS)				          ((float)1000 / (mS)) // Millisecond to Hertz
+
+#define S_2_mS(S)				            ((S) * 1000) // Second to millisecond
+
+#define S_2_uS(S)				            ((S) * 1000000) // Second to micro second
+
+#define S_2_MIN(S)				          ((S) / 60) // Second to minute
+
+#define S_2_HOUR(S)				          ((S) / 3600) // Second to hour
+
+#define S_2_DAY(S)				          ((S) / 86400) // Second to day
+
+#define MINUTE_2_SECOND(MIN)	      ((MIN) * 60) // Minute to second
+
+#define HOUR_2_SECOND(HOUR)		      ((HOUR) * 3600) // Hour to second
+
+#define DAY_2_SECOND(DAY)		        ((DAY) * 86400) // Day to second
+
+#define KM_2_MILES(KM)			        ((KM) * 0.621371) // Kilometre to mile
+
+#define KM_2_M(KM)				          ((KM) * 1000) // Kilometre to metre
+
+#define KM_2_CM(KM)				          ((KM) * 100000) // Kilometre to centimetre
+
+#define KM_2_MM(KM)				          ((KM) * 1000000) // Kilometre to millimetre
+
+#define MILES_2_KM(MI)			        ((MI) * 1.609344) // Mile to kilometre
+
+#define KNOT_2_M(KNOT)			        ((KNOT) * 1852) // Knot to metre
+
+#define M_2_KNOT(M)				          ((M) * 0.00053995) // Metre to knot
+
+#define M_2_100M(M)				          ((M) / 100) // Metre to 100 metres
+
+#define M_2_FT(M)				            ((M) * 3.280840) // Metre to foot
+
+#define M_2_10M(M)				          ((M) / 10) // Metre to 10 metre
+
+#define M_2_HM(M)				            ((M) / 100) // Metre to 100 metres
+
+#define M_4_100M(M)				          ((M) * 100) // Metre for 100 metre
+
+#define HM_2_M(HM)				          ((HM) * 100) // 100 metres to metre
+
+#define M_2_KM(M)				            ((M) / 1000) // Metre to kilometre
+
+#define M_2_CM(M)				            ((M) * 100) // Metre to centimetre
+
+#define M_2_MM(M)				            ((M) * 1000) // Metre to millimetre
+
+#define MM_2_M(MM)				          ((MM) / 1000) // Millimetre to metre
+
+#define CRC8_RESET_VAL              (0x00) // CRC8 reset value
+
+#define CRC16_RESET_VAL             (0x0000) // CRC16 reset value
+
+#define CRC32_RESET_VAL             (0x00000000) // CRC32 reset value
+
+// Calculate CRC32 value
+#define CALC_CRC32(CRC32, INPUT) \
+        CRC32 = ((CRC32) >> 8) ^ u32CRC32_TABLE[(INPUT) ^ ((CRC32) & 0x000000FF)]
+				
+#define FUNC_SKIP_NUM_MAX           5U // Maximum number of functions allowed to be skipped
+
+#define FUNC_SKIP_TIMEOUT_MAX       3600U // Maximum function skip time out, 1 hour
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+typedef enum
+{
+	PROC_STEP_NULL = 0,
+	PROC_STEP_1,
+	PROC_STEP_2,
+	PROC_STEP_3,
+	PROC_STEP_4,
+	PROC_STEP_5,
+	PROC_STEP_6,
+	PROC_STEP_7,
+	PROC_STEP_8,
+	PROC_STEP_9,
+	PROC_STEP_10,
+	PROC_STEP_11,
+	PROC_STEP_12,
+	PROC_STEP_13,
+	PROC_STEP_14,
+	PROC_STEP_15,
+	PROC_STEP_16,
+	PROC_STEP_17,
+	PROC_STEP_18,
+	PROC_STEP_19,
+	PROC_STEP_20,
+	PROC_STEP_21,
+	PROC_STEP_22,
+	PROC_STEP_23,
+	PROC_STEP_24,
+	PROC_STEP_25,
+	PROC_STEP_26,
+	PROC_STEP_27,
+	PROC_STEP_28,
+	PROC_STEP_29,
+	PROC_STEP_30,
+	PROC_STEP_31,
+	PROC_STEP_32,
+	PROC_STEP_33,
+	PROC_STEP_34,
+	PROC_STEP_35,
+	PROC_STEP_36,
+	PROC_STEP_37,
+	PROC_STEP_38,
+	PROC_STEP_39,
+	PROC_STEP_40,
+	PROC_STEP_41,
+	PROC_STEP_42,
+	PROC_STEP_43,
+	PROC_STEP_44,
+	PROC_STEP_45,
+	PROC_STEP_46,
+	PROC_STEP_47,
+	PROC_STEP_48,
+	PROC_STEP_49,
+	PROC_STEP_50
+
+} ProcStepTypeDef;
+
+typedef enum
+{
+	FUNC_GSM_TCP_SERVER_DEF = 0U,
+	
+	FUNC_GSM_TCP_SERVER_EXT,
+	
+  FUNC_GSM_FTP,
+	
+} FuncTagTypeDef;
+
+#pragma pack(1)
+typedef struct
+{
+  bool bSkip;
+	
+	uint32_t u32TimeOut;
+	
+	uint32_t u32LastTick;
+	
+} FuncSkipTypeDef;	
+#pragma pack()
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+extern const char* cWeekDay[];
+
+extern const char* cMonth[];
+
+extern const uint8_t ASCII_WORD[];
+
+//extern const uint8_t ASCII_WORD_6x16[];
+
+extern const uint8_t u8TWord[4][32];
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+
+void Delay_uS(const uint32_t u32uSec);
+void Delay_mS(uint32_t u32mSec);
+void *RTOSmalloc(size_t size);
+void RTOSfree(void *ptr);
+uint8_t Bin_2_BCD(uint8_t u8BinVal);
+uint8_t BCD_2_Bin(uint8_t u8BCD_Val);
+uint8_t LowBCDToASCII(uint8_t u8BCDByte);
+uint8_t HIGHBCDToASCII(uint8_t u8BCDByte);
+uint8_t LowBCDToNum(uint8_t u8BCDByte);
+uint8_t HIGHBCDToNum(uint8_t u8BCDByte);
+uint8_t Bin_2_BCD2(uint8_t u8BinValue);
+uint8_t BCD2_2_Bin(uint8_t u8BCDValue);
+void SecToBCDTime(uint32_t u32SecData, uint8_t *pu8BCDTime);
+uint32_t BCDTimeToSec(uint8_t *u8BCDTime);
+void StopChar(char *pcStr, char cEnd);
+void ChangeChar(char *pcStr, char cSource, char cTarget);
+uint8_t CountChar(char *pcStr, char cChar);
+bool FindSequence(char* pcDat, char* pcSeq, uint16_t u16DatLen, uint16_t u16SeqLen, uint16_t* pu16Pos);
+uint8_t GetWeekday(uint16_t year, uint8_t month, uint8_t day);
+void FuncSkip_Enable(FuncTagTypeDef tFuncTag, uint32_t u32TimeOut);
+void FuncSkip_Disable(FuncTagTypeDef tFuncTag);
+bool FuncSkip_IsEnable(FuncTagTypeDef tFuncTag);
+void CRC8_Reset(uint8_t *pu8CRC_Value);
+uint8_t CRC8_Calc(uint8_t u8CRC8_Value, uint8_t u8Dat);
+void CRC16_Reset(uint16_t *pu16CRC16_Value);
+uint16_t CRC16_Calc(uint16_t u16CRC16_Value, uint8_t u8Dat);
+void CRC32_Reset(uint32_t *pu32CRC32_Value);
+uint32_t CRC32_Calc(uint32_t u32CRC32_Value, uint8_t u8Dat);
+uint8_t CalCheckSum(uint8_t *pu8Dat, uint32_t u32DatLen);
+void RTOSprintf(char* format,...);
+void LOGprintf(char* format,...);
+void GPSprintf(char* format,...);
+void GSMprintf(char* format,...);
+void CANprintf(char* format,...);
+void DB9printf(char* format,...);
+void EXTprintf(char* format,...);
+void GSprintf(char* format,...);
+
+
+//============================================================================//
+#endif //_COMM_FUNC_H_

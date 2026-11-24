@@ -1,0 +1,187 @@
+/*
+ * USER_System.c
+ *
+ *  Created on: Apr 13, 2025
+ *      Author: PC
+ */
+#include <USER_System.h>
+#include <USER_PID.h>
+#include <USER_UART_Driver.h>
+#include <USER.GPS.h>
+gSettingTypeDef g_Setting;
+
+/*PID Variable*/
+typedef struct
+{
+	PID_TypeDef ROLL_TPID;
+
+	PID_TypeDef PITCH_TPID;
+
+	PID_TypeDef YAW_TPID;
+
+	PID_TypeDef THURST_TPID;
+	Gry_Variable gPIDData_Thurst;
+	Gry_Variable gPIDData_Roll;
+	Gry_Variable gPIDData_Pitch;
+	Gry_Variable gPIDData_Yall;
+}InnerLoop;
+
+InnerLoop InnerLoopVal;
+typedef struct
+{
+	PID_TypeDef ROLL_TPID;
+
+	PID_TypeDef PITCH_TPID;
+
+	Gry_Variable gPIDData_Roll;
+	Gry_Variable gPIDData_Pitch;
+}OuterLoop;
+
+OuterLoop OuterLoopVal;
+
+void Sys_Init(void)
+{
+	/******Set up general function*/
+	UART_Setup(SET_COMPORT_DEF);
+
+	Motor_Init();
+
+	UART_CheckInterrupt();
+
+	MPU6050_Initialization();
+	/*******Init inner loop*******/
+	// Thurst loop
+	PID_Gyro_Init(InnerLoopVal.THURST_TPID, InnerLoopVal.gPIDData_Thurst);
+	// Roll Loop
+	PID_Gyro_Init(InnerLoopVal.ROLL_TPID, InnerLoopVal.gPIDData_Roll);
+	// Yaw loop
+	PID_Gyro_Init(InnerLoopVal.YAW_TPID, InnerLoopVal.gPIDData_Yall);
+	// Pitch loop
+	PID_Gyro_Init(InnerLoopVal.PITCH_TPID, InnerLoopVal.gPIDData_Pitch);
+
+	/*******Init Outer loop*******/
+
+	// Roll Loop
+	PID_Gyro_Init(OuterLoopVal.ROLL_TPID, OuterLoopVal.gPIDData_Roll);
+	// Pitch loop
+	PID_Gyro_Init(OuterLoopVal.PITCH_TPID, OuterLoopVal.gPIDData_Pitch);
+}
+bool Sys_Motor_Mixing_Algorithm(gCalculatedPIDParam CalPIDParam)
+{
+	double dCalDataMotor1, dCalDataMotor2, dCalDataMotor3, dCalDataMotor4;
+	// Control motor front right - Motor 1
+	static double dLastCalDataMotor1, dLastCalDataMotor2, dLastCalDataMotor3, dLastCalDataMotor4;
+
+	gMotorParameter MotorParam;
+
+
+	dCalDataMotor1 = CalPIDParam.dthurst + CalPIDParam.dgry_yaw + CalPIDParam.dgry_pitch + CalPIDParam.dgry_roll;
+
+	// Control motor front left - Motor 2
+	dCalDataMotor2 = CalPIDParam.dthurst - CalPIDParam.dgry_yaw + CalPIDParam.dgry_pitch - CalPIDParam.dgry_roll;
+
+	// Control motor back right - Motor 3
+	dCalDataMotor3 = CalPIDParam.dthurst - CalPIDParam.dgry_yaw - CalPIDParam.dgry_pitch + CalPIDParam.dgry_roll;
+
+	// Control motor back left - Motor 4
+	dCalDataMotor4 = CalPIDParam.dthurst + CalPIDParam.dgry_yaw - CalPIDParam.dgry_pitch - CalPIDParam.dgry_roll;
+
+	if(dLastCalDataMotor1 != dCalDataMotor1)
+	{
+		dLastCalDataMotor1 = dCalDataMotor1;
+		MotorParam.u8Motor = 1;
+		MotorParam.u32Frequency = 50; // set frequency 50hz
+		MotorParam.u8DutyCle = (uint8_t)dLastCalDataMotor1;
+		// Convert fDataMotor1 to dutyCyle
+		Motor_SetParam(MotorParam);
+	}
+
+	if(dLastCalDataMotor2 != dCalDataMotor2)
+	{
+		dLastCalDataMotor2 = dCalDataMotor2;
+		MotorParam.u8Motor = 2;
+		MotorParam.u32Frequency = 100; // set frequency 100hz
+		MotorParam.u8DutyCle = (uint8_t)dLastCalDataMotor2;
+		// Convert fDataMotor2 to dutyCyle
+		Motor_SetParam(MotorParam);
+	}
+
+	if(dLastCalDataMotor3 != dCalDataMotor3)
+	{
+		dLastCalDataMotor3 = dCalDataMotor3;
+		MotorParam.u8Motor = 3;
+		MotorParam.u32Frequency = 50; // set frequency 50hz
+		MotorParam.u8DutyCle = (uint8_t)dLastCalDataMotor3;
+		// Convert fDataMotor3 to dutyCyle
+		Motor_SetParam(MotorParam);
+	}
+
+	if(dLastCalDataMotor4 != dCalDataMotor4)
+	{
+		dLastCalDataMotor4 = dCalDataMotor4;
+		MotorParam.u8Motor = 4;
+		MotorParam.u32Frequency = 50; // set frequency 50hz
+		MotorParam.u8DutyCle = (uint8_t)dLastCalDataMotor4;
+		// Convert fDataMotor4 to dutyCyle
+		Motor_SetParam(MotorParam);
+	}
+
+	if((dCalDataMotor1 <0) || (dCalDataMotor2 < 0) || (dCalDataMotor3 < 0) || (dCalDataMotor4 < 0))
+	{
+		return false;
+	}
+	return true;
+}
+
+void Sys_InnerLoop(Struct_MPU6050* mpu6050,double ref_Thurst, double ref_Pitch, double ref_Yaw, double ref_Roll)
+{
+	// Assign input data
+	InnerLoopVal.gPIDData_Thurst.dInputData = (double)mpu6050.acc_z;
+	InnerLoopVal.gPIDData_Yall.dInputData = (double)mpu6050.gyro_x;
+	InnerLoopVal.gPIDData_Roll.dInputData = (double)mpu6050.gyro_y;
+	InnerLoopVal.gPIDData_Pitch.dInputData = (double)mpu6050.gyro_z;
+
+	// Assign Ref value
+	InnerLoopVal.gPIDData_Thurst.Controller.dref_value = ref_Thurst;
+	InnerLoopVal.gPIDData_Yall.Controller.dref_value = ref_Yaw;
+	InnerLoopVal.gPIDData_Roll.Controller.dref_value = ref_Roll;
+	InnerLoopVal.gPIDData_Pitch.Controller.dref_value = ref_Pitch;
+
+	// Calculated thurst loop control
+	PID_Compute(&InnerLoopVal.THURST_TPID);
+	// Calculated roll loop control
+	PID_Compute(&InnerLoopVal.ROLL_TPID);
+	// Calculated yaw loop control
+	PID_Compute(&InnerLoopVal.YAW_TPID);
+	// Calculated pitch loop control
+	PID_Compute(&InnerLoopVal.PITCH_TPID);
+
+	// Assign output data
+	CalPIDParam.dthurst = InnerLoopVal.gPIDData_Thurst.dOutputData;
+	CalPIDParam.dgry_yaw = InnerLoopVal.gPIDData_Yall.dOutputData;
+	CalPIDParam.dgry_roll = InnerLoopVal.gPIDData_Roll.dOutputData;
+	CalPIDParam.dgry_pitch = InnerLoopVal.gPIDData_Pitch.dOutputData;
+	// Apply to MMA module
+	Sys_Motor_Mixing_Algorithm(CalPIDParam);
+}
+static void Sys_WorldToBodyConversion(gCalculatedPIDParam* PitchAndRoll_OuterLoop, uint16_t u16GPS_XErr,uint8_t u8GPS_YErr, float fYaw_Value)
+{
+	PitchAndRoll_OuterLoop->dgry_roll = cos(fYaw_Value)*u16GPS_XErr + sin(fYaw_Value)*u16GPS_YErr;
+	PitchAndRoll_OuterLoop->dgry_yaw = -sin(fYaw_Value).u16GPS_XErr + cos(fYaw_Value)*u16GPS_YErr;
+
+}
+
+void Sys_OuterLoop(Struct_MPU6050 mpu6050,Gry_Variable t_RefOutputData_InnerLoop,GPS_Variable Position_Estimated,GPS_Variable Position_Ref, GPS_Variable Position_Input)
+{
+	gCalculatedPIDParam PitchAndRoll_OuterLoop;
+
+	uint16_t u16X_Err = Position_Ref.u16XValue -Position_Input.u16XValue;
+	uint16_t u16Y_Err = Position_Ref.u16YValue -Position_Input.u16YValue;
+
+	Sys_WorldToBodyConversion(&PitchAndRoll_OuterLoop,u16X_Err,u16Y_Err, mpu6050.acc_z);
+
+	// Roll Loop
+	PID_Gyro_Init(OuterLoopVal.ROLL_TPID, InnerLoopVal.gPIDData_Roll);
+	// Yaw loop
+	PID_Gyro_Init(OuterLoopVal.YAW_TPID, InnerLoopVal.gPIDData_Yall);
+}

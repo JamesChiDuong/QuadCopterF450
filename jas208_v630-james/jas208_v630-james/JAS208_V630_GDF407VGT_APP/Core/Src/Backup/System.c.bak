@@ -1,0 +1,1706 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "System.h"
+
+#include <string.h>
+#include <stdlib.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Config.h"
+#include "Datalog.h"
+#include "EXTIO.h"
+#include "GPS_Driver.h"
+#include "main.h"
+#include "LCD_Key.h"
+#include "MX25L_Driver.h"
+#include "PCF_Driver.h"
+#include "PRN_Driver.h"
+#include "RuleV161.h"
+#include "SD_Module.h"
+#include "UART_Driver.h"
+#include "USB_Module.h"
+#include "Version.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+
+#define	FILENAME_SETUP_SYS		"SETUP.SYS"
+
+#define	FILENAME_SETUP1_SYS		"SETUP1.SYS"
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+TaskInfoTypeDef taskInfo[TASK_QUANTITY];
+
+gSettingTypeDef g_Setting;
+
+gSysInfoTypeDef g_SysInfo;
+
+char g_cVDRFileName[100];
+
+//bool g_bUSBDownloadFlg = FALSE;
+
+bool g_bSystemBootFlag = FALSE;
+
+bool g_bDoFormatFlag = FALSE;
+
+const ProductInfoTypeDef PRODUCT_INFO = {MODEL_NAME, CUSTOMER_TYPE, HW_VER, VERSION_BUILD};
+
+bool bSysLogEn = TRUE;
+
+bool g_bPTestMode = FALSE;
+
+bool bSystemStop = FALSE;
+
+gSettingTypeDef pg_Setting_Buf;
+
+bool bSystemTimeReady = FALSE;
+
+//uint8_t u8PublicDataBuf[8192]; // 8 kBytes
+
+//uint8_t TID_WriteSetupFile = TIMER_INVALID_ID;
+
+//g_u8HwInfo = g_u8HwInfo | 0x80; ///4G
+//g_u8HwInfo = g_u8HwInfo | 0x40;
+//g_u8HwInfo = g_u8HwInfo | 0x20;
+//g_u8HwInfo = g_u8HwInfo | 0x10; ///RTC
+////////////////////////////////////////
+//g_u8HwInfo = g_u8HwInfo | 0x08; ///SD
+//g_u8HwInfo = g_u8HwInfo | 0x04; ///GPS
+//g_u8HwInfo = g_u8HwInfo | 0x02; ///Monitor
+//g_u8HwInfo = g_u8HwInfo | 0x01; ///Printer
+uint8_t g_u8HwInfo = 0;
+
+//============================================================================//
+// User Functions
+//============================================================================//
+//============================================================================//
+// @brief  Initialize handling information for all tasks.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_TaskInfoInit(void)
+{	
+	memset(taskInfo, 0x00, sizeof(taskInfo)); 
+	
+	taskInfo[TASK_LOG_PROC].taskID = taskLogProcHandle;
+	sprintf(taskInfo[TASK_LOG_PROC].cTaskName, "LogProc");
+	taskInfo[TASK_LOG_PROC].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_EXTIO_PROC].taskID = taskEXTIO_ProcHandle;
+	sprintf(taskInfo[TASK_EXTIO_PROC].cTaskName, "EXTIO_Proc");
+	taskInfo[TASK_EXTIO_PROC].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_GPS_PROC].taskID = taskGPS_ProcHandle;
+	sprintf(taskInfo[TASK_GPS_PROC].cTaskName, "GPS_Proc");
+	taskInfo[TASK_GPS_PROC].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_GSM_PROC].taskID = taskGSM_ProcHandle;
+	sprintf(taskInfo[TASK_GSM_PROC].cTaskName, "GSM_Proc");
+	taskInfo[TASK_GSM_PROC].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_LCD_KEY].taskID = taskLCD_KeyHandle;
+	sprintf(taskInfo[TASK_LCD_KEY].cTaskName, "LCD_Key");
+	taskInfo[TASK_LCD_KEY].u32TaskTimeout = S_2_mS(240); 
+	
+	taskInfo[TASK_RS232_PROC].taskID = taskRS232_ProcHandle;
+	sprintf(taskInfo[TASK_RS232_PROC].cTaskName, "RS232_Proc");
+	taskInfo[TASK_RS232_PROC].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_HIGH_LOAD].taskID = taskHighLoadHandle;
+	sprintf(taskInfo[TASK_HIGH_LOAD].cTaskName, "HighLoad");
+	taskInfo[TASK_HIGH_LOAD].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_SD_PROC].taskID = taskSD_ProcHandle;
+	sprintf(taskInfo[TASK_SD_PROC].cTaskName, "SD_Proc");
+	taskInfo[TASK_SD_PROC].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_GSM_RX].taskID = taskGSM_RXHandle;
+	sprintf(taskInfo[TASK_GSM_RX].cTaskName, "GSM_RX");
+	taskInfo[TASK_GSM_RX].u32TaskTimeout = S_2_mS(240);
+	
+	taskInfo[TASK_GSM_TX].taskID = taskGSM_TXHandle;
+	sprintf(taskInfo[TASK_GSM_TX].cTaskName, "GSM_TX");
+	taskInfo[TASK_GSM_TX].u32TaskTimeout = S_2_mS(240);
+	
+	//uint32_t u32StartTick = HAL_GetTick();
+	
+	
+	for(int i = 0; i < TASK_QUANTITY; i++)
+	{
+		taskInfo[i].bTaskState = TRUE;
+		
+		taskInfo[i].bTaskDelay = FALSE;
+		
+		//taskInfo[i].u32LastTick = u32StartTick;	
+		taskInfo[i].u32LastTick = HAL_GetTick();
+	}
+}
+
+//============================================================================//
+// @brief  Check the running status of all tasks.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_TaskCheck(void)
+{
+	if(sdRequest.sdCmd == SD_MKFS)
+	{
+	  return;
+	}
+	
+  for(int i = 0; i < TASK_QUANTITY; i++)
+  {
+		if(taskInfo[i].bTaskState == TRUE)
+		{
+			uint32_t u32CurrTick = HAL_GetTick();
+			
+			if(((u32CurrTick - taskInfo[i].u32LastTick) >= taskInfo[i].u32TaskTimeout) && 
+				 (u32CurrTick >= taskInfo[i].u32LastTick))
+			{	
+				//if(taskInfo[i].bTaskCheck == FALSE)
+				//{
+					RTOSprintf("\r\n> !!! TASK %s HAS BEEN HANGED AT STEP %d !!!", taskInfo[i].cTaskName, taskInfo[i].u16TaskStep);
+					RTOSprintf("\r\n> TASK %s TIMEOUT:%d ms, LAST TICK:%d, CURRENT TICK: %d", 
+				             taskInfo[i].cTaskName,
+				             taskInfo[i].u32TaskTimeout,
+				             taskInfo[i].u32LastTick,
+				             u32CurrTick);
+				
+					/*
+					HAL_IWDG_Refresh(&hiwdg);
+					
+					vTaskSuspendAll();
+					
+					printf("\r\n> TERMINATE TASK %s", taskInfo[i].cTaskName);
+					
+					osThreadTerminate(taskInfo[i].taskID);
+					
+					printf("\r\n> RECREATE TASK %s", taskInfo[i].cTaskName);
+					
+					taskInfo[i].taskID = osThreadCreate(&(taskInfo[i].tTaskDef), NULL);
+					
+					printf("\r\n> TASK %s CREATED.", taskInfo[i].cTaskName);
+					
+					if(taskInfo[i].taskID == NULL)
+					{
+					  printf("\r\n> CANNOT RESTART TASK %s. RESET SYSTEM TO FIX TASK HANGING ISSUE",
+						           taskInfo[i].cTaskName);
+						
+						HAL_IWDG_Refresh(&hiwdg);
+						
+						if(bRTOS_En)
+					  {
+					  	osMutexWait(mutex_setting_user, S_2_mS(5));
+					  }
+						
+						HAL_IWDG_Refresh(&hiwdg);
+					
+					  System_Reset();
+					}	
+					
+					printf("\r\n> TASK %s RESTARTED SUCCESSFULLY!", taskInfo[i].cTaskName);
+					
+					xTaskResumeAll();
+					
+					RTOSprintf("\r\n> ALL TASK RESUMED");
+					*/
+					
+					HAL_IWDG_Refresh(&hiwdg);
+					
+					RTOSprintf("\r\n> RESET SYSTEM TO FIX TASK %s HANGING ISSUE", taskInfo[i].cTaskName);
+					
+					if(bRTOS_En)
+					{
+						osMutexWait(mutex_setting_user, S_2_mS(5));
+					}
+					
+					System_Reset();
+				//}
+				
+				//taskInfo[i].bTaskCheck = FALSE;
+				
+				//taskInfo[i].u32LastTick = HAL_GetTick();
+			}
+	  }
+	}
+}
+
+//============================================================================//
+// @brief  Refresh the timeout check for a task.
+// @param  taskTag: Tag of the task as TaskTagTypeDef format.
+// @retval None.
+//============================================================================//s
+void System_TaskWdgRefresh(TaskTagTypeDef taskTag)
+{
+	if(taskInfo[taskTag].bTaskDelay == TRUE)
+	{
+		RTOSprintf("\r\n> Test to make task %s hanged.", taskInfo[taskTag].cTaskName);
+		
+	  taskInfo[taskTag].bTaskDelay = FALSE;
+		
+		//taskInfo[taskTag].bTaskCheck = FALSE;
+		
+		HAL_Delay(taskInfo[taskTag].u32TaskTimeout + S_2_mS(10));
+	}
+	
+  //taskInfo[taskTag].bTaskCheck = TRUE;
+	
+	taskInfo[taskTag].u32LastTick = HAL_GetTick();
+		
+	taskInfo[taskTag].u16TaskStep = 0;
+}
+
+//============================================================================//
+// @brief  Enable 3V3 power for peripherals.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_IO_3V3_Enable(void)
+{
+	HW_PBSet(IO_3V3_EN);
+
+	HAL_Delay(10);
+}
+
+//============================================================================//
+// @brief  Disable 3V3 power.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_IO_3V3_Disable(void)
+{
+	HW_PBClr(IO_3V3_EN);
+
+	HAL_Delay(10);
+}
+
+//============================================================================//
+// @brief  Check the system flags and clear if they are set.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_FlagCheck(void)
+{
+  if(__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST))
+	{
+	  //RTOSprintf("\r\n> ### System reset from IWDG timeout ###");
+		
+		__HAL_PWR_CLEAR_FLAG(RCC_FLAG_IWDGRST);
+	}
+
+	if(__HAL_PWR_GET_FLAG(PWR_FLAG_SB) != RESET)
+	{
+		//UART_SendBuffer(SET_COMPORT_DEF, (uint8_t *)"\r\n> System reset from standby mode.", 35);
+		RTOSprintf("\r\n> ### System wakeup from standby mode ###");
+
+		// Clear Standby flag
+		__HAL_PWR_CLEAR_FLAG(PWR_FLAG_SB);
+	}
+}
+
+//============================================================================//
+// @brief  Check files for temporary storage.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_CheckTempFile(void)
+{
+	char cFileName[64] = {0};
+	bool bRes;
+	
+	
+	if(SD_CheckDirExist((char *)DIRNAME_TEMP))
+	{
+		// Check USB download request temp file
+		sprintf(cFileName, "%s/%s", DIRNAME_TEMP, USB_DOWNLOAD_TEMP_FILE);
+		
+		if(SD_CheckFileExist(cFileName))
+		{
+			for(int i = 0; i < 3; i++)
+			{
+				bRes = SD_ReadAddrToBuff(cFileName, (uint8_t *)&u16USB_DownloadNum, 2, 0);
+
+				if(bRes)
+					break;
+			}
+
+			if(bRes)
+			{			
+				LOGprintf("\r\n> Number of pending USB download requests: %d", u16USB_DownloadNum);
+
+				if(u16USB_DownloadNum > 50)
+				{
+					u16USB_DownloadNum = 0;
+					
+					SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16USB_DownloadNum, 2, 0);
+				}
+			}
+			else
+			{
+				u16USB_DownloadNum = 0;
+				
+				SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16USB_DownloadNum, 2, 0);
+			}
+		}
+		else
+		{
+			u16USB_DownloadNum = 0;
+
+			for(int i = 0; i < 3; i++)
+			{
+				bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16USB_DownloadNum, 2, 0);
+
+				if(bRes)
+				{
+					RTOSprintf("\r\n> Create file %s OK.", cFileName);
+					
+					break;
+				}
+			}
+		}
+		
+		// Check print request temp file
+		memset(cFileName, 0x00, sizeof(cFileName));
+		
+		sprintf(cFileName, "%s/%s", DIRNAME_TEMP, PRINT_DATA_TEMP_FILE);
+		
+		if(SD_CheckFileExist(cFileName))
+		{
+			for(int i = 0; i < 3; i++)
+			{
+				bRes = SD_ReadAddrToBuff(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+
+				if(bRes)
+					break;
+			}
+
+			if(bRes)
+			{			
+				EXTprintf("\r\n> Number of pending printing requests: %d", u16PrintRequestNum);
+
+				if(u16PrintRequestNum > 10)
+				{
+					u16PrintRequestNum = 0;
+					
+					SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+				}
+			}
+			else
+			{
+				u16PrintRequestNum = 0;
+				
+				SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+			}
+		}
+		else
+		{
+			u16PrintRequestNum = 0;
+
+			for(int i = 0; i < 3; i++)
+			{
+				bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+
+				if(bRes)
+				{
+					RTOSprintf("\r\n> Create file %s OK.", cFileName);
+					
+					break;
+				}
+			}
+		}
+		
+		#if ENABLE_GSM_NET
+		// If version is JAS208U
+		//if(strncmp(g_Setting.cJAS_Ver, (char *)JAS208_GSM, 7) == 0)
+		{
+			// Check GSM file upload request temp file
+			memset(cFileName, 0x00, sizeof(cFileName));
+			
+			sprintf(cFileName, "%s/%s", DIRNAME_TEMP, SEND_FILE_TEMP_FILE);
+			
+			if(SD_CheckFileExist(cFileName))
+			{
+				for(int i = 0; i < 3; i++)
+				{
+					bRes = SD_ReadAddrToBuff(cFileName, (uint8_t *)&u16UnsendFileNum, 2, 0);
+
+					if(bRes)
+						break;
+				}
+
+				if(bRes)
+				{			
+					GSMprintf("\r\n> Number of pending upload file requests: %d", u16UnsendFileNum);
+
+					if(u16UnsendFileNum > 10)
+					{
+						u16UnsendFileNum = 0;
+						
+						SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendFileNum, 2, 0);
+					}
+				}
+				else
+				{
+					u16UnsendFileNum = 0;
+					
+					SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendFileNum, 2, 0);
+				}
+			}
+			else
+			{
+				u16UnsendFileNum = 0;
+
+				for(int i = 0; i < 3; i++)
+				{
+					bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendFileNum, 2, 0);
+
+					if(bRes)
+					{
+						RTOSprintf("\r\n> Create file %s OK.", cFileName);
+						
+						break;
+					}
+				}
+			}
+			
+			// Check GSM send packet request temp file
+			memset(cFileName, 0x00, sizeof(cFileName));
+
+			sprintf(cFileName, "%s/%s", DIRNAME_TEMP, SEND_PKG_TEMP_FILE);
+			
+			if(SD_CheckFileExist(cFileName))
+			{
+				for(int i = 0; i < 3; i++)
+				{
+					bRes = SD_ReadAddrToBuff(cFileName, (uint8_t *)&u16UnsendPkgNum, 2, 0);
+
+					if(bRes)
+						break;
+				}
+
+				if(bRes)
+				{			
+					GSMprintf("\r\n> Number of unsent packets: %d", u16UnsendPkgNum);
+
+					if(u16UnsendPkgNum > GSM_PACKET_NUM_MAX)
+					{
+						u16UnsendPkgNum = 0;
+						
+						SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendPkgNum, 2, 0);
+					}
+				}
+				else
+				{
+					u16UnsendPkgNum = 0;
+					
+					SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendPkgNum, 2, 0);
+				}
+			}
+			else
+			{
+				u16UnsendPkgNum = 0;
+
+				for(int i = 0; i < 3; i++)
+				{
+					bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendPkgNum, 2, 0);
+
+					if(bRes)
+					{
+						RTOSprintf("\r\n> Create file %s OK.", cFileName);
+						
+						break;
+					}
+				}
+			}		
+		}		
+    #endif		
+	}
+	else
+	{
+		SD_MakeDir((char *)DIRNAME_TEMP);
+		
+		RTOSprintf("\r\n> Create directory %s OK.", (char *)DIRNAME_TEMP);
+		
+		// Create USB download request temp file
+		memset(cFileName, 0x00, sizeof(cFileName));
+			
+		sprintf(cFileName, "%s/%s", DIRNAME_TEMP, USB_DOWNLOAD_TEMP_FILE);
+		
+		u16USB_DownloadNum = 0;
+		
+		for(int i = 0; i < 3; i++)
+		{
+			bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16USB_DownloadNum, 2, 0);
+
+			if(bRes)
+			{
+				RTOSprintf("\r\n> Create file %s OK.", cFileName);
+				
+				break;
+			}
+		}
+		
+		// Create print request temp file 
+		memset(cFileName, 0x00, sizeof(cFileName));
+			
+		sprintf(cFileName, "%s/%s", DIRNAME_TEMP, PRINT_DATA_TEMP_FILE);
+		
+		u16PrintRequestNum = 0;
+		
+		for(int i = 0; i < 3; i++)
+		{
+			bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16PrintRequestNum, 2, 0);
+
+			if(bRes)
+			{
+				RTOSprintf("\r\n> Create file %s OK.", cFileName);
+				
+				break;
+			}
+		}
+		
+		#if ENABLE_GSM_NET
+		// If version is JAS208U
+		//if(strncmp(g_Setting.cJAS_Ver, (char *)JAS208_GSM, 7) == 0)
+		{
+			// Create GSM upload file request temp file
+			memset(cFileName, 0x00, sizeof(cFileName));
+			
+			sprintf(cFileName, "%s/%s", DIRNAME_TEMP, SEND_FILE_TEMP_FILE);
+			
+			u16UnsendFileNum = 0;
+			
+			for(int i = 0; i < 3; i++)
+			{
+				bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendFileNum, 2, 0);
+
+				if(bRes)
+				{
+					RTOSprintf("\r\n> Create file %s OK.", cFileName);
+					
+					break;
+				}
+			}
+			
+			// Create GSM send packet request temp file
+			memset(cFileName, 0x00, sizeof(cFileName));
+
+			sprintf(cFileName, "%s/%s", DIRNAME_TEMP, SEND_PKG_TEMP_FILE);
+			
+			u16UnsendPkgNum = 0;
+			
+			for(int i = 0; i < 3; i++)
+			{
+				bRes = SD_WriteBuffToAddr(cFileName, (uint8_t *)&u16UnsendPkgNum, 2, 0);
+
+				if(bRes)
+				{
+					RTOSprintf("\r\n> Create file %s OK.", cFileName);
+					
+					break;
+				}
+			}
+		}
+		#endif
+	}
+}
+
+//============================================================================//
+// @brief  Setting system in default.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_SetupDefault(void)
+{
+	RTOSprintf("\r\n> ### System_SetupDefault ###");
+
+	memset(&g_Setting, 0x00, sizeof(gSettingTypeDef));
+
+	// SetVer //
+	g_Setting.u8SetVer = SETUP_VERSION;
+	
+	// SetVerChk //
+	g_Setting.u8SetVerChk = ~SETUP_VERSION;
+	
+	// SetSize //
+	g_Setting.u32SetSize = sizeof(gSettingTypeDef);
+
+	// GSM version //
+	#if ENABLE_GSM_NET
+	sprintf(g_Setting.cJAS_Ver, "%s", JAS208_GSM);
+	#else
+	sprintf(g_Setting.cJAS_Ver, "%s", JAS208_NO_GSM);
+	#endif
+
+	// Time zone offset //
+	g_Setting.i32TimeZoneOffset = TIME_ZONE_OFFSET_DEF;
+	
+	// ACC off time //
+	g_Setting.ttAccOffTime = 0;
+	
+	// Current driver ID //
+	g_Setting.u8CurrDrvID = 0;
+	
+	// Debug mode //
+	g_Setting.u32DebugMode = DBG_OFF;
+	
+	// BUS Info //
+	strcpy(g_Setting.tBusInfo.cBus_ID, DEFAULT_STRING);
+	strcpy(g_Setting.tBusInfo.cBus_SN, DEFAULT_STRING);
+	strcpy(g_Setting.tBusInfo.cVIN, DEFAULT_STRING);
+	
+	g_Setting.tBusInfo.tCarType = CARTYPE_END;
+	
+	// SD card state //
+	g_Setting.tSD_State.bSD_State = TRUE;
+	g_Setting.tSD_State.bSD_FormatFlag = FALSE;
+	g_Setting.tSD_State.u8SD_ResetCnt = 0;
+	
+	// Datalog setting //
+	g_Setting.tLogSet.stRestartLog.u8RestartCnt = 0;
+	g_Setting.tLogSet.stRestartLog.u32SysTickBuf = 0;
+	
+	// GSM setting //
+	#if ENABLE_GSM_NET
+	sprintf(g_Setting.tGSM_SET.tPhoneBank[0].cLabel, "Default user");
+
+	sprintf(g_Setting.tGSM_SET.tPhoneBank[0].cNumber, PHONE_NUMBER_DEFAULT);
+	
+	g_Setting.tGSM_SET.tNetSet.u8GSM_CSQ = 0;
+	
+	g_Setting.tGSM_SET.tNetSet.u16SendStandby = MINUTE_2_SECOND(1);
+
+	g_Setting.tGSM_SET.u8LevelMicGain = 10;
+	g_Setting.tGSM_SET.u8LevelSpkGain = 50;
+	g_Setting.tGSM_SET.u8LevelRingSound = 50;	 //Heinz 100
+	
+	g_Setting.tGSM_SET.tGSM_Err.bGSM_ModuleErr = FALSE;
+	g_Setting.tGSM_SET.tGSM_Err.u8SIM_ErrCnt = 0;
+	g_Setting.tGSM_SET.tGSM_Err.u8TCP_ErrCnt = 0;
+	g_Setting.tGSM_SET.tGSM_Err.u8FTP_ErrCnt = 0;
+	g_Setting.tGSM_SET.tGSM_Err.u8SMS_ErrCnt = 0;
+	g_Setting.tGSM_SET.tGSM_Err.u8PkgErrCnt = 0;
+	
+	// GSM TCP IP setting
+	strcpy(g_Setting.tGSM_SET.tNetSet.cAPN, TCP_APN_NAME); //Heinz
+	strcpy(g_Setting.tGSM_SET.tNetSet.cAPN_UserName, "");
+	strcpy(g_Setting.tGSM_SET.tNetSet.cAPN_Password, "");
+	
+	sprintf(g_Setting.tGSM_SET.tServerInfo[0].cIP_Addr, "%s", (char *)SERVER_1_IP_ADDR);
+
+	g_Setting.tGSM_SET.tServerInfo[0].u32IP_Addr._U8[3] = (uint8_t)SERVER_1_IP_ADDR_BYTE3;
+	g_Setting.tGSM_SET.tServerInfo[0].u32IP_Addr._U8[2] = (uint8_t)SERVER_1_IP_ADDR_BYTE2;
+	g_Setting.tGSM_SET.tServerInfo[0].u32IP_Addr._U8[1] = (uint8_t)SERVER_1_IP_ADDR_BYTE1;
+	g_Setting.tGSM_SET.tServerInfo[0].u32IP_Addr._U8[0] = (uint8_t)SERVER_1_IP_ADDR_BYTE0;
+	
+	sprintf(g_Setting.tGSM_SET.tServerInfo[0].cDomainName, "%s", SERVER_1_DOMAIN_NAME);
+	
+	g_Setting.tGSM_SET.tServerInfo[0].u16Port = (uint16_t)SERVER_1_PORT;
+	
+	g_Setting.tGSM_SET.tServerInfo[0].bEnableChk = (bool)SERVER_1_ENABLE_CHK;
+	g_Setting.tGSM_SET.tServerInfo[0].bEnableLog = (bool)SERVER_1_ENABLE_LOG;
+	g_Setting.tGSM_SET.tServerInfo[0].bEnableEvent = (bool)SERVER_1_ENABLE_EVENT;
+	
+	sprintf(g_Setting.tGSM_SET.tServerInfo[0].cHeaderChk, "%s", (char *)SERVER_1_HEADER_CHK);
+	sprintf(g_Setting.tGSM_SET.tServerInfo[0].cHeaderLog, "%s", (char *)SERVER_1_HEADER_LOG);
+	sprintf(g_Setting.tGSM_SET.tServerInfo[0].cHeaderEvent, "%s", (char *)SERVER_1_HEADER_EVENT);
+
+  g_Setting.tGSM_SET.tServerInfo[0].u8LogPeriod = (uint8_t)SERVER_1_SEND_NORMAL;
+	// If enable multiple servers
+  #if ENABLE_MULTI_SERVER
+	sprintf(g_Setting.tGSM_SET.tServerInfo[1].cIP_Addr, "%s", (char *)SERVER_2_IP_ADDR);
+
+	g_Setting.tGSM_SET.tServerInfo[1].u32IP_Addr._U8[3] = (uint8_t)SERVER_2_IP_ADDR_BYTE3;
+	g_Setting.tGSM_SET.tServerInfo[1].u32IP_Addr._U8[2] = (uint8_t)SERVER_2_IP_ADDR_BYTE2;
+	g_Setting.tGSM_SET.tServerInfo[1].u32IP_Addr._U8[1] = (uint8_t)SERVER_2_IP_ADDR_BYTE1;
+	g_Setting.tGSM_SET.tServerInfo[1].u32IP_Addr._U8[0] = (uint8_t)SERVER_2_IP_ADDR_BYTE0;
+	
+	sprintf(g_Setting.tGSM_SET.tServerInfo[1].cDomainName, "%s", SERVER_2_DOMAIN_NAME);
+	
+	g_Setting.tGSM_SET.tServerInfo[1].u16Port = (uint16_t)SERVER_2_PORT;
+	
+	g_Setting.tGSM_SET.tServerInfo[1].bEnableChk = (bool)SERVER_2_ENABLE_CHK;
+	g_Setting.tGSM_SET.tServerInfo[1].bEnableLog = (bool)SERVER_2_ENABLE_LOG;
+	g_Setting.tGSM_SET.tServerInfo[1].bEnableEvent = (bool)SERVER_2_ENABLE_EVENT;
+	
+	sprintf(g_Setting.tGSM_SET.tServerInfo[1].cHeaderChk, "%s", (char *)SERVER_2_HEADER_CHK);
+	sprintf(g_Setting.tGSM_SET.tServerInfo[1].cHeaderLog, "%s", (char *)SERVER_2_HEADER_LOG);
+	sprintf(g_Setting.tGSM_SET.tServerInfo[1].cHeaderEvent, "%s", (char *)SERVER_2_HEADER_EVENT);
+	
+	g_Setting.tGSM_SET.tServerInfo[1].u8LogPeriod = (uint8_t)SERVER_2_SEND_NORMAL;
+  #endif
+
+  // GSM FTP setting
+	sprintf(g_Setting.tGSM_SET.tFTP_Set.cAddr, "%s", (char *)FTP_SERVER_DOMAIN_NAME);
+	g_Setting.tGSM_SET.tFTP_Set.u16Port = (uint16_t)FTP_SERVER_PORT;
+	sprintf(g_Setting.tGSM_SET.tFTP_Set.cUserName, "%s", (char *)FTP_ACC_USERNAME);
+	sprintf(g_Setting.tGSM_SET.tFTP_Set.cPassword, "%s", (char *)FTP_ACC_PASSWORD);
+	#endif
+	
+	// Drive setting //
+	g_Setting.tDRV_SET.ttDrvWorkStartTime = 0;
+	
+	g_Setting.tDRV_SET.u16DrvResponse = 0;
+	
+	g_Setting.tDRV_SET.u8DriveThreshold[0] = 4;
+	g_Setting.tDRV_SET.u8DriveThreshold[1] = 0;
+
+	g_Setting.tDRV_SET.u8RestThreshold[0] = 0;
+	g_Setting.tDRV_SET.u8RestThreshold[1] = 30;
+	
+	// Driver info //
+	g_Setting.tDrvInfo[0].u32DrvIdNum = INVALID_VALUE_DEF;
+	g_Setting.tDrvInfo[1].u32DrvIdNum = INVALID_VALUE_DEF;
+
+	g_Setting.tDrvInfo[0].u8DrvStatus = 0;
+	g_Setting.tDrvInfo[1].u8DrvStatus = 0;
+	
+	g_Setting.tDrvInfo[0].dDriverDistance = 0;
+	g_Setting.tDrvInfo[1].dDriverDistance = 0;
+
+	g_Setting.tDrvInfo[0].u32DrWorkTime = 0;
+	g_Setting.tDrvInfo[1].u32DrWorkTime = 0;
+
+	g_Setting.tDrvInfo[0].u32DrRestTime = 0;
+	g_Setting.tDrvInfo[1].u32DrRestTime = 0;
+	
+	for(int i = 0; i < 14; i++)
+	{
+		g_Setting.tDrvInfo[0].stDrvRecDay[i].u32WorkTime = 0;
+		g_Setting.tDrvInfo[0].stDrvRecDay[i].u32PauseTime = 0;
+		g_Setting.tDrvInfo[0].stDrvRecDay[i].u32StandByTime = 0;
+		g_Setting.tDrvInfo[0].stDrvRecDay[i].u32RestTime = 0;
+
+		g_Setting.tDrvInfo[1].stDrvRecDay[i].u32WorkTime = 0;
+		g_Setting.tDrvInfo[1].stDrvRecDay[i].u32PauseTime = 0;
+		g_Setting.tDrvInfo[1].stDrvRecDay[i].u32StandByTime = 0;
+		g_Setting.tDrvInfo[1].stDrvRecDay[i].u32RestTime = 0;
+	}
+	
+	// Power mode //
+	g_Setting.tPowerMode = PWR_SAVE;
+	
+	// Speed setting
+	g_Setting.tSpeedSet.u16Trig = 0;	//Heinz 50
+  g_Setting.tSpeedSet.u8Offset = 35; ///Heinz 35//3.5KM
+	g_Setting.tSpeedSet.u16Star = 700;	 ///70 KM.
+	g_Setting.tSpeedSet.fGain = 0;	//Heinz
+	g_Setting.tSpeedSet.fAutoGain = 0; //Heinz
+	g_Setting.tSpeedSet.u8Auto_Gain_Count = 0;
+	g_Setting.tSpeedSet.ttAgain_Time = 1924905600;
+	
+	g_Setting.tSpeedSet.u16SPEED_LIMIT = 1200;
+	g_Setting.tSpeedSet.u16OVER_SPEED_END_CNT_MAX = 5;
+	g_Setting.tSpeedSet.u16ACCEL_LIMIT = 30;
+	g_Setting.tSpeedSet.u16DECEL_LIMIT = 30;
+	g_Setting.tSpeedSet.u8ACCEL_LIM_DURA = 5;
+	
+  for(int i = 0; i < SPEED_LIMIT_BANK_MAX; i++)
+  	g_Setting.tSpeedSet.u32Limit[i] = 0;
+		
+	// RPM setting
+	g_Setting.tRPM_Set.u16DIV = 1;
+	g_Setting.tRPM_Set.u16Trig = 0;	//Heinz 50
+	
+	g_Setting.tRPM_Set.u16DIV = 10;
+	g_Setting.tRPM_Set.u16Limit = 2000;
+	g_Setting.tRPM_Set.u16RPM_OVER_ON_CNT_MAX = 60;
+	g_Setting.tRPM_Set.u16RPM_OVER_OFF_CNT_MAX = 2;
+	g_Setting.tRPM_Set.u16RPM_IDLE_CNT_MAX = 180;
+	
+	// CAN Link Type
+	g_Setting.tCanLinkType = LINK_BEGIN;
+	
+	// Enable setting
+	g_Setting.tENABLE_SET.bits.DRV_ID = 1;
+	g_Setting.tENABLE_SET.bits.CAN_SPEED = 0;
+	g_Setting.tENABLE_SET.bits.CAN_RPM = 0;
+	g_Setting.tENABLE_SET.bits.CAN_DIST = 0;
+
+  // Reverse bits setting
+	g_Setting.tReverse.word = 0;
+	
+	// Upgrade control
+	g_Setting.tUpgrade.bFOTA_Flag = FALSE;
+	g_Setting.tUpgrade.bUpgradeFlag = FALSE;
+	g_Setting.tUpgrade.bUpgrade_SMS = FALSE;
+	g_Setting.tUpgrade.bUpgrade_TCP = FALSE;
+	g_Setting.tUpgrade.ttLastUpgrade = 0;
+	g_Setting.tUpgrade.ttLastInstall = 0;
+	g_Setting.tUpgrade.u8FOTA_RetryCnt = 0;
+
+	#if CUSTOMER_TYPE == CUSTOMER_MASTER
+	g_Setting.tENABLE_SET.bits.CAN_RPM = 1;
+	#endif
+
+	#if CUSTOMER_TYPE == CUSTOMER_TANGENG
+	g_Setting.tENABLE_SET.bits.DRV_ID = 1;
+
+	g_Setting.tENABLE_SET.bits.CAN_SPEED = 1;
+
+	g_Setting.tENABLE_SET.bits.CAN_RPM = 1;
+	#endif
+
+	#if CUSTOMER_TYPE == CUSTOMER_SKYEYE
+	g_Setting.tENABLE_SET.bits.DRV_ID = 1;
+
+  #if ENABLE_GSM_NET
+	//g_Setting.tGSM_SET.tNetSet.u16SendNormal = 30;
+
+	g_Setting.tGSM_SET.tNetSet.u16SendStandby = 30;
+	#endif
+	#endif
+
+	#if CUSTOMER_TYPE == CUSTOMER_FORMOSA
+	g_Setting.tENABLE_SET.bits.DRV_ID = 1;
+
+	g_Setting.tENABLE_SET.bits.ImmoCtrl = 1;	// Heinz
+
+  #if ENABLE_GSM_NET
+	//g_Setting.tGSM_SET.tNetSet.u16SendNormal = 30; //Heinz 30
+
+	g_Setting.tGSM_SET.tNetSet.u16SendStandby = 0; // MINUTE_2_SECOND(10); // Heinz 0
+	#endif
+
+	g_Setting.tSpeedSet.u16Trig = 100; // 50; // Heinz 30
+
+	g_Setting.tSpeedSet.fGain = 107;	// Heinz // 112
+
+	g_Setting.tRPM_Set.u16DIV = 30; // Heinz
+
+	//FCFC
+	#if ENABLE_GSM_NET
+	g_Setting.tGSM_SET.tServerInfo[0].u32ADDR._U8[3] = 122;
+	g_Setting.tGSM_SET.tServerInfo[0].u32ADDR._U8[2] = 146;
+	g_Setting.tGSM_SET.tServerInfo[0].u32ADDR._U8[1] = 31;
+	g_Setting.tGSM_SET.tServerInfo[0].u32ADDR._U8[0] = 217;
+	g_Setting.tGSM_SET.tServerInfo[0].u16Port = 10224; // 10227
+
+	#if ENABLE_MULTI_SERVER
+	g_Setting.tGSM_SET.tServerInfo[1].u32ADDR._U8[3] = 223;
+	g_Setting.tGSM_SET.tServerInfo[1].u32ADDR._U8[2] = 200;
+	g_Setting.tGSM_SET.tServerInfo[1].u32ADDR._U8[1] = 80;
+	g_Setting.tGSM_SET.tServerInfo[1].u32ADDR._U8[0] = 54;
+	g_Setting.tGSM_SET.tServerInfo[1].u16Port = 9030;
+	#endif
+	#endif
+	
+	#endif
+
+	#if CUSTOMER_TYPE == CUSTOMER_FPTC
+	g_Setting.tENABLE_SET.bits.DRV_ID = 1;
+
+	g_Setting.tENABLE_SET.bits.ImmoCtrl = 1;
+
+  #if ENABLE_GSM_NET
+	//g_Setting.tGSM_SET.tNetSet.u16SendNormal = 30;
+
+	g_Setting.tGSM_SET.tNetSet.u16SendStandby = 0;
+	#endif
+	#endif
+}
+
+//============================================================================//
+// @brief  Setup system when initialize.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void System_InitSetup(void)
+{
+	bool bRes;
+	uint32_t u32SettingSize;
+	
+
+	memset(&g_SysInfo, 0x00, sizeof(gSysInfoTypeDef));
+	
+	g_SysInfo.tSpeedInfo.bIsOverSpeed = FALSE;
+	g_SysInfo.tSpeedInfo.bIsRPM_Idle = FALSE;
+
+	bRes = System_GetSetting();
+
+	if(bRes == FALSE)
+	{
+		RTOSprintf("\r\n>>> gSetting is stored incorrectly. Setting gSetting to default.");
+		
+		System_SetupDefault();
+
+		System_SaveSetting();
+	}
+	
+	u32SettingSize = sizeof(gSettingTypeDef);
+	
+	if(u32SettingSize != g_Setting.u32SetSize)
+	{
+		RTOSprintf("\r\n>>> gSetting size changed. Setting gSetting to default.");
+		
+	  System_SetupDefault();
+		
+		System_SaveSetting();
+	}
+	
+	#if ENABLE_GSM_NET
+	for(int i = 0; i < MAX_SOCKET_BANK; i++)
+	{
+		if(g_Setting.tGSM_SET.tServerInfo[i].u8LogPeriod > 0)
+		{
+			u8DATALOG_UPLOAD_MAX[i] = g_Setting.tGSM_SET.tServerInfo[i].u8LogPeriod;
+		}
+  }
+	#endif
+}
+
+//============================================================================//
+// @brief  Initialize system.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_Init(void)
+{
+	//RTC_TimeTypeDef rtcTime;
+	RTC_DateTypeDef rtcDate;
+	MX25L_StatusTypeDef mxlRes;
+	//uint8_t u8MX25L_RestartCnt;
+	bool bRes;
+
+	
+	HAL_PWR_EnableBkUpAccess();
+	
+	System_IO_3V3_Disable();
+	
+	HAL_Delay(500);
+
+	System_IO_3V3_Enable();
+
+	HAL_Delay(100);
+	
+	EXTIO_BatteryEnable();
+	
+	UART_SetupAll();
+	
+	bPrintfEn = TRUE;
+	
+	//RTOSprintf("\r\n> System Init");
+	
+	System_FlagCheck();
+	
+	#if ENABLE_INDEX_BUFFER
+	if(bSD_ReportErrFlag == FALSE)
+	  V161_IndexFileNameInit();
+	#endif
+
+	mxlRes = MX25L_Init();
+	
+	//RTOSprintf("\r\n> MX25L initialization status:%d", mxlRes);
+
+	if(mxlRes != MX25L_OK)
+	{
+		RTOSprintf("\r\n> MX25L initialization ERROR!");
+		
+		RTOSprintf("\r\n> MX25L reset.");
+		
+		MX25L_Restart();
+	}
+	
+	LCD_Init();
+	
+	//u8MX25L_RestartCnt = HW_ReadBackupRegister(MX25L_ERROR_CHK);
+	
+	//if((u8MX25L_RestartCnt & 0x80) > 0)
+	//{
+	//  HW_WriteBackupRegister(MX25L_ERROR_CHK, 0x00);
+	//	
+	//	RTOSprintf("\r\n>>> MX25L IC HAS FAILURE. SYSTEM STOP!!!");
+		
+	//	LCD_ScreenClear();
+		
+	//	LCD_DisplaySubMenu(54);
+		
+	//	while(1)
+	//	{
+	//	  EXTIO_DetectACC_2();
+			
+	//		HAL_IWDG_Refresh(&hiwdg);
+			
+	//		HAL_Delay(100);
+	//	}
+	//}
+
+	// Show auto test
+	LCD_SetShowAutoTestPage(30);
+	
+	//RTOSprintf("\r\n> Check IC PCF time.");
+
+	bRes = PCF_GetDate(&rtcDate, 1);
+	
+	if(bRes == TRUE)
+  {
+		if((rtcDate.Year > 19) && (rtcDate.Year < 50))
+		{
+			g_bPCF_EN = TRUE;
+
+			g_u8HwInfo = (g_u8HwInfo | 0x10);
+
+			//RTOSprintf("\r\n> Check IC PCF OK. (0x%02X)", g_u8HwInfo);
+			
+			bSystemTimeReady = TRUE;
+		}
+		else
+		{
+			g_bPCF_EN = FALSE;
+
+			g_u8HwInfo = (g_u8HwInfo & 0xEF);
+
+			RTOSprintf("\r\n> IC PCF time not stored. (0x%02X)", g_u8HwInfo);
+		}
+  }
+	else
+	{
+	  RTOSprintf("\r\n> PCF initialization FAIL!");
+		
+		RTOSprintf("\r\n> PCF reset.");
+		
+		PCF_Restart();
+	}
+	
+	/*
+		rtcTime.Hours = 0x07;
+		rtcTime.Minutes = 0x14;
+		rtcTime.Seconds = 0x01;
+
+		rtcDate.Date = 0x25;
+		rtcDate.Month = RTC_MONTH_MARCH;
+		rtcDate.WeekDay = RTC_WEEKDAY_WEDNESDAY;
+		rtcDate.Year = 0x20;
+
+		PCF_InitTime(&rtcTime, &rtcDate, 0);
+	*/
+	
+	//RTOSprintf("\r\n> System init setup.");
+
+	System_InitSetup();
+	
+	//if(g_Setting.tSD_State.bSD_State == FALSE)
+	//{
+	//  g_Setting.tSD_State.bSD_State = TRUE;
+		
+	//	System_SaveSetting();
+		
+	//	RTOSprintf("\r\n>>> SD CARD HAS FAILURE. SYSTEM STOP!!!");
+		
+	//	LCD_ScreenClear();
+		
+	//	LCD_DisplaySubMenu(53);
+		
+	//	while(1)
+	//	{
+	//	  EXTIO_DetectACC_2();
+			
+	//		HAL_IWDG_Refresh(&hiwdg);
+			
+	//		HAL_Delay(100);
+	//	}
+	//}
+	
+	bRes = SD_Init();
+	
+	//RTOSprintf("\r\n> SD card initialization status:%d", bRes);
+
+	if(!bRes)
+	{
+		RTOSprintf("\r\n> SD card initialization ERROR!");
+		
+		RTOSprintf("\r\n> SD reset.");
+		
+		SD_Reset();
+	}
+	
+	if(bSD_ReportErrFlag == FALSE)
+	{
+		if(SD_CheckDirExist(FOLDERNAME_VDR) == FALSE)
+			SD_MakeDir(FOLDERNAME_VDR);
+  }
+	
+	//RTOSprintf("\r\n> LCD init");
+
+	#if ENABLE_GSM_NET
+	if(strncmp(g_Setting.cJAS_Ver, (char *)JAS208_NO_GSM, 7) == 0)
+	{
+		RTOSprintf("\r\n> DETECTED GSM FUNCTION ENABLED, CHANGE VERSION TO JAS208U.");
+
+		memset(g_Setting.cJAS_Ver, 0x00, sizeof(g_Setting.cJAS_Ver));
+
+		sprintf(g_Setting.cJAS_Ver, "%s", JAS208_GSM);
+
+		System_SaveSetting();
+	}
+	
+	GSM_BlockCmdInit();
+	
+	GSM_NonBlockCmdInit();
+	
+	bQtEC21_State = TRUE; 
+
+	QtEC21_TurnOnPwrKey();
+	#else
+	if(strncmp(g_Setting.cJAS_Ver, (char *)JAS208_GSM, 7) == 0)
+	{
+		RTOSprintf("\r\n> DETECTED GSM FUNCTION DISABLED, CHANGE VERSION TO JAS208S.");
+
+		memset(g_Setting.cJAS_Ver, 0x00, sizeof(g_Setting.cJAS_Ver));
+
+		sprintf(g_Setting.cJAS_Ver, "%s", JAS208_NO_GSM);
+
+		System_SaveSetting();
+	}
+	#endif
+	
+	//RTOSprintf("\r\n> EXTIO init");
+
+	EXTIO_Init();
+	
+	//RTOSprintf("\r\n> GPS Init");
+
+  #if ENABLE_GPS_MODULE && GPS_HARDWARE_TYPE == GPS_MODULE_SIM68
+	GPS_PowerOn();
+	#endif
+	
+	//RTOSprintf("\r\n> PRN init");
+
+	PRN_Init();
+	
+	if(bSD_ReportErrFlag == FALSE)
+	{
+      //RTOSprintf("\r\n> Check TEMP files");	
+	
+	  System_CheckTempFile();
+  }
+	
+	// Close Admin mode
+	g_Setting.tENABLE_SET.bits.ENG_MODE = 0;
+
+	// Close Calibration mode
+	g_Setting.tENABLE_SET.bits.CORRECT_MODE = 0;
+	
+	if(g_Setting.tUpgrade.bUpgradeFlag == TRUE)
+	{
+		RTOSprintf("\r\n> Have Upgrade, Reflash FW Version");
+		
+		if(bSD_ReportErrFlag == FALSE)
+		  V161_RecordTechnical(3);
+		
+		g_Setting.tUpgrade.bUpgradeFlag = FALSE;
+		
+		System_SaveSetting();
+	}
+
+	RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_SYSTEM_INIT_OK);
+	
+	#if ENABLE_GSM_NET
+	GSM_TCP_ReportEvent((char *)EVENT_SYSTEM_ON, STR_NULL);
+	#endif
+}
+
+//============================================================================//
+// @brief  Deinitialize system.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_DeInit(void)
+{
+	//SD_DeInitComm();
+	
+	#if GPS_HARDWARE_TYPE == GPS_MODULE_SIM68
+	GPS_PowerOff();
+	#endif
+	
+	//#if ENABLE_GSM_NET
+	//QtEC21_TurnOffPwrKey();
+	//#endif
+	
+	//HAL_Delay(S_2_mS(1));
+	
+	#if ENABLE_INDEX_BUFFER
+	if((bSD_ReportErrFlag == FALSE) && (u8SD_RetryCnt == 0) && (u8SD_ErrCnt == 0))
+	{
+		//printf("\r\n> ### Save file index before enter standby mode ###");
+		
+		V161_SaveFileIdxAll();
+	}
+	#endif
+	
+	System_IO_3V3_Disable();
+}
+
+//============================================================================//
+// @brief  System software reset.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_Reset(void)
+{
+	System_DeInit();
+
+	// Generate system reset 
+	NVIC_SystemReset();
+}
+
+//============================================================================//
+// @brief  Get system time.
+// @param  None.
+// @retval System time in time_t format.
+//============================================================================//
+time_t System_GetTime(void)
+{
+	time_t ttTimeNow;
+	osStatus osRes;
+
+
+	if(bSysInitFinish)
+	{
+		//osRes = osMutexWait(mutex_ttnow_user, S_2_mS(10));
+
+		//if(osRes != osOK)
+		//	return FALSE;
+
+		ttTimeNow = g_SysInfo.ttNow;
+
+		//osMutexRelease(mutex_ttnow_user);
+	}
+	else
+	{
+		struct tm tmRTCTimeInfo;
+		RTC_TimeTypeDef rtcTime;
+		RTC_DateTypeDef rtcDate;
+		
+
+		// If using IC PCF as time source
+		if(g_bPCF_EN == TRUE)
+		{
+			// Get current time in Binary format
+			if(!PCF_GetTime(&rtcTime, 1))
+			{
+				RTOSprintf("\r\n> Get system time ERROR.");
+
+				return 0;
+			}
+
+			// Get current date in Binary format
+			if(!PCF_GetDate(&rtcDate, 1))
+			{
+				RTOSprintf("\r\n> Get system date ERROR.");
+
+				return 0;
+			}
+		}
+		// If using RTC as time source
+		else
+		{
+		  if(bRTOS_En)
+			{
+				osRes = osMutexWait(mutex_ttnow_user, S_2_mS(10));
+			
+				if(osRes != osOK)
+					return 0;
+			}
+			
+			// Get current time in Binary format
+			if(HAL_RTC_GetTime(&hrtc, &rtcTime, RTC_FORMAT_BIN) != HAL_OK)
+			{
+				RTOSprintf("\r\n> Get system time ERROR.");
+				
+				if(bRTOS_En)
+		          osMutexRelease(mutex_ttnow_user);
+
+				return 0;
+			}
+
+			// Get current date in Binary format
+			if(HAL_RTC_GetDate(&hrtc, &rtcDate, RTC_FORMAT_BIN) != HAL_OK)
+			{
+				RTOSprintf("\r\n> Get system date ERROR.");
+				
+				if(bRTOS_En)
+		          osMutexRelease(mutex_ttnow_user);
+
+				return 0;
+			}
+			
+			if(bRTOS_En)
+		    osMutexRelease(mutex_ttnow_user);
+		}
+
+		// Year in tm struct is counted from 1900
+		tmRTCTimeInfo.tm_year	= rtcDate.Year + 2000 - 1900U;
+		// Month in tm struct is counted from 0 corresponding to Jan
+		tmRTCTimeInfo.tm_mon	= rtcDate.Month - 1U;
+		tmRTCTimeInfo.tm_mday	= rtcDate.Date;
+		tmRTCTimeInfo.tm_hour	= rtcTime.Hours;
+		tmRTCTimeInfo.tm_min	= rtcTime.Minutes;
+		tmRTCTimeInfo.tm_sec	= rtcTime.Seconds;
+		tmRTCTimeInfo.tm_isdst = -1;
+
+		ttTimeNow = mktime(&tmRTCTimeInfo);
+	}
+
+	return ttTimeNow;
+}
+
+//============================================================================//
+// @brief  Put the system into standby mode.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_EnterStandbyMode(void)
+{
+	__HAL_RCC_PWR_CLK_ENABLE();
+
+	// If Standby flag is set
+	if(__HAL_PWR_GET_FLAG(PWR_FLAG_SB) != RESET)
+	{
+		// Clear Standby flag
+		__HAL_PWR_CLEAR_FLAG(PWR_FLAG_SB);
+	}
+
+	// If Reset flag is set
+	if(__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST))
+	{
+		// Clear Reset flag
+		__HAL_RCC_CLEAR_RESET_FLAGS();
+	}
+
+	// Disable all used wakeup sources: Pin1(PA.0)
+	HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1);
+
+	// Clear all related wakeup flags
+	__HAL_PWR_CLEAR_FLAG(PWR_FLAG_WU);
+
+	// Re-enable all used wakeup sources: Pin1(PA.0)
+	HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN1);
+
+	if(bSysInitFinish)
+		RTOSprintf("\r\n### ENTER STANDBY MODE ###");
+
+	// Enter standby mode
+	HAL_PWR_EnterSTANDBYMode();
+}
+
+//============================================================================//
+// @brief  Save system setting into exflash.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool System_SaveSetting(void)
+{
+	const uint32_t u32Addr = B32_EXFLASH_G_SETTING_START_ADDR;
+	uint16_t u16SectEraseNum = 0;
+	MX25L_StatusTypeDef mxlRes;
+	uint8_t u8BCDTime[7] = {0};
+  uint32_t u32TimeDat;
+	
+
+	//RTOSprintf("\r\n> ### System_SaveSetting ###");
+	
+	u32TimeDat = System_GetTime();
+	
+	SecToBCDTime(u32TimeDat, u8BCDTime);
+
+	// Gary Test
+	//RTOSprintf("\r\n> ### MX25L_SAVE_ORG ###\r\n");
+	//for(i=0; i<sizeof(gSettingTypeDef); i++) {
+	//	RTOSprintf("0x%02X ", (uint8_t)pu32DatPtr[i]);
+	//}
+
+	u16SectEraseNum = sizeof(gSettingTypeDef) / MX25L_SECTOR_SIZE;
+
+	if((sizeof(gSettingTypeDef) % MX25L_SECTOR_SIZE) > 0)
+		u16SectEraseNum++;
+	
+	//RTOSprintf("\r\n> Number of sectors erased:%d", u16SectEraseNum);
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_setting_user, S_2_mS(5));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	mxlRes = MX25L_MultiSectorsErase((u32Addr / MX25L_SECTOR_SIZE),
+	                                 u16SectEraseNum);
+	
+	//RTOSprintf("\r\n> Save g_Setting start sector:%d, number of sector erased:%d", u32Addr / MX25L_SECTOR_SIZE, u16SectEraseNum);
+
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Save system setting data fail with erase ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+	
+	memset(&(pg_Setting_Buf.u8SetVer), 0xFF, sizeof(gSettingTypeDef));
+
+	memcpy(&(pg_Setting_Buf.u8SetVer), &(g_Setting.u8SetVer), sizeof(gSettingTypeDef));
+
+	mxlRes = MX25L_MultiPagesProgram((u32Addr / MX25L_PAGE_SIZE),
+	                                 &(pg_Setting_Buf.u8SetVer), sizeof(gSettingTypeDef));
+
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Save system setting data return MX25L ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+
+	if(bSystemTimeReady == TRUE)
+	{
+		RTOSprintf("\r\n> ### %02X%02X/%02X/%02X %02X:%02X:%02X SYSTEM SAVE SETTING OK ###",
+							 u8BCDTime[0],
+							 u8BCDTime[1],
+							 u8BCDTime[2],
+							 u8BCDTime[3],
+							 u8BCDTime[4],
+							 u8BCDTime[5],
+							 u8BCDTime[6]);
+	}
+	else
+	{
+	  RTOSprintf("\r\n> ### SYSTEM SAVE SETTING OK ###");
+	}
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_setting_user);
+	
+	System_CheckSetting();
+	
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Read system setting from exflash.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool System_GetSetting(void)
+{
+	bool bRes = FALSE;
+	const uint32_t u32Addr = B32_EXFLASH_G_SETTING_START_ADDR;
+	MX25L_StatusTypeDef mxlRes;
+
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_setting_user, S_2_mS(5));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	mxlRes = MX25L_MultiBytesRead((uint32_t)u32Addr, (uint8_t *)&(pg_Setting_Buf.u8SetVer), sizeof(gSettingTypeDef));
+
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Get system setting data return MX25L ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+
+	if((pg_Setting_Buf.u8SetVer == SETUP_VERSION) && (pg_Setting_Buf.u8SetVerChk == NOT_SETUP_VERSION))
+	{
+		memcpy(&(g_Setting.u8SetVer), &(pg_Setting_Buf.u8SetVer), sizeof(gSettingTypeDef));
+
+		bRes = TRUE;
+	}
+	else 
+	{
+		uint8_t *pu8Ptr;
+		
+		
+		if(pg_Setting_Buf.u8SetVer != SETUP_VERSION)
+		{
+			RTOSprintf("\r\n> Setup version not correct of %d. System setting not restored.", pg_Setting_Buf.u8SetVer);
+		}
+		
+		if(pg_Setting_Buf.u8SetVerChk != NOT_SETUP_VERSION)
+		{
+			RTOSprintf("\r\n> Reverse setup version not correct of %d. System setting not restored.", pg_Setting_Buf.u8SetVerChk);
+		}
+		
+		pu8Ptr = &(pg_Setting_Buf.u8SetVer);
+		
+		RTOSprintf("\r\n gSetting ERROR data:");
+		
+		for(int i = 0; i < sizeof(gSettingTypeDef); i++)
+		{
+		  RTOSprintf("(%d)0x%02X", i, *pu8Ptr++);
+		}
+  }
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_setting_user);
+	
+	if(bRes == TRUE)
+	{
+	  RTOSprintf("\r\n> ### SYSTEM GET SETTING OK.");
+  }
+	
+	return bRes;
+}
+
+//============================================================================//
+// @brief  Check g_Setting header code.
+// @param  None.
+// @retval TRUE: g_Setting data is OK.
+//         FALSE: g_Setting data is ERROR.
+//============================================================================//
+bool System_CheckSetting(void)
+{
+  bool bRes = FALSE;
+	const uint32_t u32Addr = B32_EXFLASH_G_SETTING_START_ADDR;
+	MX25L_StatusTypeDef mxlRes;
+	uint8_t u8CheckData[2];
+	
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_setting_user, S_2_mS(5));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+	
+	mxlRes = MX25L_MultiBytesRead((uint32_t)u32Addr, u8CheckData, 2);
+
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Get system setting check code return MX25L ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+	
+	if((u8CheckData[0] == SETUP_VERSION) && (u8CheckData[1] == NOT_SETUP_VERSION))
+	{
+	  bRes = TRUE;
+	}
+	else 
+	{
+		RTOSprintf("\r\n> Check system setting version code ERROR of 0x%02X and 0x%02X", u8CheckData[0], u8CheckData[1]);
+		
+		System_GetSetting();
+		
+		System_SetupDefault();
+  }
+	
+	if(bRTOS_En)
+		osMutexRelease(mutex_setting_user);
+	
+	return bRes;
+}
+
+//============================================================================//
+// @brief  Save setup information to a file in SD card.
+// @param  None.
+// @retval TRUE: If operation successful.
+//         FALSE: If operation fail.
+//============================================================================//
+void System_SaveSetupData(void)
+{
+	SD_WriteBuffToFile(FILENAME_SETUP_SYS, (uint8_t*)&g_Setting,
+	                   sizeof(gSettingTypeDef));
+
+	SD_WriteBuffToFile(FILENAME_SETUP1_SYS, (uint8_t*)&g_Setting,
+	                   sizeof(gSettingTypeDef));
+}
+
+//============================================================================//
+// @brief  Stop all main functions of the system.
+// @param  None.
+// @retval None.
+//============================================================================//
+void System_Stop(void)
+{
+	osTimerStop(timerRTOS_GSM_BlockHandle);
+	osTimerStop(timerRTOS_GSM_NonBlockHandle);
+	osTimerStop(timerRTOS_EXTIHandle);
+	osTimerStop(timerRTOS_PCTransHandle);
+	
+	RTOSprintf("\r\n> System STOP!");
+	
+  bSystemStop = TRUE;
+}
+
+//============================================================================//
+// @brief  Erase setup storage section in flash.
+// @param  None.
+// @retval TRUE: if operation successful.
+//         FALSE: if operation fail.
+//============================================================================//
+bool SystemFLASH_Erase(void)
+{
+	HAL_StatusTypeDef halRes;
+	FLASH_EraseInitTypeDef halFlashEraseInstance;
+	uint32_t u32EraseError = 0;
+
+
+	#if HW_MCU == HW_STM32F205
+	halFlashEraseInstance.TypeErase = TYPEERASE_SECTORS;
+	halFlashEraseInstance.VoltageRange = VOLTAGE_RANGE_3;
+	halFlashEraseInstance.Sector = FLASH_SECTOR_11;
+	halFlashEraseInstance.NbSectors = 1;
+	#endif
+
+	HAL_FLASH_Unlock();
+
+	__HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR |
+	                       FLASH_FLAG_WRPERR | FLASH_FLAG_PGAERR |
+	                       FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
+
+	halRes = HAL_FLASHEx_Erase(&halFlashEraseInstance, &u32EraseError);
+
+	if(halRes != HAL_OK)
+	{
+		#if ENABLE_DEBUG_MSG
+		RTOSprintf("\r\n> Flash erase error at sector %d with error code %d.", u32EraseError, halRes);
+		#endif
+
+		RTOSprintf("\r\n> Flash erase error at sector %d with error code %d.", u32EraseError, halRes);
+
+		HAL_FLASH_Lock();
+
+		return FALSE;
+	}
+
+	HAL_FLASH_Lock();
+
+	return TRUE;
+}
+

@@ -1,0 +1,1 @@
+"..\Source\System.c" COMPACT OPTIMIZE (0,SPEED) BROWSE ORDER INCDIR(../Common/General/;../Common/GPIO/;../Common/Interrupt/;../Common/RTC/;../Common/DMA/;../Include/;..\Common\Power) DEBUG OBJECTEXTEND PRINT(.\LST\System.lst) TABS (2) OBJECT(.\OBJ\System.obj)

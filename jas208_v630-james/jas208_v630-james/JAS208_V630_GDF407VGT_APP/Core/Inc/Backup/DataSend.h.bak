@@ -1,0 +1,35 @@
+#ifndef _DATA_SEND_H_
+#define _DATA_SEND_H_
+//============================================================================//
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "stm32fxxx_hal_user.h"
+#include "DataType.h"
+
+
+//============================================================================//
+// User Externs
+//============================================================================//
+extern char Re_SendData[512];
+
+extern bool Download_Flg;
+
+extern bool Fota_Flg;
+
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+void DataSend_Init(void);
+void DataSend_ClrDataQue(void);
+void DataSend_ClrMsgQue(void);
+void DataSend_ClrCmdQue(void);
+void DataSend_AddDataToQue(uint8_t *Data, uint16_t DataLen);
+void DataSend_AddMsgToQue(uint8_t *Msg, uint16_t MsgLen);
+void DataSend_AddCmdToQue(uint8_t *Cmd, uint16_t CmdLen);
+
+
+//============================================================================//
+#endif /* _DATA_SEND_H_ */

@@ -1,0 +1,79 @@
+#ifndef _GSM_SIM5320_H_
+#define _GSM_SIM5320_H_
+//============================================================================//
+
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "stm32fxxx_hal_user.h"
+#include "DataType.h"
+#include "GSM_Driver.h"
+
+
+//============================================================================//
+// Public variables
+//============================================================================//
+#if ENABLE_GSM_SIM5320
+// 重置 GSM, 可設定重新啟動的時間, 單位為秒
+void SIM5320_Reset(uint8_t RestartTime);
+//
+void SIM5320_Init(void);
+//
+void SIM5320_SendData(GSM_SOCKET_DATA_t SocketData);
+//
+uint8_t SIM5320_GetSocketNum(uint8_t BankNum);
+//
+bool SIM5320_GetPowerStatus(void);
+//
+bool SIM5320_ChkCmdBusy(void);
+//
+bool SIM5320_GetOperatorStatus(void);
+//
+bool SIM5320_GetNetStatus(void);
+//
+GSM_NET_MODE_t SIM5320_GetNetMode(void);
+//
+bool SIM5320_GetDialStatus(void);
+//
+bool SIM5320_GetCallStatus(void);
+//
+bool SIM5320_GetSendStatus(void);
+//
+bool SIM5320_GetSQ(uint8_t *GSM_SQ);
+//
+void SIM5320_SetSpeakerGain(void);
+//
+void SIM5320_SetMicrophoneGain(void);
+//
+void SIM5320_CallDialNum(char *pStr);
+//
+void SIM5320_CallAnswer(void);
+//
+void SIM5320_CallHangUp(void);
+//
+void SIM5320_SendMessage(GSM_MSG_DATA_t MsgData);
+//
+bool SIM5320_SendMessageEvent(char *pStr);
+//
+void SIM5320_BuildCmdData(GSM_CMD_DATA_t CmdData);
+//
+void SIM5320_BuildTestCmd(char *CMD);
+//
+bool SIM5320_SystemUpgrade(void);
+//
+bool SIM5320_SystemBackup(time_t BackupTime);
+//
+bool SIM5320_SystemPhoto(time_t PhotoTime);
+//
+void SIM5320_GpsClrReg(void);
+//
+void SIM5320_GpsTurnOn(GPS_START_t GpsStart);
+//
+void SIM5320_GpsTurnOff(void);
+//
+bool SIM5320_GetGpsPower(void);
+//
+bool SIM5320_GetGpsData(GPS_DATA_t *GPS_AllData);
+#endif
+//============================================================================//
+#endif /* _GSM_SIM5320_H_ */

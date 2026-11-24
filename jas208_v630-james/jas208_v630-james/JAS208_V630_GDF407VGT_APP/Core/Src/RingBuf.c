@@ -1,0 +1,459 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "RingBuf.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "CommFunc.h"
+#include "main.h"
+
+//============================================================================//
+// User Function Prototypes
+//============================================================================//
+
+//============================================================================//
+// @brief  Initialize a ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+// @retval None.
+//============================================================================//
+void RingBuf_Init(RingBufTypeDef *prbBuf)
+{
+    if (prbBuf->u16Size == 0)
+        return;
+
+    prbBuf->pu8Buf = (uint8_t *)RTOSmalloc(sizeof(uint8_t) * prbBuf->u16Size);
+
+    if (prbBuf->pu8Buf == NULL)
+    {
+        RTOSprintf("\r\n> Not enough memory space to allocate for RingBuf_Init.");
+
+        return;
+    }
+
+    memset(prbBuf->pu8Buf, 0, prbBuf->u16Size);
+
+    prbBuf->u16Head = prbBuf->u16Tail = 0;
+
+    prbBuf->rbsFlag = RING_BUFFER_INITIALIZED;
+}
+
+//============================================================================//
+// @brief  Deinitialize a ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+// @retval None.
+//============================================================================//
+void RingBuf_DeInit(RingBufTypeDef *prbBuf)
+{
+    if (!prbBuf)
+        return;
+
+    RTOSfree(prbBuf->pu8Buf);
+
+    prbBuf->pu8Buf = NULL;
+
+    prbBuf->u16Size = 0;
+
+    prbBuf->u16Head = prbBuf->u16Tail = 0;
+
+    prbBuf->rbsFlag = RING_BUFFER_UNINITIALIZED;
+}
+
+//============================================================================//
+// @brief  Reset Head, Tail, and the buffer content to 0.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+// @retval None.
+//============================================================================//
+void RingBuf_Reset(RingBufTypeDef *rbBuf)
+{
+    if (!rbBuf)
+        return;
+
+    memset(rbBuf->pu8Buf, 0, rbBuf->u16Size);
+
+    rbBuf->u16Head = rbBuf->u16Tail = 0;
+}
+
+//============================================================================//
+// @brief  Get the amount of available space in a ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+// @retval The amount of available bytes in format uint16_t.
+//============================================================================//
+uint16_t RingBuf_GetFreeSpace(RingBufTypeDef *prbBuf)
+{
+    if (!prbBuf)
+        return 0;
+
+    if (prbBuf->pu8Buf == NULL)
+        return 0;
+
+    // Get length between Tail and Head
+    return ((prbBuf->u16Size + prbBuf->u16Tail - prbBuf->u16Head - 1) % prbBuf->u16Size);
+}
+
+//============================================================================//
+// @brief  Get the length of the current data in the ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+// @retval The amount of the data in format uint16_t.
+//============================================================================//
+uint16_t RingBuf_GetDataLength(RingBufTypeDef *prbBuf)
+{
+    if (!prbBuf)
+        return 0;
+
+    if (prbBuf->pu8Buf == NULL)
+        return 0;
+
+    return ((prbBuf->u16Size + prbBuf->u16Head - prbBuf->u16Tail) % prbBuf->u16Size);
+}
+
+//============================================================================//
+// @brief  Get the length of the current data in the ring buffer from a position.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         u16Pos: Position to count data length from.
+// @retval The amount of the data in format uint16_t.
+//============================================================================//
+uint16_t RingBuf_GetDataLenPos(RingBufTypeDef *prbBuf, uint16_t u16Pos)
+{
+    if (!prbBuf)
+        return 0;
+
+    if (prbBuf->pu8Buf == NULL)
+        return 0;
+
+    // Check if Start position is between Tail and Head
+    if (((prbBuf->u16Size + u16Pos - prbBuf->u16Tail) % prbBuf->u16Size) >
+        RingBuf_GetDataLength(prbBuf))
+        return 0;
+    else
+        return ((prbBuf->u16Size + prbBuf->u16Head - u16Pos) % prbBuf->u16Size);
+}
+
+//============================================================================//
+// @brief  Shift a number of bytes in the ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         u16Pos: Start position of the shifted bytes.
+//         u16DatLen: Number of bytes to shift.
+//         u16ShiftNum: Number of shifting position.
+// @retval None.
+//============================================================================//
+void RingBuf_DataShift(RingBufTypeDef *prbBuf, uint16_t u16Pos, uint16_t u16DatLen,
+                       uint16_t u16ShiftNum)
+{
+    uint8_t *u8Temp;
+
+    if (!prbBuf)
+        return;
+
+    if (prbBuf->pu8Buf == NULL)
+        return;
+
+    if (u16DatLen == 0)
+        return;
+
+    u8Temp = RTOSmalloc(u16DatLen);
+
+    if (u8Temp == NULL)
+    {
+        RTOSprintf("\r\n> Not enough memory space to allocate %d bytes for RingBuf_DataShift!", u16DatLen);
+
+        return;
+    }
+
+    // Copy data from original positions to Temp buffer
+    for (int i = 0; i < u16DatLen; i++)
+        u8Temp[i] = prbBuf->pu8Buf[(u16Pos + i) % prbBuf->u16Size];
+
+    // Copy data from Temp buffer to new positions
+    for (int i = 0; i < u16DatLen; i++)
+    {
+        uint16_t u16NewPos = (u16Pos + i + u16ShiftNum) % prbBuf->u16Size;
+//
+        prbBuf->pu8Buf[u16NewPos] = u8Temp[i];
+    }
+
+    RTOSfree(u8Temp);
+
+    u8Temp = NULL;
+}
+
+//============================================================================//
+// @brief  Peek an amount of data from the ring buffer without moving the tail.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         u16Pos: Position to peek from.
+//         pu8Dat: Pointer to an uint8_t data array.
+//         u16DatLen: Number of bytes to peek.
+// @retval Number of bytes read in format uint16_t.
+//============================================================================//
+uint16_t RingBuf_Peek(RingBufTypeDef *prbBuf, uint16_t u16Pos, uint8_t *pu8Dat, uint16_t u16DatLen)
+{
+    uint16_t u16Cnt = 0;
+
+    if (!prbBuf)
+        return 0;
+
+    if (prbBuf->pu8Buf == NULL)
+        return 0;
+
+    // Check if Start position is between Tail and Head
+    if (RingBuf_GetDataLenPos(prbBuf, u16Pos) == 0)
+        return 0;
+
+    // Copy data from Start position to the buffer
+    while ((u16Pos != prbBuf->u16Head) && (u16Cnt < u16DatLen))
+    {
+        pu8Dat[u16Cnt++] = prbBuf->pu8Buf[u16Pos];
+
+        u16Pos = (u16Pos + 1) % prbBuf->u16Size;
+    }
+
+    return u16Cnt;
+}
+
+//============================================================================//
+// @brief  Read an amount of data from the ring buffer from a position.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         u16Pos: Position of the ring buffer to read from.
+//         pu8Dat: Pointer to an uint8_t data array.
+//         u16DatLen: Number of bytes to read.
+// @retval Number of bytes read in format uint16_t.
+//============================================================================//
+uint16_t RingBuf_ReadPos(RingBufTypeDef *prbBuf, uint16_t u16Pos, uint8_t *pu8Dat,
+                         uint16_t u16DatLen)
+{
+    uint16_t u16Cnt = 0, u16BytesNum;
+
+    if (!prbBuf)
+        return 0;
+
+    if (prbBuf->pu8Buf == NULL)
+        return 0;
+
+    // Check if Start position is between Tail and Head
+    if (RingBuf_GetDataLenPos(prbBuf, u16Pos) == 0)
+        return 0;
+
+    // Calculate the number of bytes between Pos and Tail
+    // This is the number of bytes that need to be moved after reading from Pos
+    u16BytesNum = (prbBuf->u16Size + u16Pos - prbBuf->u16Tail) % prbBuf->u16Size;
+
+    // Copy data from Start position to the buffer
+    while ((u16Pos != prbBuf->u16Head) && (u16Cnt < u16DatLen))
+    {
+        pu8Dat[u16Cnt++] = prbBuf->pu8Buf[u16Pos];
+
+        u16Pos = (u16Pos + 1) % prbBuf->u16Size;
+    }
+
+    // Shift bytes between Tail and Pos toward the Head
+    // The number of moving positions is the number of bytes read
+    RingBuf_DataShift(prbBuf, prbBuf->u16Tail, u16BytesNum, u16Cnt);
+
+    // Change the Tail value
+    prbBuf->u16Tail = (prbBuf->u16Tail + u16Cnt) % prbBuf->u16Size;
+
+    return u16Cnt;
+}
+
+//============================================================================//
+// @brief  Read an amount of data from the ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         pu8Dat: Pointer to an uint8_t data array.
+//         u16DatLen: Number of bytes to read.
+// @retval Number of bytes read in format uint16_t.
+//============================================================================//
+uint16_t RingBuf_Read(RingBufTypeDef *prbBuf, uint8_t *pu8Dat, uint16_t u16DatLen)
+{
+    uint16_t u16Cnt = 0;
+
+    if (!prbBuf)
+        return 0;
+
+    if (prbBuf->pu8Buf == NULL)
+        return 0;
+
+    // Copy data from the Tail to the buffer and move the Tail
+    while ((prbBuf->u16Tail != prbBuf->u16Head) && (u16Cnt < u16DatLen))
+    {
+        pu8Dat[u16Cnt++] = prbBuf->pu8Buf[prbBuf->u16Tail];
+
+        prbBuf->u16Tail = (prbBuf->u16Tail + 1) % prbBuf->u16Size;
+    }
+
+    return u16Cnt;
+}
+
+//============================================================================//
+// @brief  Write an amount of data into the ring buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         pu8Dat: Pointer to an uint8_t data array.
+//         u16DatLen: Number of bytes to write.
+// @retval A RingBufStatTypeDef value.
+//============================================================================//
+RingBufStatTypeDef RingBuf_Write(RingBufTypeDef *prbBuf, uint8_t *pu8Dat, uint16_t u16DatLen)
+{
+    uint16_t u16Cnt = 0;
+    uint16_t u16FreeSpace;
+
+    if (!prbBuf)
+        return RING_BUFFER_ERROR;
+
+    if (prbBuf->pu8Buf == NULL)
+        return RING_BUFFER_ERROR;
+
+    // Check free space
+    u16FreeSpace = RingBuf_GetFreeSpace(prbBuf);
+
+    if (u16FreeSpace == 0)
+        return RING_BUFFER_FULL;
+    else if (u16FreeSpace < u16DatLen)
+        return RING_BUFFER_NO_SUFFICIENT_SPACE;
+
+    // Copy data from the buffer to the ring buffer and move the Head
+    while (u16Cnt < u16DatLen)
+    {
+        prbBuf->pu8Buf[prbBuf->u16Head] = pu8Dat[u16Cnt++];
+
+        prbBuf->u16Head = (prbBuf->u16Head + 1) % prbBuf->u16Size;
+    }
+
+    return RING_BUFFER_OK;
+}
+
+//============================================================================//
+// @brief  Find the first occurence of a characters sequence in the Ring Buffer.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         pcDat: Pointer to an char data array need for finding.
+//         pu16Pos: Pointer to a variable holding the first occurence position
+//                  if the sequence exists.
+// @retval TRUE: The characters sequence is found.
+//         FALSE: The characters sequence is not found.
+//============================================================================//
+bool RingBuf_Find(RingBufTypeDef *prbBuf, char *pcSeq, uint16_t *pu16Pos)
+{
+    uint8_t *pu8BufPtr;
+    uint16_t u16SeqLen;
+
+    if (!prbBuf)
+        return FALSE;
+
+    if (prbBuf->pu8Buf == NULL)
+        return FALSE;
+
+    u16SeqLen = strlen(pcSeq);
+
+    if ((u16SeqLen == 0) || (u16SeqLen > 1024))
+        return FALSE;
+
+    // Check if the length of the characters sequence is smaller than the length of the
+    // data in the ring buffer currently
+    if (RingBuf_GetDataLength(prbBuf) < u16SeqLen)
+        return FALSE;
+
+    pu8BufPtr = (uint8_t *)RTOSmalloc(sizeof(char) * u16SeqLen);
+
+    if (pu8BufPtr == NULL)
+    {
+        RTOSprintf("\r\n> Not enough memory space to allocate %d bytes for sequence \"%s\" for RingBuf_Find!", u16SeqLen, pcSeq);
+
+        return FALSE;
+    }
+
+    *pu16Pos = prbBuf->u16Tail;
+
+    // Compare data string at different positions to the characters sequence
+    while (((*pu16Pos) != ((prbBuf->u16Size + prbBuf->u16Head - u16SeqLen + 1) % prbBuf->u16Size)) &&
+           ((*pu16Pos) != (prbBuf->u16Head)))
+    {
+        RingBuf_Peek(prbBuf, (*pu16Pos), pu8BufPtr, u16SeqLen);
+
+        if (strncmp((char *)pu8BufPtr, pcSeq, u16SeqLen) == 0)
+        {
+            RTOSfree(pu8BufPtr);
+
+            pu8BufPtr = NULL;
+
+            return TRUE;
+        }
+
+        (*pu16Pos) = ((*pu16Pos) + 1) % prbBuf->u16Size;
+    }
+
+    RTOSfree(pu8BufPtr);
+
+    pu8BufPtr = NULL;
+
+    return FALSE;
+}
+
+//============================================================================//
+// @brief  Find the first occurence of a characters sequence in the Ring Buffer
+//         from a position.
+// @param  prbBuf: Pointer to a RingBufTypeDef instance.
+//         pcDat: Pointer to an char data array need for finding.
+//         pu16Pos: Pointer to a variable holding the first occurence position
+//         u16StartPos: Start position to find.
+//                  if the sequence exists.
+// @retval TRUE: The characters sequence is found.
+//         FALSE: The characters sequence in not found.
+//============================================================================//
+bool RingBuf_FindPos(RingBufTypeDef *prbBuf, char *pcSeq, uint16_t *pu16Pos,
+                     uint16_t u16StartPos)
+{
+    uint8_t *pu8BufPtr;
+    uint16_t u16SeqLen;
+
+    if (!prbBuf)
+        return FALSE;
+
+    if (prbBuf->pu8Buf == NULL)
+        return FALSE;
+
+    u16SeqLen = strlen(pcSeq);
+
+    if ((u16SeqLen == 0) || (u16SeqLen > 1024))
+        return FALSE;
+
+    // Check if the length of the characters sequence is smaller than the length of the
+    // data in the ring buffer from the Start position currently
+    if (RingBuf_GetDataLenPos(prbBuf, u16StartPos) < u16SeqLen)
+        return FALSE;
+
+    pu8BufPtr = (uint8_t *)RTOSmalloc(sizeof(char) * u16SeqLen);
+
+    if (pu8BufPtr == NULL)
+    {
+        RTOSprintf("\r\n> Not enough memory space to allocate %d bytes for sequence \"%s\" for RingBuf_FindPos!", u16SeqLen, pcSeq);
+
+        return FALSE;
+    }
+
+    *pu16Pos = u16StartPos;
+
+    // Compare data string at different positions to the characters sequence, start from
+    // the Start position
+    while (((*pu16Pos) != ((prbBuf->u16Size + prbBuf->u16Head - u16SeqLen + 1) % prbBuf->u16Size)) &&
+           ((*pu16Pos) != (prbBuf->u16Head)))
+    {
+        RingBuf_Peek(prbBuf, (*pu16Pos), pu8BufPtr, u16SeqLen);
+
+        if (strncmp((char *)pu8BufPtr, pcSeq, u16SeqLen) == 0)
+        {
+            RTOSfree(pu8BufPtr);
+
+            pu8BufPtr = NULL;
+
+            return TRUE;
+        }
+
+        (*pu16Pos) = ((*pu16Pos) + 1) % prbBuf->u16Size;
+    }
+
+    RTOSfree(pu8BufPtr);
+
+    pu8BufPtr = NULL;
+
+    return FALSE;
+}

@@ -1,0 +1,2685 @@
+//============================================================================//
+// User Includes
+//============================================================================//
+
+#include "EXTIO.h"
+
+#include <string.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "Buzzer.h"
+#include "CAN_Driver.h"
+#include "DataCollect.h"
+#include "DataLog.h"
+#include "Default.h"
+#include "LCD_Key.h"
+#include "main.h"
+#include "MC321X_Driver.h"
+#include "MX25L_Driver.h"
+#include "PCF_Driver.h"
+#include "Power.h"
+#include "RuleV161.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#if ENABLE_POWER_CHECK_VOLT
+//(VIN * (75K / (750K + 75K))) / (3.3 / 2^12)
+//#define POWER_VOLT_CONV(VOLT)	  (VOLT * 40960 / 363)
+#define POWER_VOLT_CONV(VOLT)   (VOLT * 4096 / 363)
+
+#define MOTOR_POWER_VOLT_DEF	  POWER_VOLT_CONV(8)
+#endif
+
+#define SET_DATASTREAM_DELAY  	MINUTE_2_SECOND(5)
+
+#if CUSTOMER_TYPE == CUSTOMER_FORMOSA \
+	|| CUSTOMER_TYPE == CUSTOMER_FPTC
+#undef SET_DATASTREAM_DELAY
+#define SET_DATASTREAM_DELAY	 HOUR_2_SECOND(1) // Heinz 20160512
+//#define SET_DATASTREAM_DELAY	 MINUTE_2_SECOND(5) // Heinz 20161123
+#endif
+
+#define CHECK_EXTIO_DETECT		   (0x0304)
+
+// Auto Gain
+#define	AUTO_GAIN_MAX_COUNT		   3
+#define	AUTO_GAIN_OK_COUNT		   128
+#define	AUTO_GAIN_MAX_DIST		   3000
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+
+EXTIO_StateTypeDef CurrState;
+
+bool bBackupPwrStable = TRUE;
+
+uint16_t u16PoweADCValue = 0;
+
+uint16_t u16PoweADCValue2 = 0;
+
+bool bPowerCutFlag = FALSE;
+
+bool bMessageFlag = FALSE;
+
+uint16_t uiSPD_TickIdx = 0;
+
+uint16_t uiRPM_TickIdx = 0;
+
+bool bEVENT_SPEED_LINE = FALSE; // Heinz
+
+bool bWaitingEnterStandby = FALSE;
+
+float fAccelSpeedSlot[6] = {0.0f};
+
+uint16_t Again_AutoGain_Count = 0;
+
+bool bWaitStartProcFlag = FALSE;
+
+bool IsSaveSettingFlag = FALSE;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+
+//============================================================================//
+// @brief  Return ADC value of a channel in ADC 1
+// @param  u8Channel: ADC channel number.
+// @retval ADC value in uint16_t format.
+//============================================================================//
+static uint16_t EXTIO_GetADC1(uint8_t u8Channel)
+{
+	HAL_StatusTypeDef halRes;
+	uint16_t u16ADC_Res;
+	ADC_ChannelConfTypeDef sConfig = {0};
+
+
+	switch(u8Channel)
+	{
+		case 9:
+			sConfig.Channel = ADC_CHANNEL_9;
+		
+		  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+
+			break;
+
+		case 14:
+			sConfig.Channel = ADC_CHANNEL_14;
+		
+		  sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
+
+			break;
+		
+		case 16:
+			sConfig.Channel = ADC_CHANNEL_16;
+		
+		  sConfig.SamplingTime = ADC_SAMPLETIME_112CYCLES;
+
+			break;
+
+		default:
+			return 0;
+	}
+
+	sConfig.Rank = 1;
+
+	if(HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+		return 0;
+
+	HAL_ADC_Start(&hadc1);
+
+	halRes = HAL_ADC_PollForConversion(&hadc1, 1000);
+
+	if(halRes == HAL_OK)
+	{
+	  u16ADC_Res = HAL_ADC_GetValue(&hadc1);
+  }
+	else
+	{
+		RTOSprintf("\r\n> ADC conversion ERROR %d", halRes);
+		
+	  u16ADC_Res = 3300;
+	}
+	
+	HAL_ADC_Stop(&hadc1);
+
+	return u16ADC_Res;
+}
+
+//============================================================================//
+// @brief  Get the ambient temperature of the MCU.
+// @param  None
+// @retval Temperature based on C degree unit in UINT format. 
+//============================================================================//
+UINT EXTIO_GetTemp(void)
+{
+  uint16_t u16ADC_Res;
+	UINT uTemp;
+	
+	
+	u16ADC_Res = EXTIO_GetADC1(16);
+	
+	uTemp = (unsigned int)(((float)u16ADC_Res * TEMP_V_SENSE - TEMP_V_25) / TEMP_SLOPE_AVG + 25);
+	
+	return uTemp;
+}
+
+//============================================================================//
+// @brief  Initialize EXTIO function.
+// @param  None
+// @retval None. 
+//============================================================================//
+void EXTIO_Init(void)
+{
+	CurrState.word = 0x00;
+	
+	#if ENABLE_GS_MC3210
+	MC321X_Init();
+	#endif
+	
+	#if ENABLE_CAN == 1
+	if(CAN_CheckEnable())
+	  CAN_Config();
+	#endif
+}
+
+//============================================================================//
+// @brief  Detect MCU power status.
+// @param  None.
+// @retval None.
+//============================================================================//
+#if ENABLE_POWER_CHECK_VOLT // Check power by measuring voltage
+void EXTIO_DetectPWR(void)
+{
+	u16PoweADCValue = EXTIO_GetADC1(ADC_MOTOR_PWR_CHANNEL);
+	
+	//EXTprintf("\r\n> ADC: %d", u16PoweADCValue);
+
+	//if(ADC_GetConversionValue(ADC1) < MOTOR_POWER_VOLT_DEF) //AMBO ///Heinz
+	//if(ADC_GetConversionValue(ADC1) < 0x0f0)
+	if(u16PoweADCValue < 0x0F0)
+	{
+		CurrState.bits.IN_PWR = 0;
+
+		g_SysInfo.tEXTIO.bits.IN_PWR = 0;
+
+		if(g_SysInfo.tVehicleState.bPWR_ON == TRUE)
+		{
+		  g_SysInfo.tVehicleState.bPWR_ON = FALSE;
+		
+			RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_MOTOR_POWER_DOWN);
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_EXTERNAL_POWER_ISSUE, STR_NULL);
+			#endif
+
+			if(HW_PBGetState(ACC_IN) == 1)
+			{
+				char szTime[40];
+				bool bRes;
+				
+				
+				if(bWaitingEnterStandby == FALSE)
+				{
+					LCD_SetShowAutoTestPage(39);
+
+					g_Setting.ttAccOffTime = System_GetTime();
+					
+					bRes = System_CheckSetting();
+					
+					if(!bRes)
+						RTOSprintf("\r\n> Check system setting before enter standby mode ERROR");
+
+					System_SaveSetting();
+					
+					//bRes = System_GetSetting();
+					
+					//if(!bRes)
+					//	RTOSprintf("\r\n> Get system setting before enter standby mode ERROR");
+
+					#if ENABLE_GSM_NET
+					QtEC21_CheckRedoFTP();
+					#endif
+
+					u32TickBuf = HAL_GetTick();
+					
+					strftime(szTime, sizeof(szTime), "%Y/%m/%d %H:%M:%S", localtime(&g_Setting.ttAccOffTime));
+
+					RTOSprintf("\r\n> [%s] System set to enter standby mode now", szTime);
+					
+					osTimerStart(timerACC_OffHandle, S_2_mS(20));
+					
+					bWaitingEnterStandby = TRUE;
+			  }
+			}
+		}
+	}
+	else
+	{
+		if(CurrState.bits.IN_PWR == 0)
+		{
+			CurrState.bits.IN_PWR = 1;
+		}
+		else
+		{
+			g_SysInfo.tEXTIO.bits.IN_PWR = 1;
+
+			if(g_SysInfo.tVehicleState.bPWR_ON == FALSE)
+			{
+			  g_SysInfo.tVehicleState.bPWR_ON = TRUE;
+			
+				RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_MOTOR_POWER_ON);
+				
+				//GSM_TCP_ReportEvent((char *)EVENT_CAR_POWER_ON, STR_NULL);
+				
+				if(HW_PBGetState(ACC_IN) == 1)
+				{
+					if(bWaitingEnterStandby == TRUE)
+					{
+						osTimerStop(timerACC_OffHandle);
+
+						bWaitingEnterStandby = FALSE;
+
+						//HW_PBClr(LCD_BL);
+
+						RTOSprintf("\r\n> System stop enter standby mode.");
+						
+						LCD_SetShowAutoTestPage(50);
+					}
+			  }
+			}
+		}
+	}
+}
+#else // Check power by logic
+void EXTIO_DetectPWR(void)
+{
+	if(HW_PBGetState(PWR_SEL) == 1)
+	{
+		CurrState.bits.IN_PWR = 0;
+
+		g_SysInfo.EXTIO.bits.IN_PWR = 0;
+
+		if (g_SysInfo.VehicleState.PWR_ON == TRUE)
+		{
+			RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_MOTOR_POWER_DOWN);
+		}
+
+		g_SysInfo.VehicleState.PWR_ON = FALSE;
+	}
+	else
+	{
+		if(CurrState.bits.IN_PWR == 0)
+		{
+			CurrState.bits.IN_PWR = 1;
+		}
+		else
+		{
+			g_SysInfo.EXTIO.bits.IN_PWR = 1;
+
+			if (g_SysInfo.VehicleState.PWR_ON == FALSE)
+			{
+				RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_MOTOR_POWER_ON);
+			}
+
+			g_SysInfo.VehicleState.PWR_ON = TRUE;
+		}
+	}
+}
+#endif
+
+//============================================================================//
+// @brief  Detect ACC status.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectACC(void)
+{
+	//Debug
+	char szTime[40];
+	time_t ttRestTime = 0;
+	bool bRes;
+	static uint8_t u8OffToNoCnt = 0;
+	
+	
+	if(HW_PBGetState(ACC_IN) == 0)
+	{
+		if(CurrState.bits.IN_ACC == 1)
+		{
+		  CurrState.bits.IN_ACC = 0;
+		}
+		
+		u8OffToNoCnt = 0;
+		
+		g_SysInfo.tEXTIO.bits.IN_ACC = 0;
+		
+		g_SysInfo.tVehicleState.bACC_ON = FALSE;
+
+		if(bWaitingEnterStandby == FALSE)
+		{
+			LCD_SetShowAutoTestPage(39);
+			
+      RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_KEY_OFF);
+
+			g_Setting.ttAccOffTime = System_GetTime();
+			
+			bRes = System_CheckSetting();
+			
+			if(!bRes)
+				RTOSprintf("\r\n> Check system setting before enter standby mode ERROR");
+
+			System_SaveSetting();
+			
+			//bRes = System_GetSetting();
+			
+			//if(!bRes)
+			//	RTOSprintf("\r\n> Get system setting before enter standby mode ERROR");
+
+			#if ENABLE_GSM_NET
+			QtEC21_CheckRedoFTP();
+			#endif
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_KEY_OFF, STR_NULL);
+			
+			GSM_TCP_ReportEvent((char *)EVENT_SYSTEM_OFF, STR_NULL);
+			#endif
+
+			u32TickBuf = HAL_GetTick();
+			
+			strftime(szTime, sizeof(szTime), "%Y/%m/%d %H:%M:%S", localtime(&g_Setting.ttAccOffTime));
+
+			RTOSprintf("\r\n> [%s] System set to enter standby mode now", szTime);
+			
+			osTimerStart(timerACC_OffHandle, S_2_mS(20));
+			
+			bWaitingEnterStandby = TRUE;
+		}
+
+		//RTOSprintf("\r\n> ACC OFF.");
+	}
+	else
+	{
+		if(CurrState.bits.IN_ACC == 0)
+		{
+			CurrState.bits.IN_ACC = 1;
+			
+			u8OffToNoCnt = 0;
+		}
+		else
+		{
+			if(bWaitingEnterStandby == TRUE)
+			{
+				u8OffToNoCnt++;
+				
+				if(u8OffToNoCnt < 30)
+					return;
+			}
+			
+			g_SysInfo.tEXTIO.bits.IN_ACC = 1;
+
+			if(g_SysInfo.tVehicleState.bACC_ON == FALSE)
+			{
+				g_SysInfo.tVehicleState.bACC_ON = TRUE;
+				
+				RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_KEY_ON);
+
+				g_Setting.tDRV_SET.ttDrvWorkStartTime = System_GetTime();
+				
+				if(g_Setting.ttAccOffTime > 0)
+				{		
+					ttRestTime = g_Setting.tDRV_SET.ttDrvWorkStartTime - g_Setting.ttAccOffTime;
+					
+					RTOSprintf("\r\n> ### OFF_TO_ON: %d sec ###", ttRestTime);
+					
+					if(ttRestTime > 0)
+					{
+						g_Setting.tDrvInfo[0].u32DrRestTime += ttRestTime;
+						g_Setting.tDrvInfo[1].u32DrRestTime += ttRestTime;
+						g_Setting.tDrvInfo[0].stDrvRecDay[13].u32RestTime += ttRestTime;
+						g_Setting.tDrvInfo[1].stDrvRecDay[13].u32RestTime += ttRestTime;
+
+						System_SaveSetting();
+					}
+					else
+					{
+						RTOSprintf("\r\n> ### Rest Time Less than zero ###", ttRestTime);
+					}
+				}
+				else
+				{
+					RTOSprintf("\r\n> ### ACC Off time Less than zero ###", ttRestTime);
+				}
+
+				u32TickBuf = 0;
+
+				if((bWaitingEnterStandby == TRUE) && (g_SysInfo.tVehicleState.bPWR_ON == TRUE))
+				{
+					osTimerStop(timerACC_OffHandle);
+
+					bWaitingEnterStandby = FALSE;
+
+					//HW_PBClr(LCD_BL);
+
+					RTOSprintf("\r\n> System stop enter standby mode.");
+					
+					LCD_SetShowAutoTestPage(50);
+				}
+       
+				#if ENABLE_GSM_NET
+			  GSM_TCP_ReportEvent((char *)EVENT_KEY_ON, STR_NULL);
+				#endif
+			}
+			
+			bWaitingEnterStandby = FALSE;
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect ACC status when the system is stopped.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_DetectACC_2(void)
+{
+	if(HW_PBGetState(ACC_IN) == 0)
+	{
+		if(CurrState.bits.IN_ACC == 1)
+		{
+		  CurrState.bits.IN_ACC = 0;
+		}
+		
+		g_SysInfo.tEXTIO.bits.IN_ACC = 0;
+		
+		g_SysInfo.tVehicleState.bACC_ON = FALSE;
+
+		RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_KEY_OFF);
+		
+		#if ENABLE_GSM_NET
+		QtEC21_TurnOffPwrKey();
+		#endif
+		
+		HW_WriteBackupRegister(BKP_SLEEP_CHK, BKP_SLEEP_VALUE);
+		
+		bRTOS_En = FALSE;
+		
+		LCD_Stop();
+	
+		RTOSprintf("\r\n> ### SYSTEM ENTER STANDBY MODE ###");
+
+		System_Reset();
+	}
+}
+
+//============================================================================//
+// @brief  Detect battery power status.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_DetectCHG(void)
+{
+	static uint8_t u8BatIn = 0, u8BatOut = 0;
+	//static float fUC_Power = 0;
+	//static uint32_t u32UC_DetectTick = 0;
+	
+
+	//u16PoweADCValue2 = EXTIO_GetADC1(ADC_CHANNEL_14);
+	
+	// Calculate UC voltage (for 2 UCs in serial)
+	//fUC_Power = (float)u16PoweADCValue2 / 4095 * (float)3.3 * 2;
+	
+	//if((HAL_GetTick() - u32UC_DetectTick) > 2000)
+	//{
+	//  EXTprintf("\r\n> UC voltage:%.2f", fUC_Power);
+		
+	//	u32UC_DetectTick = HAL_GetTick();
+	//}
+	
+	//if(fUC_Power > (float)2.5)
+	if(1)
+	{
+		u8BatIn++;
+		
+		if(u8BatIn > 10)
+		{
+			u8BatIn = 0;
+			
+			if(g_SysInfo.tEXTIO.bits.IN_CHG == 0)
+			{
+				g_SysInfo.tEXTIO.bits.IN_CHG = 1;
+			}
+			
+			if(bBackupPwrStable == FALSE)
+			{
+				bBackupPwrStable = TRUE;
+					
+				//#if ENABLE_INDEX_BUFFER
+				//bFileIdxIsSaved = FALSE;
+				//#endif
+			}
+		}
+	}
+	else
+	{
+		u8BatIn = 0;
+		
+		u8BatOut++;
+		
+		if(u8BatOut > 10)
+		{
+			u8BatOut = 0;
+			
+			if(g_SysInfo.tEXTIO.bits.IN_CHG == 1)
+			{
+				g_SysInfo.tEXTIO.bits.IN_CHG = 0;
+			}
+			
+			if(bBackupPwrStable == TRUE)
+			{
+				#if ENABLE_INDEX_BUFFER
+				if(bSD_ReportErrFlag == FALSE)
+				{
+					EXTprintf("\r\n> Save file index all due to unstable power.");
+					
+					V161_SaveFileIdxAll();
+				}
+				#endif
+				
+				bBackupPwrStable = FALSE;
+			}
+		}
+	}
+}
+
+#if HW_TYPE == HW_JAS208 || HW_TYPE == HW_JAS306 // HW_JAS208 HW_JAS306
+//============================================================================//
+// @brief  Detect IO IN1.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN1(void)
+{
+	static uint32_t u32OnTick = 0, u32OffTick = 0;;
+	
+	
+	if(HW_PBGetState(IO1_IN) == 0) // IN_1 = 0, real value = 1
+	{
+		u32OffTick = 0;
+		
+	  if(g_Setting.tReverse.bits.IN_1 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_1 == 1)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(2)))
+				{
+					g_SysInfo.tEXTIO.bits.IN_1 = 0;
+					
+					#if ENABLE_GSM_NET
+					GSM_TCP_ReportEvent((char *)EVENT_BRAKE_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_1 == 0)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(2)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_1 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_BRAKE_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+	}	
+	else // IN_1 = 1, real value = 0
+	{
+		u32OnTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_1 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_1 == 0)
+			{
+				if(HAL_GetTick() > (u32OffTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_1 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_BRAKE_OFF, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OffTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_1 == 1)
+			{
+				if(HAL_GetTick() > (u32OffTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_1 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_BRAKE_OFF, STR_NULL);
+					#endif
+			  }
+			}
+			else
+			{
+			  u32OffTick = HAL_GetTick();
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect IO IN2.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN2(void)
+{
+	static uint32_t u32OffTick = 0;
+	
+	
+	if(HW_PBGetState(IO2_IN) == 0) // IN_2 = 0, real value = 1
+	{
+		u32OffTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_2 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_2 == 1)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_2 = 0;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_LEFT_SIGNAL_ON, STR_NULL);
+				#endif
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_2 == 0)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_2 = 1;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_LEFT_SIGNAL_ON, STR_NULL);
+			  #endif
+			}
+		}
+	}	
+	else // IN_2 = 1, real value = 0
+	{
+	  if(g_Setting.tReverse.bits.IN_2 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_2 == 0)
+			{
+				if(HAL_GetTick() > (u32OffTick + S_2_mS(5)))
+				{
+					g_SysInfo.tEXTIO.bits.IN_2 = 1;
+					
+					#if ENABLE_GSM_NET
+					GSM_TCP_ReportEvent((char *)EVENT_LEFT_SIGNAL_OFF, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OffTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_2 == 1)
+			{
+				if(HAL_GetTick() > (u32OffTick + S_2_mS(5)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_2 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_LEFT_SIGNAL_OFF, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OffTick = HAL_GetTick();
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect IO IN3.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN3(void)
+{
+	static uint32_t u32OffTick = 0;
+	
+	
+	if(HW_PBGetState(IO3_IN) == 0) // IN_3 = 0, real value = 1
+	{
+		u32OffTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_3 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_3 == 1)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_3 = 0;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_RIGHT_SIGNAL_ON, STR_NULL);
+				#endif
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_3 == 0)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_3 = 1;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_RIGHT_SIGNAL_ON, STR_NULL);
+				#endif
+			}
+		}
+	}	
+	else // IN_3 = 1, real value = 0
+	{
+	  if(g_Setting.tReverse.bits.IN_3 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_3 == 0)
+			{
+				if(HAL_GetTick() > (u32OffTick + S_2_mS(5)))
+			  {
+			    g_SysInfo.tEXTIO.bits.IN_3 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_RIGHT_SIGNAL_OFF, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OffTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_3 == 1)
+			{
+				if(HAL_GetTick() > (u32OffTick + S_2_mS(5)))
+			  {
+			    g_SysInfo.tEXTIO.bits.IN_3 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_RIGHT_SIGNAL_OFF, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OffTick = HAL_GetTick();
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect IO IN4.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN4(void)
+{
+	static uint32_t u32OnTick = 0;
+		
+	
+	if(HW_PBGetState(IO4_IN) == 0) // IN_4 = 0, real value = 1
+	{
+	  if(g_Setting.tReverse.bits.IN_4 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_4 == 1)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_4 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO1_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_4 == 0)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_4 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO1_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+	}	
+	else // IN_4 = 1, real value = 0
+	{
+		u32OnTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_4 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_4 == 0)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_4 = 1;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO1_OFF, STR_NULL);
+				#endif
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_4 == 1)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_4 = 0;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO1_OFF, STR_NULL);
+				#endif
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect IO IN5.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN5(void)
+{
+	static uint32_t u32OnTick = 0;
+		
+	
+	if(HW_PBGetState(IO5_IN) == 0) // IN_5 = 0, real value = 1
+	{
+	  if(g_Setting.tReverse.bits.IN_5 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_5 == 1)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_5 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO2_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_5 == 0)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_5 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO2_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+	}	
+	else // IN_5 = 1, real value = 0
+	{
+		u32OnTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_5 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_5 == 0)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_5 = 1;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO2_OFF, STR_NULL);
+				#endif
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_5 == 1)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_5 = 0;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO2_OFF, STR_NULL);
+				#endif
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect IO IN6.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN6(void)
+{
+	static uint32_t u32OnTick = 0;
+		
+	
+	if(HW_PBGetState(IO6_IN) == 0) // IN_6 = 0, real value = 1
+	{
+	  if(g_Setting.tReverse.bits.IN_6 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_6 == 1)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_6 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO3_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_6 == 0)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_6 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO3_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+	}	
+	else // IN_6 = 1, real value = 0
+	{
+		u32OnTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_6 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_6 == 0)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_6 = 1;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO3_OFF, STR_NULL);
+				#endif
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_6 == 1)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_6 = 0;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO3_OFF, STR_NULL);
+				#endif
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Detect IO IN7.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_DetectIN7(void)
+{
+	static uint32_t u32OnTick = 0;
+		
+	
+	if(HW_PBGetState(IO7_IN) == 0) // IN_7 = 0, real value = 1
+	{
+	  if(g_Setting.tReverse.bits.IN_7 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_7 == 1)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_7 = 0;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO4_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_7 == 0)
+			{
+				if(HAL_GetTick() > (u32OnTick + S_2_mS(3)))
+				{
+			    g_SysInfo.tEXTIO.bits.IN_7 = 1;
+				
+					#if ENABLE_GSM_NET
+				  GSM_TCP_ReportEvent((char *)EVENT_IO4_ON, STR_NULL);
+					#endif
+				}
+			}
+			else
+			{
+			  u32OnTick = HAL_GetTick();
+			}
+		}
+	}	
+	else // IN_7 = 1, real value = 0
+	{
+		u32OnTick = HAL_GetTick();
+		
+	  if(g_Setting.tReverse.bits.IN_7 == 1) // Use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_7 == 0)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_7 = 1;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO4_OFF, STR_NULL);
+				#endif
+			}
+		}
+		else // Not use reversed bit
+		{
+		  if(g_SysInfo.tEXTIO.bits.IN_7 == 1)
+			{
+			  g_SysInfo.tEXTIO.bits.IN_7 = 0;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent((char *)EVENT_IO4_OFF, STR_NULL);
+				#endif
+			}
+		}
+	}
+}
+#endif
+
+//============================================================================//
+// @brief  Detect all IO states.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_CheckFunc(void)
+{
+	g_SysInfo.tEXTIO.bits.IN_1 ^= g_Setting.tReverse.bits.IN_1;
+	g_SysInfo.tEXTIO.bits.IN_2 ^= g_Setting.tReverse.bits.IN_2;
+	g_SysInfo.tEXTIO.bits.IN_3 ^= g_Setting.tReverse.bits.IN_3;
+	g_SysInfo.tEXTIO.bits.IN_4 ^= g_Setting.tReverse.bits.IN_4;
+	g_SysInfo.tEXTIO.bits.IN_5 ^= g_Setting.tReverse.bits.IN_5;
+	g_SysInfo.tEXTIO.bits.IN_6 ^= g_Setting.tReverse.bits.IN_6;
+	g_SysInfo.tEXTIO.bits.IN_7 ^= g_Setting.tReverse.bits.IN_7;
+	g_SysInfo.tEXTIO.bits.IN_8 ^= g_Setting.tReverse.bits.IN_8;
+	g_SysInfo.tEXTIO.bits.IN_9 ^= g_Setting.tReverse.bits.IN_9;
+	g_SysInfo.tEXTIO.bits.IN_10 ^= g_Setting.tReverse.bits.IN_10;
+	g_SysInfo.tEXTIO.bits.IN_11 ^= g_Setting.tReverse.bits.IN_11;
+}
+
+//============================================================================//
+// @brief  EXTIO detect process.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_Detect_Proc(void)
+{
+	EXTIO_DetectPWR();
+
+	EXTIO_DetectACC();
+
+	EXTIO_DetectCHG();
+	
+	EXTIO_CheckFunc();
+
+	if(EXTIO_IsMainPowerNormal() == TRUE)
+	{
+		#if HW_TYPE == HW_JAS208 || HW_TYPE == HW_JAS306 // HW_JAS208 HW_JAS306
+		EXTIO_DetectIN1();
+
+		EXTIO_DetectIN2();
+
+		EXTIO_DetectIN3();
+
+		EXTIO_DetectIN4();
+		
+		EXTIO_DetectIN5();
+		
+		EXTIO_DetectIN6();
+		
+		EXTIO_DetectIN7();
+		#endif
+	}
+}
+
+//#if ENABLE_GSM_NET
+//============================================================================//
+// @brief  Process speed and RPM data.
+// @param  None.
+// @retval None.
+//============================================================================//
+static void EXTIO_SpeedRPM_EventProc(void)
+{
+	static uint16_t	u16OverSpeedOn = 0, u16OverSpeedOff = 0;	
+	static uint16_t	u16RPM_IdleOn = 0, u16RPM_IdleOff = 0;
+	static uint16_t u16Over_RPM_On = 0, u16Over_RPM_Off = 0;
+	uint8_t u8AccelTotalSlot, u8AccelPreSlot;
+  static uint8_t u8AccelCurrSlot = 0;
+	float fAccelAmount;
+	static bool	bOverSpeedFlag = FALSE, bRPM_IdleFlag = FALSE, bOverRPM_Flag = FALSE,
+		          bOverAccelFlag = FALSE, bOverDecelFlag = FALSE;
+	
+	
+	if((M_2_KM(g_SysInfo.tVehicleState.u32Speed) > 3) && (bEVENT_SPEED_LINE == FALSE))
+	{
+	  bEVENT_SPEED_LINE = TRUE;
+
+		#if ENABLE_GSM_NET
+		GSM_TCP_ReportEvent((char *)EVENT_SPEED_INIT, STR_NULL);
+		#endif
+	}
+	
+	// OVER SPEED EVENT
+	if((M_2_100M(g_SysInfo.tVehicleState.u32Speed) >= g_Setting.tSpeedSet.u16SPEED_LIMIT) &&
+		 (g_Setting.tSpeedSet.u16SPEED_LIMIT >= 900)) // Over speed event
+	{		
+		u16OverSpeedOn++;
+		u16OverSpeedOff = 0;
+		
+		//if((u16OverSpeedOn == g_Setting.tSpeedSet.u16OVER_SPEED_END_CNT_MAX) && (bOverSpeedFlag == 0)) // Over speed start time reaches threshold
+		if((u16OverSpeedOn == 30) && (bOverSpeedFlag == 0)) // Over speed start time reaches threshold
+		{	
+			//EXTprintf("\r\n> Over speed On");
+			
+			bOverSpeedFlag = 1;
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_SPEED_START, STR_NULL);
+			#endif
+			
+			g_SysInfo.tSpeedInfo.bIsOverSpeed = TRUE; // Over speed TRUE
+		}	
+		
+		if(u16OverSpeedOn > 100)
+			u16OverSpeedOn = 120;	
+	}	
+	else
+  {		
+		u16OverSpeedOn = 0;
+		u16OverSpeedOff++;
+		
+		if((u16OverSpeedOff == g_Setting.tSpeedSet.u16OVER_SPEED_END_CNT_MAX) && (bOverSpeedFlag)) // Over speed end time reaches threshold
+		{	
+			//EXTprintf("\r\n> Over speed Off");
+			
+			bOverSpeedFlag = 0;
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_SPEED_END , STR_NULL);
+			#endif
+			
+			g_SysInfo.tSpeedInfo.bIsOverSpeed = FALSE; // Over speed OFF
+		}	
+		
+		if(u16OverSpeedOff > 10)
+			u16OverSpeedOff = 15;
+	}
+	
+	// RPM IDLE EVENT
+	//if((g_SysInfo.tVehicleState.u16RPM >= 300) && (M_2_KM(g_SysInfo.tVehicleState.u32Speed) == 0))	
+	if(M_2_KM(g_SysInfo.tVehicleState.u32Speed) == 0)		
+	{	
+		//if(g_SysInfo.tVehicleState.u16RPM >= 400)
+		if(g_SysInfo.tVehicleState.u16RPM > 0)
+		{	
+			u16RPM_IdleOn++;
+			u16RPM_IdleOff = 0;
+			
+			if((u16RPM_IdleOn == g_Setting.tRPM_Set.u16RPM_IDLE_CNT_MAX) && (bRPM_IdleFlag == FALSE)) // RPM idle start time reaches threshold
+			{	
+				EXTprintf("\r\n> RPM IDLE ON.");
+				
+				bRPM_IdleFlag = TRUE;
+				
+				#if ENABLE_GSM_NET
+				GSM_TCP_ReportEvent(EVENT_RPM_IDLE_START, STR_NULL);
+				#endif
+				
+				g_SysInfo.tSpeedInfo.bIsRPM_Idle = TRUE; // RPM IDLE TRUE
+			}	
+			
+			if(u16RPM_IdleOn > g_Setting.tRPM_Set.u16RPM_IDLE_CNT_MAX)
+				u16RPM_IdleOn = 5000;
+		}	
+	}	
+	
+	if((M_2_KM(g_SysInfo.tVehicleState.u32Speed) > 0) || (g_SysInfo.tVehicleState.bACC_ON == FALSE))		
+  {			
+		u16RPM_IdleOff++;
+	  u16RPM_IdleOn = 0;
+			
+		if((u16RPM_IdleOff == 5) && (bRPM_IdleFlag == TRUE)) // RPM idle end time reaches threshold
+		{	
+			EXTprintf("\r\n> RPM IDLE OFF.");
+				
+			bRPM_IdleFlag = FALSE;
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent(EVENT_RPM_IDLE_END, STR_NULL);	
+			#endif
+			
+			g_SysInfo.tSpeedInfo.bIsRPM_Idle = FALSE; // RPM IDLE OFF
+		}	
+		
+		if(u16RPM_IdleOff > 200)
+			u16RPM_IdleOff = 500;	 
+	}
+	
+	// OVER RPM EVENT
+	//if(g_SysInfo.tVehicleState.u16RPM > RPM_LIMIT) 
+	if((g_SysInfo.tVehicleState.u16RPM > g_Setting.tRPM_Set.u16Limit) &&
+	   (g_Setting.tRPM_Set.u16Limit >= 1000)) // Over RPM event
+	{		
+		u16Over_RPM_On++;
+		u16Over_RPM_Off = 0;
+		
+		if((u16Over_RPM_On == g_Setting.tRPM_Set.u16RPM_OVER_ON_CNT_MAX) && (bOverRPM_Flag == FALSE)) // Over RPM start time reaches threshold
+		{	
+			//EXTprintf("\r\n> Over RPM On");
+			
+			bOverRPM_Flag = TRUE;
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_RPM_START, STR_NULL);
+			#endif
+			
+			g_SysInfo.tSpeedInfo.bIsOver_RPM = TRUE; // Over RPM TRUE
+		}	
+		
+		if(g_Setting.tRPM_Set.u16RPM_OVER_ON_CNT_MAX > 200)
+			u16Over_RPM_On = 250;	
+	}	
+	else
+  {		
+		u16Over_RPM_On = 0;
+		u16Over_RPM_Off++;
+		
+		if((u16Over_RPM_Off == g_Setting.tRPM_Set.u16RPM_OVER_OFF_CNT_MAX) && (bOverRPM_Flag == TRUE)) // Over RPM end time reaches threshold
+		{	
+			//EXTprintf("\r\n> Over RPM Off");
+			
+			bOverRPM_Flag = FALSE;
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_RPM_END , STR_NULL);
+			#endif
+			
+			g_SysInfo.tSpeedInfo.bIsOver_RPM = FALSE; // Over RPM OFF	
+		}	
+		
+		if(u16Over_RPM_Off > 10)
+			u16Over_RPM_Off = 15;
+	}
+	
+	// OVER ACCELERATION/DECELERATION EVENT
+	u8AccelTotalSlot = g_Setting.tSpeedSet.u8ACCEL_LIM_DURA + 1;
+	
+	fAccelSpeedSlot[u8AccelCurrSlot] = (float)(M_2_KM(g_SysInfo.tVehicleState.u32Speed));
+	
+	u8AccelPreSlot = (u8AccelCurrSlot + 1) % u8AccelTotalSlot;
+	
+	fAccelAmount = fAccelSpeedSlot[u8AccelCurrSlot] - fAccelSpeedSlot[u8AccelPreSlot];
+	
+	// If over acceleration detected
+	if((fAccelAmount >= (float)(g_Setting.tSpeedSet.u16ACCEL_LIMIT)) && (g_Setting.tSpeedSet.u16ACCEL_LIMIT >= 10))
+	{
+	  if(bOverAccelFlag == FALSE)
+		{
+		  bOverAccelFlag = TRUE;
+			
+			//RTOSprintf("\r\n> Over acceleration detected. Amount:%04.1f Km/h", fAccelAmount);
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_ACCEL_START, STR_NULL);
+			#endif
+		}
+	}
+	else
+	{
+	  if(bOverAccelFlag == TRUE)
+		{
+			//RTOSprintf("\r\n> Over acceleration end.");
+			
+		  bOverAccelFlag = FALSE;
+		}
+	}
+	
+	// If over deceleration detected
+	if((fAccelAmount <= (0 - (float)(g_Setting.tSpeedSet.u16DECEL_LIMIT))) && (g_Setting.tSpeedSet.u16DECEL_LIMIT > 10) && 
+		 (g_SysInfo.tVehicleState.bACC_ON == TRUE) && (g_SysInfo.tVehicleState.bPWR_ON == TRUE))
+	{
+	  if(bOverDecelFlag == FALSE)
+		{
+		  bOverDecelFlag = TRUE;
+			
+			//RTOSprintf("\r\n> Over deceleration detected. Amount: %05.1f Km/h", fAccelAmount);
+			
+			#if ENABLE_GSM_NET
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_DECEL_START, STR_NULL);
+			#endif
+		}
+	}
+	else
+	{
+	  if(bOverDecelFlag == TRUE)
+		{
+			//RTOSprintf("\r\n> Over deceleration end.");
+			
+		  bOverDecelFlag = FALSE;
+		}
+	}
+	
+	u8AccelCurrSlot++;
+	
+	if(u8AccelCurrSlot > (u8AccelTotalSlot - 1))
+		u8AccelCurrSlot = 0;
+}
+//#endif
+
+//============================================================================//
+// @brief  Do half sec task.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_HalfSecTaskProc(void)
+{
+	if(M_2_KM(g_SysInfo.tSpeedInfo.u32RealSpeed) >= 4)
+	{
+		if(g_Setting.u8CurrDrvID == 0)
+		{
+			if(g_Setting.tDrvInfo[0].u8DrvStatus == 0)
+			{
+				g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+			}
+			else if(g_Setting.tDrvInfo[0].u8DrvStatus == 1)
+			{
+				if(g_Setting.tDrvInfo[1].u8DrvStatus != 2)
+				{
+					g_Setting.tDrvInfo[1].u8DrvStatus = 2;
+				}
+			}
+			else if(g_Setting.tDrvInfo[0].u8DrvStatus == 2)
+			{
+				g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+			}
+			else if(g_Setting.tDrvInfo[0].u8DrvStatus == 3)
+			{
+				g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+			}
+		}
+		else if(g_Setting.u8CurrDrvID == 1)
+		{
+			if(g_Setting.tDrvInfo[1].u8DrvStatus == 0)
+			{
+				g_Setting.tDrvInfo[1].u8DrvStatus = 1;
+			}
+			else if(g_Setting.tDrvInfo[1].u8DrvStatus == 1)
+			{
+				if (g_Setting.tDrvInfo[0].u8DrvStatus != 2)
+				{
+					g_Setting.tDrvInfo[0].u8DrvStatus = 2;
+				}
+			}
+			else if(g_Setting.tDrvInfo[1].u8DrvStatus == 2)
+			{
+				g_Setting.tDrvInfo[1].u8DrvStatus = 1;
+			}
+			else if(g_Setting.tDrvInfo[1].u8DrvStatus == 3)
+			{
+				g_Setting.tDrvInfo[1].u8DrvStatus = 1;
+			}
+		}
+	}
+	else if(M_2_KM(g_SysInfo.tSpeedInfo.u32RealSpeed) >= 3)
+	{
+		if(u32TickBuf == 0)
+		{
+			u32TickBuf = HAL_GetTick();
+		}
+		else if(HAL_GetTick() > (u32TickBuf + mS_2_SysTick(S_2_mS(4))))
+		{
+			if(g_Setting.u8CurrDrvID == 0)
+			{
+				if(g_Setting.tDrvInfo[0].u8DrvStatus == 0)
+				{
+					g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+				}
+				else if(g_Setting.tDrvInfo[0].u8DrvStatus == 1)
+				{
+					if(g_Setting.tDrvInfo[1].u8DrvStatus != 2)
+					{
+						g_Setting.tDrvInfo[1].u8DrvStatus = 2;
+					}
+				}
+				else if(g_Setting.tDrvInfo[0].u8DrvStatus == 2)
+				{
+					g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+				}
+				else if(g_Setting.tDrvInfo[0].u8DrvStatus == 3)
+				{
+					g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+				}
+			}
+			else if(g_Setting.u8CurrDrvID == 1)
+			{
+				if(g_Setting.tDrvInfo[1].u8DrvStatus == 0)
+				{
+					g_Setting.tDrvInfo[1].u8DrvStatus = 1;
+				}
+				else if(g_Setting.tDrvInfo[1].u8DrvStatus == 1)
+				{
+					if(g_Setting.tDrvInfo[0].u8DrvStatus != 2)
+					{
+						g_Setting.tDrvInfo[0].u8DrvStatus = 2;
+					}
+				}
+				else if(g_Setting.tDrvInfo[1].u8DrvStatus == 2)
+				{
+					g_Setting.tDrvInfo[1].u8DrvStatus = 1;
+				}
+				else if(g_Setting.tDrvInfo[1].u8DrvStatus == 3)
+				{
+					g_Setting.tDrvInfo[0].u8DrvStatus = 1;
+				}
+			}
+		}
+	}
+	else
+	{
+		u32TickBuf = 0;
+		
+		if(g_Setting.u8CurrDrvID == 0)
+		{
+			if(g_Setting.tDrvInfo[0].u8DrvStatus == 1)
+			{
+				g_Setting.tDrvInfo[0].u8DrvStatus = 0;
+			}
+		}
+		else if(g_Setting.u8CurrDrvID == 1)
+		{
+			if(g_Setting.tDrvInfo[1].u8DrvStatus == 1)
+			{
+				g_Setting.tDrvInfo[1].u8DrvStatus = 0;
+			}
+		}
+	}
+}
+
+//============================================================================//
+// @brief  Do one sec task.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_OneSecTaskProc(void)
+{
+	uint32_t u32Buf, u32Buf2;
+	static uint32_t u8SpeedBk = 0;
+	static double dLastDistance = 0;
+	
+	
+	//EXTprintf("\r\n> EXTIO 1 sec task.");
+	
+	if(g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u8DrvStatus == 0)
+	{
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].stDrvRecDay[13].u32PauseTime++;
+	}
+	else if(g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u8DrvStatus == 1)
+	{
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].stDrvRecDay[13].u32WorkTime++;
+
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrWorkTime++;
+	}
+	else if(g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u8DrvStatus == 2)
+	{
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].stDrvRecDay[13].u32StandByTime++;
+	}
+	else if(g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u8DrvStatus == 3)
+	{
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].stDrvRecDay[13].u32RestTime++;
+
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrRestTime++;
+	}
+	
+/*
+	if(g_Setting.tDrvInfo[0].u8DrvStatus == 0)
+	{
+		g_Setting.tDrvInfo[0].stDrvRecDay[13].u32PauseTime++;
+	}
+	else if(g_Setting.tDrvInfo[0].u8DrvStatus == 1)
+	{
+		g_Setting.tDrvInfo[0].stDrvRecDay[13].u32WorkTime++;
+
+		g_Setting.tDrvInfo[0].u32DrWorkTime++;
+	}
+	else if(g_Setting.tDrvInfo[0].u8DrvStatus == 2)
+	{
+		g_Setting.tDrvInfo[0].stDrvRecDay[13].u32StandByTime++;
+	}
+	else if(g_Setting.tDrvInfo[0].u8DrvStatus == 3)
+	{
+		g_Setting.tDrvInfo[0].stDrvRecDay[13].u32RestTime++;
+
+		g_Setting.tDrvInfo[0].u32DrRestTime++;
+	}
+
+	if(g_Setting.tDrvInfo[1].u8DrvStatus == 0)
+	{
+		g_Setting.tDrvInfo[1].stDrvRecDay[13].u32PauseTime++;
+	}
+	else if(g_Setting.tDrvInfo[1].u8DrvStatus == 1)
+	{
+		g_Setting.tDrvInfo[1].stDrvRecDay[13].u32WorkTime++;
+
+		g_Setting.tDrvInfo[1].u32DrWorkTime++;
+	}
+	else if(g_Setting.tDrvInfo[1].u8DrvStatus == 2)
+	{
+		g_Setting.tDrvInfo[1].stDrvRecDay[13].u32StandByTime++;
+	}
+	else if(g_Setting.tDrvInfo[1].u8DrvStatus == 3)
+	{
+		g_Setting.tDrvInfo[1].stDrvRecDay[13].u32RestTime++;
+
+		g_Setting.tDrvInfo[1].u32DrRestTime++;
+	}
+*/
+	u32Buf = ((g_Setting.tDRV_SET.u8DriveThreshold[0] * 60) + g_Setting.tDRV_SET.u8DriveThreshold[1]) * 60;
+	if (u32Buf >= 900)
+	{
+		u32Buf2 = u32Buf - 900;
+	}
+	else
+	{
+		u32Buf2 = 0;
+	}
+	//RTOSprintf("\r\n> g_Setting.tDRV_SET.u8DriveThreshold 1: %d Sec, 2: %d Sec", u32Buf, u32Buf2);
+
+	//EXTprintf("\r\n> g_Setting.tDrvInfo[%d].u32DrWorkTime: %d Sec", g_Setting.u8CurrDrvID, g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrWorkTime);
+	
+	if((g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrWorkTime >= u32Buf2) && 
+		 (g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrWorkTime < u32Buf))
+	{
+		if(bPreWoringFlag == FALSE)
+		{
+			RTOSprintf("\r\n> ### Show Pre Drv Warning Page ###");
+			
+			LCD_SetShowAutoTestPage(49);
+			
+			bPreWoringFlag = TRUE;
+		}
+	}
+	else if (g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrWorkTime >= u32Buf)
+	{
+		if(bShowErrorFlag == FALSE)
+		{
+			RTOSprintf("\r\n> ### Show Drv Warning Page ###");
+			
+			LCD_SetShowAutoTestPage(28);
+			
+			bShowErrorFlag = TRUE;
+		}
+	}
+	else
+	{
+		if((bShowErrorFlag == TRUE) || (bPreWoringFlag == TRUE))
+		{
+			RTOSprintf("\r\n> ### Clear Drv Warning Page ###");
+			
+			LCD_SetShowAutoTestPage(50);
+			
+			bShowErrorFlag = FALSE;
+			
+			bPreWoringFlag = FALSE;
+		}
+	}
+
+	u32Buf = ((g_Setting.tDRV_SET.u8RestThreshold[0] * 60) + g_Setting.tDRV_SET.u8RestThreshold[1]) * 60;
+
+	if(g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrRestTime >= u32Buf)
+	{
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrWorkTime = 0;
+
+		g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].u32DrRestTime = 0;
+	}
+
+	if(M_2_KM(g_SysInfo.tVehicleState.dDistance - dLastDistance) >= 2)
+	{
+		//RTOSprintf("\r\n> ### 2 KM ###");
+		
+		if(bSD_ReportErrFlag == FALSE)
+		{
+			#if ENABLE_SD_BUFFER
+			if((bSystemTimeReady == TRUE) && (EXTIO_IsMainPowerNormal() == TRUE) && 
+				 ((V161_SDBuf_IsHighLoading() == TRUE) || ((V161_SDBuf_IsHighLoading() == FALSE) && (bSD_SaveDatRequest == FALSE))))
+			#else
+			if((bSystemTimeReady == TRUE) && (EXTIO_IsMainPowerNormal() == TRUE))
+			#endif
+				V161_RecordExternslData();
+	  }
+		
+		dLastDistance = g_SysInfo.tVehicleState.dDistance;
+	}
+	else if((M_2_KM(g_SysInfo.tSpeedInfo.u32RealSpeed) == 0) && (M_2_KM(u8SpeedBk) > 0))
+	{
+		//RTOSprintf("\r\n> ### SPEED == 0 ###");
+		
+		if(bSD_ReportErrFlag == FALSE)
+		{
+			#if ENABLE_SD_BUFFER
+			if((bSystemTimeReady == TRUE) && (EXTIO_IsMainPowerNormal() == TRUE) && 
+				 ((V161_SDBuf_IsHighLoading() == TRUE) || ((V161_SDBuf_IsHighLoading() == FALSE) && (bSD_SaveDatRequest == FALSE))))
+			#else
+			if((bSystemTimeReady == TRUE) && (EXTIO_IsMainPowerNormal() == TRUE))
+			#endif
+				V161_RecordExternslData();
+	  }
+		
+		u8SpeedBk = g_SysInfo.tSpeedInfo.u32RealSpeed;
+	}
+	else if((M_2_KM(g_SysInfo.tSpeedInfo.u32RealSpeed) > 0) && (M_2_KM(u8SpeedBk) == 0))
+	{
+		//RTOSprintf("\r\n> ### SPEED > 0 ###");
+		
+		if(bSD_ReportErrFlag == FALSE)
+		{
+			#if ENABLE_SD_BUFFER
+			if((bSystemTimeReady == TRUE) && (EXTIO_IsMainPowerNormal() == TRUE) && 
+				 ((V161_SDBuf_IsHighLoading() == TRUE) || ((V161_SDBuf_IsHighLoading() == FALSE) && (bSD_SaveDatRequest == FALSE))))
+			#else
+			if((bSystemTimeReady == TRUE) && (EXTIO_IsMainPowerNormal() == TRUE))
+			#endif
+				V161_RecordExternslData();
+	  }
+		
+		u8SpeedBk = g_SysInfo.tSpeedInfo.u32RealSpeed;
+	}
+}
+
+//============================================================================//
+// @brief  Check system power every 200ms.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_CheckPower200ms(void)
+{
+	static uint32_t ttPowerCut;
+	uint32_t u32Buf;
+
+
+	if(u16PoweADCValue < ADC_VALUE_DOWN_LEVEL)
+	{
+		// Motor Power High to Low
+		if (bPowerCutFlag == FALSE)
+		{
+			ttPowerCut = HAL_GetTick();
+			
+			bPowerCutFlag = TRUE;
+		}
+	}
+	else
+	{
+		// Motor Power Low to High
+		if(bPowerCutFlag == TRUE)
+		{
+			u32Buf = HAL_GetTick();
+			
+			if(u32Buf > (ttPowerCut + 100))
+			{
+				RTOSprintf("\r\n> PowerCut: %d ms", u32Buf - ttPowerCut);
+			}
+
+			if(u32Buf > 205)
+			{
+				bMessageFlag = TRUE;
+			}
+			
+			bPowerCutFlag = FALSE;
+		}
+	}
+
+	if(bMessageFlag == TRUE)
+	{
+		bMessageFlag = FALSE;
+
+		EXTprintf("\r\n> Power Cut > 200ms");
+
+		RTOSprintf("\r\n> [SYS]%04X", SYS_STATE_POWER_OFF_200MS);
+
+		V161_SaveEvent(1);
+		
+		LCD_SetShowAutoTestPage(63);
+	}
+}
+
+//============================================================================//
+// @brief  Get vehicle's acceleration.
+// @param  None.
+// @retval Vehicle's acceleration in float format.
+//============================================================================//
+float EXTIO_GetAccel(void)
+{
+	float fAccelRate;
+	static float fLastAccelRate = 0;
+  static float fCurrSpeed = 0.0f, fOldSpeed = 0.0f;
+	static uint32_t u32LastSampleTime = 0;
+	
+	
+	fCurrSpeed = (float)g_SysInfo.tVehicleState.u32Speed / HOUR_2_SECOND(1); // Get float value of speed in m/s unit
+	
+	if(fOldSpeed != 0.0f)
+	{
+		// Get acceleration in unit m/s2
+		uint32_t u32Sample_CurrTick = HAL_GetTick();
+		
+		if(u32Sample_CurrTick >= u32LastSampleTime)
+		{
+	    fAccelRate = (fCurrSpeed - fOldSpeed) / ((u32Sample_CurrTick - u32LastSampleTime) / 1000);
+
+      fLastAccelRate = fAccelRate;	
+		}
+		else
+		{
+		  fAccelRate = fLastAccelRate;
+		}	
+	}
+	else
+	{
+	  fAccelRate = 0.0f;
+	}
+	
+	u32LastSampleTime = HAL_GetTick();
+	
+	fOldSpeed = fCurrSpeed;
+	
+	return fAccelRate;
+}
+
+#if ENABLE_GSM_NET
+//============================================================================//
+// @brief  Process vehicle's acceleration data.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_AccelProc(void)
+{
+	static uint16_t	u16OverAccelOn = 0, u16OverAccelOff = 0;	
+	static uint16_t u16OverDecelOn = 0, u16OverDecelOff = 0;
+	static bool	bOverAccelFlag = 0, bOverDecelFlag = 0;	
+	
+	
+  g_SysInfo.tSpeedInfo.fAccelRate = EXTIO_GetAccel();
+	
+	//RTOSprintf("\r\n> Accel:%02.1f", g_SysInfo.tSpeedInfo.fAccelRate);
+	
+	if(g_SysInfo.tSpeedInfo.fAccelRate > ACCEL_LIMIT) // Over acceleration
+	{		
+		u16OverAccelOn++;
+		u16OverAccelOff = 0;
+		u16OverDecelOn = 0;
+		u16OverDecelOff = 0;
+		
+		if((u16OverAccelOn == 3) && (bOverAccelFlag == FALSE)) // Over acceleration event detected
+		{	
+			if(bOverDecelFlag == TRUE)
+			{
+				//EXTprintf("\r\n> Over Deceleration Off");
+				
+				bOverAccelFlag = FALSE;
+				
+				g_SysInfo.tSpeedInfo.bIsOverDecel = TRUE; // Over deceleration OFF
+				
+				//GSM_TCP_ReportEvent((char *)EVENT_OVER_DECEL_END , STR_NULL);
+			}
+			
+			//EXTprintf("\r\n> Over Acceleration On");
+			
+			bOverAccelFlag = TRUE;
+			
+			g_SysInfo.tSpeedInfo.bIsOverAccel = TRUE; // Over acceleration TRUE
+			
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_ACCEL_START, STR_NULL);
+		}	
+		
+		if(u16OverAccelOn > 5)
+			u16OverAccelOn = 6;	
+	}	
+	else if(g_SysInfo.tSpeedInfo.fAccelRate < DECEL_LIMIT) // Over deceleration
+	{
+	  u16OverDecelOn++;
+		u16OverDecelOff = 0;
+		u16OverAccelOn = 0;
+		u16OverAccelOff = 0;
+		
+		if((u16OverDecelOn == 3) && (bOverDecelFlag == FALSE)) // Over deceleration event detected
+		{	
+			if(bOverAccelFlag == TRUE)
+			{
+				//EXTprintf("\r\n> Over Acceleration Off");
+				
+				bOverAccelFlag = FALSE;
+				
+				g_SysInfo.tSpeedInfo.bIsOverAccel = FALSE; // Over acceleration OFF
+				
+				//GSM_TCP_ReportEvent((char *)EVENT_OVER_ACCEL_END , STR_NULL);
+			}
+			
+			//EXTprintf("\r\n> Over Deceleration On");
+			
+			bOverDecelFlag = TRUE;
+			
+			g_SysInfo.tSpeedInfo.bIsOverDecel = TRUE; // Over deceleration TRUE
+			
+			GSM_TCP_ReportEvent((char *)EVENT_OVER_DECEL_START, STR_NULL);
+		}	
+		
+		if(u16OverDecelOn > 5)
+			u16OverDecelOn = 6;	
+	}
+	else
+  {		
+		u16OverAccelOn = 0;
+		u16OverAccelOff++;
+		u16OverDecelOn = 0;
+		u16OverDecelOff++;
+		
+		if((u16OverAccelOff == 4) && (bOverAccelFlag == TRUE))
+		{	
+			//EXTprintf("\r\n> Over Acceleration Off");
+			
+			bOverAccelFlag = FALSE;
+			
+			//GSM_TCP_ReportEvent((char *)EVENT_OVER_ACCEL_END , STR_NULL);
+			
+			g_SysInfo.tSpeedInfo.bIsOverAccel = FALSE; // Over Acceleration OFF	
+		}	
+		
+		if(u16OverAccelOff > 5)
+			u16OverAccelOff = 6;
+		
+		if((u16OverDecelOff == 4) && (bOverDecelFlag == TRUE))
+		{	
+			//EXTprintf("\r\n> Over Deceleration Off");
+			
+			bOverDecelFlag = FALSE;
+			
+			//GSM_TCP_ReportEvent((char *)EVENT_OVER_DECEL_END , STR_NULL);
+			
+			g_SysInfo.tSpeedInfo.bIsOverDecel = FALSE; // Over Deceleration OFF	
+		}	
+		
+		if(u16OverDecelOff > 5)
+			u16OverDecelOff = 6;
+	}
+}
+#endif
+
+//============================================================================//
+// @brief  Check vehicle speed.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_SpeedLimitProc(void)
+{
+	static uint32_t u32MyTick = 0;
+	uint32_t u32Speed;
+	static uint8_t u8OldBzState = 0, u8CurrBzState = 0;
+	
+	
+	if(u8OldBzState > 3)
+		return;
+	
+	u32Speed = g_SysInfo.tSpeedInfo.u32RealSpeed;
+	
+	//EXTprintf("\r\n> Speed:%d", u32Speed);
+	
+	if((u32Speed > g_Setting.tSpeedSet.u32Limit[2]) && (g_Setting.tSpeedSet.u32Limit[2] > 0))
+	{
+		u8CurrBzState = 3;
+	}
+	else if((u32Speed > g_Setting.tSpeedSet.u32Limit[1]) && (g_Setting.tSpeedSet.u32Limit[1] > 0))
+	{
+		u8CurrBzState = 2;
+	}
+	else if((u32Speed > g_Setting.tSpeedSet.u32Limit[0]) && (g_Setting.tSpeedSet.u32Limit[0] > 0))
+	{
+		u8CurrBzState = 1;
+	}
+	else
+	{
+		u8CurrBzState = 0;
+	}
+	
+	//EXTprintf("\r\n> CurrBzState:%d, OldBzState:%d", u8CurrBzState, u8OldBzState);
+	
+	if(u8CurrBzState != u8OldBzState)
+	{
+	  u8OldBzState = u8CurrBzState;
+		
+		if(u8CurrBzState > 0)
+		{
+			EXTprintf("\r\n> Over speed level %d detected.", u8CurrBzState); 
+			
+		  Buzzer_SetRing2(u8CurrBzState);
+		}
+		else
+		{
+			EXTprintf("\r\n> Speed returned to below limit.");
+			
+			Buzzer_ClrRing2();
+		}
+	}
+	 
+  if(HAL_GetTick() > (u32MyTick + 2000))
+	{
+		//EXTprintf("\r\n> ### T2: %d ms ###", HAL_GetTick() - u32MyTick2);
+		
+		u32MyTick = HAL_GetTick();
+		
+		// BUZZER Process
+		Buzzer_Handle_Proc2();
+	}
+	
+  //HAL_Delay(S_2_mS(1));
+}
+
+//============================================================================//
+// @brief  Enable Battery power source.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_BatteryEnable(void)
+{
+  HAL_GPIO_WritePin(CHG_STATE_GPIO_Port, CHG_STATE_Pin, GPIO_PIN_SET);
+	
+	HAL_Delay(10);
+}
+
+//============================================================================//
+// @brief  Disable Battery power source.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_BatteryDisable(void)
+{
+  HAL_GPIO_WritePin(CHG_STATE_GPIO_Port, CHG_STATE_Pin, GPIO_PIN_RESET);
+	
+	HAL_Delay(10);
+}
+
+//============================================================================//
+// @brief  Check Auto Gain Calibration.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_AutoGainProc(void)
+{
+	time_t ttTime;
+	int iValue = 0;
+	
+
+	ttTime = System_GetTime();
+	
+	if((g_Setting.tSpeedSet.fGain > 0) && (g_SysInfo.tEXTIO.bits.IN_ACC == 1))
+	{
+		if(ttTime >= g_Setting.tSpeedSet.ttAgain_Time)
+		{
+			//Debug
+			printf("\r\n> ### NowTime: %d, AutoGainTime: %d ###", ttTime, g_Setting.tSpeedSet.ttAgain_Time);
+			printf("\r\n> ### Auto Gain TimeUp, Start ###");
+			
+			// Do Auto gain
+			g_Setting.tSpeedSet.ttAgain_Time += 63072000;
+			
+			Again_AutoGain_Count = 0;
+			
+			g_Setting.tSpeedSet.fGain = 0;	
+			g_Setting.tSpeedSet.fAutoGain = 0;		
+			g_Setting.tSpeedSet.u8Auto_Gain_Count = 0;
+			
+			g_SysInfo.tVehicleState.dDistBase_GPS = 0;
+			g_SysInfo.tVehicleState.dDistance_GPS = 0;
+			g_SysInfo.tVehicleState.u32DistCount_AGain = 0;
+			
+			System_SaveSetting();
+		}
+	}
+	
+	if((g_Setting.tSpeedSet.fGain > 0) && 
+		 (g_Setting.tSpeedSet.u8Auto_Gain_Count == 128) &&
+		 (M_2_100M(g_SysInfo.tVehicleState.u32Speed_GPS) >= 660))
+	{
+		iValue = M_2_KM(g_SysInfo.tVehicleState.u32Speed_GPS) - M_2_KM(g_SysInfo.tVehicleState.u32Speed);
+	}
+	
+	if(iValue >= 10)
+	{
+		Again_AutoGain_Count++;
+	}
+	else
+	{
+		if(iValue <= -10)
+		{
+			Again_AutoGain_Count++;
+		}
+		else
+		{
+			Again_AutoGain_Count = 0;
+		}
+	}
+	
+	if(Again_AutoGain_Count >= 300) // 7 Min
+	{
+		printf(">> Again auto gain..\r\n");
+		
+		Again_AutoGain_Count = 0;
+		
+		g_Setting.tSpeedSet.fGain = 0;	
+		g_Setting.tSpeedSet.fAutoGain = 0;		
+		g_Setting.tSpeedSet.u8Auto_Gain_Count = 0;
+		
+		g_SysInfo.tVehicleState.dDistBase_GPS = 0;
+		g_SysInfo.tVehicleState.dDistance_GPS = 0;
+		
+		g_SysInfo.tVehicleState.u32DistCount_AGain = 0;
+		
+		System_SaveSetting();
+	}
+}
+
+//============================================================================//
+// @brief  Get GPS distance.
+// @param  None.
+// @retval GPS distance in format double.
+//============================================================================//
+double EXTIO_GetDistGPS(void)
+{
+	double dDist_GPS;
+	
+	
+	if(g_SysInfo.tVehicleState.bACC_ON == FALSE) 
+		return 0;
+	
+	if(g_Setting.tSpeedSet.u8Auto_Gain_Count >= AUTO_GAIN_MAX_COUNT)
+	{
+		if(g_Setting.tSpeedSet.u8Auto_Gain_Count != 128)
+		{	
+			//DataBuild_SKYEYES(SOCKET_BANK_DEF, STR_EVENT_AUTO_GAIN_OK, BufStr);
+			
+			g_Setting.tSpeedSet.u8Auto_Gain_Count = AUTO_GAIN_OK_COUNT;
+			
+			// In the interrupt don't used.
+			//System_SaveSetting();
+			IsSaveSettingFlag = TRUE;
+			
+			// In the interrupt don't printf any thing.
+			//RTOSprintf("\r\n> ### AUTO GAIN OK, Gain: %f ###\r\n", g_Setting.tSpeedSet.fGain);
+		}
+		return 0;
+	}
+	
+	if(g_SysInfo.tVehicleState.dDistance_GPS >= AUTO_GAIN_MAX_DIST)
+	{
+		if((g_Setting.tSpeedSet.u8Auto_Gain_Count < AUTO_GAIN_MAX_COUNT) && (g_SysInfo.tVehicleState.bACC_ON))
+		{
+			if(g_Setting.tSpeedSet.u8Auto_Gain_Count == (AUTO_GAIN_MAX_COUNT - 1))
+				g_Setting.tSpeedSet.u8Auto_Gain_Count = AUTO_GAIN_OK_COUNT;
+			
+			// fAutoGain unit M/Hz*1000 = MM/Hz
+			g_Setting.tSpeedSet.fAutoGain = (((g_SysInfo.tVehicleState.dDistance_GPS) / 
+			                                  g_SysInfo.tVehicleState.u32DistCount_AGain) * 2000);
+			
+			//Event Auto gain ok
+			// In the interrupt don't printf any thing.
+			//RTOSprintf("\r\n> ### SYS_STATE_AUTO_GAIN_OK, Cnt: %d ###", g_Setting.tSpeedSet.u8Auto_Gain_Count);
+			
+			if(g_Setting.tSpeedSet.fGain == 0)
+			{
+				g_Setting.tSpeedSet.fGain = g_Setting.tSpeedSet.fAutoGain;
+			}
+			else
+			{
+				g_Setting.tSpeedSet.fGain = (g_Setting.tSpeedSet.fGain + g_Setting.tSpeedSet.fAutoGain) / 2;
+			}
+			
+			// In the interrupt don't used.
+			//System_SaveSetting();
+			IsSaveSettingFlag = TRUE;
+		}
+		
+		g_Setting.tSpeedSet.u8Auto_Gain_Count++;
+		
+		g_SysInfo.tVehicleState.u32DistCount_AGain = 0;			
+		g_SysInfo.tVehicleState.dDistBase_GPS = 0;
+		g_SysInfo.tVehicleState.dDistance_GPS = 0;
+		
+		dDist_GPS = 0;
+
+		return  0;
+	}
+	else
+	{
+		g_Setting.tSpeedSet.fAutoGain = 0;
+		
+		if(g_SysInfo.tVehicleState.u32Speed_GPS >= (g_Setting.tSpeedSet.u16Star * 100))
+		{
+			dDist_GPS = (float)g_SysInfo.tVehicleState.u32Speed_GPS / (S_2_mS(3600) / 500);
+			
+			g_SysInfo.tVehicleState.dDistBase_GPS += dDist_GPS;
+			
+			return g_SysInfo.tVehicleState.dDistBase_GPS;
+		}
+		else
+		{
+			g_SysInfo.tVehicleState.dDistBase_GPS = 0;
+			
+			dDist_GPS = 0;
+			
+			return 0;
+		}
+	}
+}
+
+//============================================================================//
+// @brief  EXTIO process.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_Proc(void)
+{
+	//static uint8_t u8BzCnt = 0;
+	static uint32_t u32MyTick = 0;
+	//static uint32_t u32MyTick2 = 0;
+	#if ENABLE_GS_MC3210
+	static uint32_t u32MyTick3 = 0;
+	#endif
+	
+	
+	if(HAL_GetTick() > (u32MyTick + 100))
+	{
+		//EXTprintf("\r\n> ### T: %d ms ###", HAL_GetTick() - u32MyTick);
+		
+		u32MyTick = HAL_GetTick();
+		
+		// EXTIO Process
+		EXTIO_Detect_Proc();
+	}
+	
+	if(bSD_ReportErrFlag == TRUE)
+		return;
+	
+	taskInfo[TASK_EXTIO_PROC].u16TaskStep++;
+	
+	if(bSecProcFlag == TRUE)
+	{
+		bSecProcFlag = FALSE;
+		
+	  //#if ENABLE_GSM_NET
+		//EXTIO_SpeedRPM_EventProc();
+		//#endif
+
+		if(EXTIO_IsMainPowerNormal() == TRUE)
+		{
+			//#if ENABLE_GSM_NET
+			EXTIO_SpeedRPM_EventProc();
+			//#endif
+			
+			// Do one sec task here
+			EXTIO_OneSecTaskProc();
+			
+			EXTIO_AutoGainProc();
+		}
+	}	
+	
+	taskInfo[TASK_EXTIO_PROC].u16TaskStep++;
+
+  if(EXTIO_IsMainPowerNormal() == TRUE)
+	{  
+		//EXTIO_CheckPower200ms();
+		
+		//taskInfo[TASK_EXTIO_PROC].u16TaskStep++;
+		
+		EXTIO_SpeedLimitProc();
+		
+		taskInfo[TASK_EXTIO_PROC].u16TaskStep++;
+		
+		if(bHalfSecFlag == TRUE)
+		{
+			bHalfSecFlag = FALSE;
+
+			// Do 500ms task here
+			EXTIO_HalfSecTaskProc();
+		}
+		
+		taskInfo[TASK_EXTIO_PROC].u16TaskStep++;
+		
+		#if ENABLE_GS_MC3210
+		if(HAL_GetTick() > (u32MyTick3 + 50))
+		{
+			u32MyTick3 = HAL_GetTick();
+			
+			MC3210_Process();
+		}
+		#endif
+		
+		taskInfo[TASK_EXTIO_PROC].u16TaskStep++;
+		
+		#if ENABLE_CAN == 1
+		if(CAN_CheckEnable())
+		{
+			CAN_Proc();
+		}	
+		#endif
+	}
+}
+
+//============================================================================//
+// @brief  Check if the system main power is in normal state.
+// @param  None.
+// @retval TRUE: The system power is in normal state.
+//         FALSE: The system power is not stable or is running on battery.
+//============================================================================//
+bool EXTIO_IsMainPowerNormal(void)
+{
+  if((g_SysInfo.tVehicleState.bACC_ON == 1) && 
+	   (g_SysInfo.tVehicleState.bPWR_ON == 1))
+	{
+	  return TRUE;
+	}
+	else
+	{
+	  return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Check if the system backup power is in normal state.
+// @param  None.
+// @retval TRUE: The system power is in normal state.
+//         FALSE: The system power is not stable or is running on battery.
+//============================================================================//
+bool EXTIO_IsBkpPowerNormal(void)
+{
+  if(bBackupPwrStable == TRUE)
+	{
+	  return TRUE;
+	}
+	else
+	{
+	  return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Check if the system power is in normal state.
+// @param  None.
+// @retval TRUE: The system power is in normal state.
+//         FALSE: The system power is not stable or is running on battery.
+//============================================================================//
+bool EXTIO_IsPowerNormal(void)
+{
+  //if((EXTIO_IsMainPowerNormal() == TRUE) || 
+	//	 ((EXTIO_IsMainPowerNormal() == FALSE) && (EXTIO_IsBkpPowerNormal() == TRUE)))
+	if((g_SysInfo.tVehicleState.bPWR_ON == 1) ||
+		 ((g_SysInfo.tVehicleState.bPWR_ON == 0) && (EXTIO_IsBkpPowerNormal() == TRUE)))
+	{
+	  return TRUE;
+	}
+	else
+	{
+	  return FALSE;
+	}
+}
+
+//============================================================================//
+// @brief  Callback function for EXTIO timer.
+// @param  None.
+// @retval None.
+//============================================================================//
+void EXTIO_CallBackHandle(void)
+{
+	static double dDistBk;
+	uint32_t u32RPM, u32Speed, u32SpeedGPS_Buf = 0;
+	double dDIST;
+
+
+	// Get vehicle speed 
+	g_SysInfo.tSpeedInfo.u16Speed_Hz = uiSPD_TickIdx;
+			
+	uiSPD_TickIdx = 0;
+	
+	if(g_Setting.tENABLE_SET.bits.CAN_SPEED == TRUE)
+	{
+	  u32Speed = CAN_GetSpeed();
+	}
+	else
+	{
+		// If fGain = 0 use GPS speed
+		if(g_Setting.tSpeedSet.fGain == 0)
+		{
+		  u32Speed = GPS_GetSpeed();
+			
+			// If speed < 3Km/h -> Set speed to 0Km/h
+			if(u32Speed <= 3000)
+			  u32Speed = 0;	
+		}
+		else
+		{
+			u32Speed = (float)MM_2_M(g_SysInfo.tSpeedInfo.u16Speed_Hz * HOUR_2_SECOND(1) * g_Setting.tSpeedSet.fGain);
+		}
+	}
+	
+	g_SysInfo.tVehicleState.u32Speed_GPS = GPS_GetSpeed();
+	
+	//g_SysInfo.tVehicleState.u32Speed_GPS = 116 * 1000;
+	
+	//if(g_SysInfo.tVehicleState.bACC_ON == FALSE)
+	//{
+	//	u32Speed = 0;
+		
+	//	g_SysInfo.tVehicleState.u32Speed_GPS = 0;
+		
+	//	g_SysInfo.tVehicleState.u32Speed = 0;
+	//}
+	
+	if(g_Setting.tSpeedSet.u8Auto_Gain_Count != 128)
+	{
+		u32SpeedGPS_Buf = g_Setting.tSpeedSet.u8Offset * 100;
+		
+		g_SysInfo.tVehicleState.u32Speed_GPS = g_SysInfo.tVehicleState.u32Speed_GPS +  u32SpeedGPS_Buf;
+		
+		if(g_SysInfo.tVehicleState.u32Speed_GPS == u32SpeedGPS_Buf)
+			g_SysInfo.tVehicleState.u32Speed_GPS = 0;
+	}
+	
+	g_SysInfo.tVehicleState.u32Speed = u32Speed;
+	
+	g_SysInfo.tSpeedInfo.u32RealSpeed = u32Speed;
+	
+	u16SpeedBuf1 = u16SpeedBuf2;
+	u16SpeedBuf2 = u16SpeedBuf3;
+	u16SpeedBuf3 = u16SpeedBuf4;
+	u16SpeedBuf4 = M_2_KM(u32Speed);
+	u16SpeedBuf4 = u16SpeedBuf4 * 10;
+	
+	u16_100M_SpeedAvg = ((u16SpeedBuf1 + u16SpeedBuf2 + u16SpeedBuf1) / 3); 
+
+  #if CUSTOMER_TYPE == CUSTOMER_FORMOSA || CUSTOMER_TYPE == CUSTOMER_FCFC
+	if(u16_100M_SpeedAvg >= 900)
+	  u16_100M_SpeedAvg = 900;
+  #endif
+	
+	// Get RPM speed
+	if(g_Setting.tENABLE_SET.bits.CAN_RPM == 1)
+	{
+		u32RPM = CAN_GetRPM();
+	}
+	else
+	{
+		g_SysInfo.tSpeedInfo.u16RPM_Hz = uiRPM_TickIdx;
+		
+		uiRPM_TickIdx = 0;
+		
+		u32RPM = (g_SysInfo.tSpeedInfo.u16RPM_Hz * 60) / g_Setting.tRPM_Set.u16DIV;
+		
+		u32RPM += g_SysInfo.tVehicleState.u16RPM;
+		
+		u32RPM /= 2;
+	}
+	
+	//if(g_SysInfo.tVehicleState.bACC_ON == FALSE)
+	//{
+	//  u32RPM = 0;
+			
+	//	g_SysInfo.tVehicleState.u16RPM = 0;
+	//}
+		
+	g_SysInfo.tVehicleState.u16RPM = u32RPM;
+
+  // Get travelling distance
+	if(g_Setting.tENABLE_SET.bits.CAN_DIST == TRUE)
+	{
+	  g_SysInfo.tVehicleState.dDistance = CAN_GetDist();
+	}
+	else
+	{
+		if((g_Setting.tSpeedSet.fGain == 0) || 
+			 (g_Setting.tENABLE_SET.bits.CAN_SPEED == 1))
+		{
+		  dDIST = (float)g_SysInfo.tVehicleState.u32Speed / (S_2_mS(HOUR_2_SECOND(1)) / 1000);
+			
+			g_SysInfo.tVehicleState.dDistBase = g_SysInfo.tVehicleState.dDistBase + dDIST;
+			
+			g_SysInfo.tVehicleState.dDistance = g_SysInfo.tVehicleState.dDistBase;
+			
+			// In the interrupt don't printf any thing.
+			//printf("\r\n> dDIST: %f", dDIST);
+		}
+		else
+		{
+		  dDIST = (float)MM_2_M(g_SysInfo.tVehicleState.u32DistCount * g_Setting.tSpeedSet.fGain);
+			
+			g_SysInfo.tVehicleState.dDistance = g_SysInfo.tVehicleState.dDistBase + dDIST;
+			
+			// In the interrupt don't printf any thing.
+			//printf("\r\n> dDIST: %f, Base: %f, dDDD: %f", g_SysInfo.tVehicleState.dDistance, g_SysInfo.tVehicleState.dDistBase, dDIST);
+		}
+  }
+	
+	// In the interrupt don't printf any thing.
+	//printf("\r\n> dDistance: %f", (g_SysInfo.VehicleState.dDistance - dDistBk));
+	
+	g_Setting.tDrvInfo[g_Setting.u8CurrDrvID].dDriverDistance += (g_SysInfo.tVehicleState.dDistance - dDistBk);
+	
+	dDistBk = g_SysInfo.tVehicleState.dDistance;
+	
+	g_SysInfo.tVehicleState.dDistance_GPS = EXTIO_GetDistGPS();
+}
+
+//============================================================================//
+// @brief  Read distance from exflash.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+double EXTIO_GetDistance(void)
+{
+	double dGetMXDistance;
+	MX25L_StatusTypeDef mxlRes;
+	
+
+	//RTOSprintf("\r\n> ### EXTIO_GetDistance ###");
+	
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_setting_user, S_2_mS(5));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	dGetMXDistance = 0;
+	
+	mxlRes = MX25L_MultiBytesRead(EXFLASH_DISTANCE_VALUE_START_ADDR, (uint8_t *)(&dGetMXDistance), sizeof(dGetMXDistance));
+
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Get distance data return MX25L ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_setting_user);
+	
+	RTOSprintf("\r\n> ### GET DISTANCE OK ###");
+	
+	return dGetMXDistance;
+}
+
+//============================================================================//
+// @brief  Save distancd into exflash.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+bool EXTIO_SaveDistance(double dDist)
+{
+	MX25L_StatusTypeDef mxlRes;
+	
+
+	//RTOSprintf("\r\n> ### EXTIO_SaveDistance ###");
+
+	if(bRTOS_En)
+	{
+		osStatus osRes;
+
+
+		osRes = osMutexWait(mutex_setting_user, S_2_mS(5));
+
+		if(osRes != osOK)
+			return FALSE;
+	}
+
+	mxlRes = MX25L_MultiSectorsErase((EXFLASH_DISTANCE_VALUE_START_ADDR / MX25L_SECTOR_SIZE), 1);
+	
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Save distance fail with erase ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+
+	mxlRes = MX25L_MultiPagesProgram((EXFLASH_DISTANCE_VALUE_START_ADDR / MX25L_PAGE_SIZE), 
+																		(uint8_t *)(&dDist), sizeof(dDist));
+
+	if(mxlRes != MX25L_OK)
+	{
+		if(bRTOS_En)
+			osMutexRelease(mutex_setting_user);
+
+		RTOSprintf("\r\n> Save distance return MX25L ERROR:%d.", mxlRes);
+
+		return FALSE;
+	}
+
+	//RTOSprintf("\r\n> ### SAVE DISTANCE OK ###");
+
+	if(bRTOS_En)
+		osMutexRelease(mutex_setting_user);
+
+	return TRUE;
+}
+
+//============================================================================//
+// @brief  Save distancd into exflash.
+// @param  None.
+// @retval TRUE: Operation is successful.
+//         FALSE: Operation is failed.
+//============================================================================//
+void EXTIO_CheckDistance(void)
+{
+	if(g_SysInfo.tVehicleState.dDistance <= 0)
+	{
+		RTOSprintf("\r\n> ### Distance is Zero ###");
+		
+		g_SysInfo.tVehicleState.dDistance = EXTIO_GetDistance();
+		
+		if((g_SysInfo.tVehicleState.dDistance < 0) || (g_SysInfo.tVehicleState.dDistance >= 1215750000))
+		{
+			g_SysInfo.tVehicleState.dDistance = 0;
+			
+			EXTIO_SaveDistance(g_SysInfo.tVehicleState.dDistance);
+		}
+		
+		g_SysInfo.tVehicleState.dDistBase = g_SysInfo.tVehicleState.dDistance;
+		
+		g_SysInfo.tVehicleState.u32DistCount = 0;
+	}
+	else
+	{
+		RTOSprintf("\r\n> ### Distance is OK ###");
+	}
+}
+

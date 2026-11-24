@@ -1,0 +1,1870 @@
+/*
+//============================================================================//
+// User Includes
+//============================================================================//
+#include "TTIA.h"
+
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "stm32fxxx_hal_user.h"
+#include "DataSend.h"
+#include "Default.h"
+#include "GPS_Driver.h"
+#include "TTIA_EDR.h"
+
+
+//============================================================================//
+// User Defines
+//============================================================================//
+#define	TIMER_TTIA_PROC			       100
+
+#define	MSG_TIMEOUT_DEF			       (mS_2_SysTick(S_2_mS(10)))
+
+#define MSG_QUEUE_MAX			         32
+
+#define	TIMER_TTIA_GET_INFO		     1000
+
+#define MAX_GET_SPEED_SIZE		     20
+
+#define POS_SPEED_CURR			       (MAX_GET_SPEED_SIZE - 1)
+
+#define MAX_GET_RPM_SIZE		       20
+
+#define POS_RPM_CURR			         (MAX_GET_RPM_SIZE - 1)
+
+#define OD_RECORD_NUM_MAX		       235
+
+// RTOSprintf 協定識別碼
+#define TTIA_PROTOCOL_ID		       "APTS"
+
+// RTOSprintf 協定識別碼
+#define TTIA_PROTOCOL_ID_LEN	     4
+
+// RTOSprintf 協定版本
+#define TTIA_PROTOCOL_VER		       0x02
+
+// RTOSprintf 註冊請求訊息
+#define TTIA_MSG_SEND_REGISTER	   0x00
+
+// RTOSprintf 註冊回覆訊息
+#define TTIA_MSG_REPLY_REGISTER	   0x01
+
+// RTOSprintf 修改路線請求訊息
+#define TTIA_MSG_SEND_ROUTE		     0x02
+
+// RTOSprintf 修改路線回覆訊息
+#define TTIA_MSG_REPLY_ROUTE	     0x03
+
+// RTOSprintf 定時回報訊息
+#define TTIA_MSG_SEND_REPORT	     0x04
+
+// RTOSprintf 定時回報訊息確認
+#define TTIA_MSG_REPLY_REPORT	     0x05
+
+// RTOSprintf 提示訊息
+#define TTIA_MSG_SEND_ALARM		     0x06
+
+// RTOSprintf 提示訊息確認
+#define TTIA_MSG_REPLY_ALARM	     0x07
+
+// RTOSprintf 事件回報訊息
+#define TTIA_MSG_SEND_EVENT		     0x08
+
+// RTOSprintf 事件回報訊息確認
+#define TTIA_MSG_REPLY_EVENT	     0x09
+
+// RTOSprintf 關機訊息
+#define TTIA_MSG_SEND_SHUTDOWN	   0x0A
+
+// RTOSprintf 關機回覆確認
+#define TTIA_MSG_REPLY_SHUTDOWN	   0x0B
+
+// RTOSprintf 障礙回報訊息
+#define TTIA_MSG_SEND_TROUBLE 	   0xF0
+
+// RTOSprintf 障礙回報訊息確認
+#define TTIA_MSG_REPLY_TROUBLE 	   0xF1
+
+// RTOSprintf 障礙回報訊息
+#define TTIA_MSG_SEND_OD 		       0xF2
+
+// RTOSprintf 障礙回報訊息確認
+#define TTIA_MSG_REPLY_OD 		     0xF3
+
+// RTOSprintf
+#define TTIA_MSG_INVALID 		       0xFF
+
+// RTOSprintf 勤務狀態: 正常
+#define TTIA_DUTY_STATUS_OK		     0x01
+
+// RTOSprintf 勤務狀態: 開始
+#define TTIA_DUTY_STATUS_BEGIN	   0x02
+
+// RTOSprintf 勤務狀態: 結束
+#define TTIA_DUTY_STATUS_END	     0x04
+
+// RTOSprintf 勤務狀態: 客滿
+#define TTIA_DUTY_STATUS_FULL   	 0x08
+
+// RTOSprintf 勤務狀態: 包車出租
+#define TTIA_DUTY_STATUS_RENTAL	   0x10
+
+// RTOSprintf 行車狀態: 正常
+#define TTIA_BUS_STATUS_OK		     0x01
+
+// RTOSprintf 行車狀態: 車禍
+#define TTIA_BUS_STATUS_TROUBLE	   0x02
+
+// RTOSprintf 行車狀態: 故障
+#define TTIA_BUS_STATUS_ERROR	     0x04
+
+// RTOSprintf 行車狀態: 塞車
+#define TTIA_BUS_STATUS_JAM		     0x08
+
+// RTOSprintf 行車狀態: 緊急求援
+#define TTIA_BUS_STATUS_SOS		     0x10
+
+// RTOSprintf 行車狀態: 加油洗車
+#define TTIA_BUS_STATUS_CLEAR	     0x20
+
+// RTOSprintf 行車狀態: 非營運
+#define TTIA_BUS_STATUS_STANDBY	   0x40
+
+#define REG_FILE_NUM_MAX		42
+
+#define REG_FILE_NUM_DEF		1
+
+#define MONITOR_DATA_NUM_MAX	4
+
+#define MONITOR_DATA_NUM_DEF	1
+
+
+//============================================================================//
+// User Typedef Variables
+//============================================================================//
+#pragma pack(1)
+typedef	struct
+{
+	TTIA_MSG_PROC_t MsgProc;
+
+	MEM_U16_t MsgArg;
+
+}TTIA_MSG_QUEUE_t;
+
+//============================================================================//
+typedef struct
+{
+	// 衛星數量
+	uint8_t u8StlNum;
+
+	// 是否定位, A=1 ; V=0
+	uint8_t Status;
+
+	// 經度
+	GPS_LonTypeDef tLongitude;
+
+	// 緯度
+	GPS_LatTypeDef tLatitude;
+
+	// 瞬間方向
+	uint16_t Direction;
+
+	// 瞬間速度 (km/hr)
+	uint16_t IntSpeed;
+
+	// 世界時間
+	UTC_TypeDef UTC;
+
+}GPS_STRUCT_t;
+
+typedef struct
+{
+	// GPS 資料
+	GPS_STRUCT_t GPSData;
+
+	// 平均速度 (km/hr)
+	uint16_t AvgSpeed;
+
+	// 前 20 秒每秒之速度
+	uint16_t IntSpeed[MAX_GET_SPEED_SIZE];
+
+	// 前 20 秒每秒之轉速
+	uint16_t RPM[MAX_GET_RPM_SIZE];
+
+	// 勤務狀態
+	uint8_t DutyStatus;
+
+	// 行車狀態
+	uint8_t BusStatus;
+
+	// 里程數（單位:10 公尺）
+	uint32_t Distance;
+
+}MONITOR_TYPE1_t;
+
+typedef struct
+{
+	// GPS 資料
+	GPS_STRUCT_t GPSData;
+
+	// 平均速度 (km/hr)
+	uint16_t AvgSpeed;
+
+	// 勤務狀態
+	uint8_t DutyStatus;
+
+	// 行車狀態
+	uint8_t BusStatus;
+
+	// 里程數（單位:10 公尺）
+	uint32_t Distance;
+
+}MONITOR_TYPE2_t;
+
+typedef struct
+{
+	// 票卡種類
+	uint8_t ID;
+	// 票卡種類之統計人次
+	uint8_t Num;
+
+}OD_RECORD_TYPE_t;
+
+typedef struct
+{
+	// 起站代碼
+	uint8_t OrgStopID;
+
+	// 到站代碼
+	uint8_t DstStopID;
+
+	// 起站上車時間
+	UTC_TypeDef OrgODTime;
+
+	// 到站下車時間
+	UTC_TypeDef DstODTime;
+
+	// 剩餘乘客數
+	uint8_t RemainingNum;
+
+	// 票務紀錄筆數, 票務紀錄個數最多為 235 個
+	uint8_t RecordNum;
+
+	OD_RECORD_TYPE_t RecordType[OD_RECORD_NUM_MAX];
+
+}OD_RECORD_t;
+
+// Protocol header for RTOSprintf Message
+typedef struct
+{
+	// 協定識別碼
+	char ProtocolID[TTIA_PROTOCOL_ID_LEN];
+
+	// 協定版本
+	uint8_t ProtocolVer;
+
+	// 訊息代碼
+	uint8_t MessageID;
+
+	// 公車業者代碼
+	uint16_t CustomerID;
+
+	// 車輛代碼
+	uint16_t CarID;
+
+	// 身分識別裝置, 0:不存在 ; 1:存在
+	uint8_t IDStorage;
+
+	// 司機代碼
+	uint32_t DriverID;
+
+	// 訊息發送序號
+	uint16_t Sequence;
+
+	// 保留
+	uint8_t Reserved;
+
+	// Payload 長度
+	uint16_t InfoLen;
+
+}PACKAGE_HEADER_t;
+
+typedef struct
+{
+	// 路線代號
+	uint16_t ID;
+
+	// 路線方向, 0:其他 | 1:去程 | 2:回程
+	uint8_t Direct;
+
+	// 路線種類, '0':主線 | 'A'~'Z':支線
+	uint8_t Branch;
+
+}ROUTE_t;
+
+// 路線檔頭資訊
+typedef struct
+{
+	uint8_t StatNum;
+
+	uint8_t Version;
+
+	char BroadcastSex;
+
+	char BroadcastType;
+
+	char StatStart[33];
+
+	char StatStop[33];
+
+	uint8_t RouteType;
+
+	uint32_t RouteDist;
+
+	uint16_t RouteTime;
+
+}ROUTE_HEAD_t;
+
+// 路線站點資訊
+typedef struct
+{
+	uint8_t Type;
+
+	uint8_t ID;
+
+	char NameTC[33];
+
+	char NameEN[33];
+
+	GpsCoordTypeDef GPS;
+
+}ROUTE_STAT_t;
+
+typedef	struct
+{
+	// 路線資訊
+	ROUTE_t Route;
+
+	// 路線檔資訊
+	ROUTE_HEAD_t RouteHead;
+
+	// 路線站點資訊
+	ROUTE_STAT_t RouteStat;
+
+	// 事件偵測設定, 為 16bit-mask, 若對應事件之 bit 被設定, 則表示啟動該事件偵測, 可同時設定多個事件
+	uint16_t EventMask;
+
+	// 時速限制
+	uint16_t SPDLim;
+
+	// 轉速限制
+	uint16_t RPMLim;
+
+	// 加速度限制, 3 秒內加速度超越值, 預設值:30
+	uint8_t Accelerate;
+
+	// 減速度限制, 3 秒內減速度超越值, 預設值:30
+	uint8_t Decelerate;
+
+	// 異常發車移動距離, 單位:10 公尺, 預設值:10
+	uint16_t Movement;
+
+}TTIA_SETTING_t;
+
+typedef struct
+{
+	// 定位訊息資料
+	MONITOR_TYPE2_t MonitorData;
+
+	// 門號識別碼
+	char IMSI[MAX_IMSI_STR_SIZE];
+
+	// 數據機識別碼
+	char IMEI[MAX_IMEI_STR_SIZE];
+
+	// 車機製造商
+	uint8_t Manufacturer;
+
+	// 車機版本編號
+	uint8_t OBU_Ver[8];
+
+	// 註冊種類, 0:冷開機註冊 | 1:重發車註冊
+	uint8_t RegType;
+
+	// 司機 ID 來源, 0:身分識別裝置 | 1:手動輸入 | 2:未輸入
+	uint8_t DrvIdType;
+
+	// 資料檔案個數, 資料檔案個數最多為 42 個。
+	uint8_t FileNum;
+
+}REG_INFO_t;
+
+typedef struct
+{
+	// 檔案名稱前 4 碼縮寫, 如 "APTS"
+	char FileName[4];
+
+	// 檔案版本, 以日期為準格式為yymmdd, 如 "100215"
+	char FileVer[6];
+
+}REG_FILE_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	REG_INFO_t Info;
+
+	REG_FILE_t File[REG_FILE_NUM_MAX];
+
+}REG_SEND_t;
+
+typedef struct
+{
+	// 註冊結果, 0:成功 | 1~255 失敗
+	uint8_t Result;
+
+	// 班表資料, 0:無班表 | 1:有班表 | 2:遊覽車
+	uint8_t Schedule;
+
+	// 路線資訊
+	ROUTE_t Route;
+
+	// 班表之路線版本
+	uint8_t RouteVer[2];
+
+	// 保留
+	uint8_t Reserved[2];
+
+	// 班表之司機代碼
+	uint32_t DriverID;
+
+	// 班表之司機姓名（4 個中文）
+	uint8_t DriverName[8];
+
+	// 班表之起站:時
+	uint8_t DepartHour;
+
+	// 班表之起站:分
+	uint8_t DepartMin;
+
+	// 世界時間
+	UTC_TypeDef UTC;
+
+	// 事件偵測設定, 為 16bit-mask, 若對應事件之 bit 被設定, 則表示啟動該事件偵測, 可同時設定多個事件
+	uint16_t EventMask;
+
+	// 轉速限制, 預設值：3000
+	uint16_t RPMLim;
+
+	// 加速度限制, 3 秒內加速度超越值, 預設值:30
+	uint8_t Accelerate;
+
+	// 減速度限制, 3 秒內減速度超越值, 預設值:30
+	uint8_t Decelerate;
+
+	// 停車不熄火時間限制, 單位:分, 預設值:10
+	uint8_t Halt;
+
+	// 進站偵測半徑, 單位:10 公尺, 預設值:4
+	uint8_t InRadius;
+
+	// 出站偵測半徑, 單位:10 公尺, 預設值:5
+	uint8_t OutRadius;
+
+	// 異常發車移動距離, 單位:10 公尺, 預設值:10
+	uint16_t Movement;
+
+	// OTA Check 時間
+	uint8_t OTATime;
+
+	// OTA Server IP
+	uint8_t OTAIP[4];
+
+	// OTA Server Port
+	uint16_t OTAPort;
+
+}REG_REPLY_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	// 路線資訊
+	ROUTE_t Route;
+
+}ROUTE_SEND_t;
+
+typedef struct
+{
+	// 回傳訊息筆數
+	uint8_t DataNum;
+
+	// 保留
+	uint8_t Reserved;
+
+}REPORT_INFO_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	REPORT_INFO_t Info;
+
+	MONITOR_TYPE1_t Data[MONITOR_DATA_NUM_MAX];
+
+}REPORT_SEND_t;
+
+typedef struct
+{
+	// 事件種類
+	uint16_t EventType;
+
+	// 路線資訊
+	ROUTE_t Route;
+
+	// 定位訊息資料
+	MONITOR_TYPE2_t MonitorData;
+
+}EVENT_INFO_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	EVENT_INFO_t Info;
+
+}EVENT_SEND_t;
+
+// EventType:0x0001, 進出站回報
+typedef struct
+{
+	// 站點編號
+	uint16_t StationID;
+
+	// 進出狀態, 0x01:IN ; 0x00:OUT
+	uint8_t Type;
+
+	// 出站時用來表示進站至出站期間是否發生車門開啟,
+	// 0:未曾開啟 ; 1:曾開啟
+	uint8_t DoorOpen;
+
+}EVENT_DATA_0001_t;
+
+// EventType:0x0002, 超速超轉回報
+typedef struct
+{
+	// 站點編號
+	uint16_t StationID;
+
+	// 超速/超轉, 0x00:超轉 ; 0x01:超速
+	uint8_t Type;
+
+	// 設定之速度(km/hr)或轉速(rpm)
+	uint16_t Value;
+
+	// 保留
+	uint8_t Reserved;
+
+}EVENT_DATA_0002_t;
+
+// EventType:0x0004, 急加/減速回報
+typedef struct
+{
+	// 急加/減速, 0x01:急加速 ; 0x02:急減速
+	uint8_t Type;
+
+	// 設定之加/減速度(km/hr)
+	uint16_t Value;
+
+	// 保留
+	uint8_t Reserved;
+
+}EVENT_DATA_0004_t;
+
+// EventType:0x0008, 行駛中前門/後門開啟回報
+typedef struct
+{
+	// 前門/後門開啟, 0x01:前門 ; 0x02:後門
+	uint8_t Type;
+
+	// 保留
+	uint8_t Reserved;
+
+}EVENT_DATA_0008_t;
+
+// EventType:0x0010, 車輛異常回報
+typedef struct
+{
+	// 異常種類, 0x01:停車不熄火 ; 0x02:異常移動
+	uint8_t Type;
+
+	// 針對停車不熄火事件, 0x01:開始 ; 0x02:結束
+	uint8_t Flag;
+
+}EVENT_DATA_0010_t;
+
+// EventType:0x0020, 車輛狀態回報
+typedef struct
+{
+	// 車輛現在狀態
+	uint8_t Type;
+
+	// 車輛之前狀態
+	uint8_t PreType;
+
+}EVENT_DATA_0020_t;
+
+// EventType:0x0040, 異常發車回報
+typedef struct
+{
+	// 設定之移動距離(單位：10 公尺)
+	uint16_t Movement;
+
+}EVENT_DATA_0040_t;
+
+// EventType:0x0080, 司機回覆回報
+typedef struct
+{
+	// 提示訊息代碼
+	uint16_t InfoID;
+
+	// 回覆結果, 0:確認 ; 1:接受 ; 2:拒絕
+	uint8_t Type;
+
+	// 保留
+	uint8_t Reserved;
+
+}EVENT_DATA_0080_t;
+
+// EventType:0x0100, 進出特定區域回報
+typedef struct
+{
+	// 管制區域代碼
+	uint16_t RegionID;
+
+}EVENT_DATA_0100_t;
+
+typedef struct
+{
+	// 定位訊息資料
+	MONITOR_TYPE2_t MonitorData;
+
+	// 數據連線重建次數
+	uint16_t PSDReconnect;
+
+	// 訊息傳送成功比例
+	uint8_t PacketRatio;
+
+	// 開機期間 GPS Active 比例
+	uint8_t GPSRatio;
+
+}SHUTDOWN_INFO_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	SHUTDOWN_INFO_t Info;
+
+}SHUTDOWN_SEND_t;
+
+typedef struct
+{
+	// 異常模組
+	uint8_t Module;
+
+	// 狀態碼
+	uint8_t Code;
+
+}TROUBLE_INFO_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	TROUBLE_INFO_t Info;
+
+}TROUBLE_SEND_t;
+
+typedef struct
+{
+	// 路線資訊
+	ROUTE_t Route;
+
+	uint8_t PkgNum;
+
+	uint8_t Reserved;
+
+	// OD RECORD
+	OD_RECORD_t Record;
+
+}OD_INFO_t;
+
+typedef struct
+{
+	// Protocol header for RTOSprintf
+	PACKAGE_HEADER_t Head;
+
+	OD_INFO_t Info;
+
+}OD_SEND_t;
+#pragma pack()
+
+
+//============================================================================//
+// User Variables
+//============================================================================//
+TTIA_MSG_QUEUE_t gTTIA_MsgQueue[MSG_QUEUE_MAX];
+
+uint8_t gTTIA_MsgQueueWI;
+
+uint8_t gTTIA_MsgQueueRI;
+
+TTIA_SETTING_t gTTIA_Setting;
+
+TTIA_MSG_PROC_t gTTIA_MsgProc = MSG_BREAK;
+
+MEM_U16_t gTTIA_MsgArg;
+
+MONITOR_TYPE1_t gMONITOR_CURR;
+
+uint8_t gTTIA_MsgBuf[GSM_MAX_BUFFER_SIZE];
+
+uint16_t usiPkgHeadSequ;
+
+uint16_t usiPkgHeadSequChk;
+
+bool bTTIA_MsgReplyOK = FALSE;
+
+uint32_t uiTTIA_MsgSendStart;
+
+uint8_t TID_TTIAInfoProc = TIMER_INVALID_ID;
+
+uint8_t TID_TTIABuild = TIMER_INVALID_ID;
+
+
+//============================================================================//
+// User Functions
+//============================================================================//
+void TTIA_MsgClrReg(void)
+{
+	memset(&gTTIA_MsgQueue, 0x00, sizeof(gTTIA_MsgQueue));
+
+	gTTIA_MsgQueueWI = 0;
+
+	gTTIA_MsgQueueRI = 0;
+
+	memset(&gTTIA_Setting, 0x00, sizeof(TTIA_SETTING_t));
+
+	usiPkgHeadSequ = (uint16_t) - 1;
+
+	memset(&gMONITOR_CURR, 0x00, sizeof(MONITOR_TYPE1_t));
+}
+
+void TTIA_MsgGetQueue(void)
+{
+	if(gTTIA_MsgQueueRI == gTTIA_MsgQueueWI)
+	{
+		return;
+	}
+
+	gTTIA_MsgProc = gTTIA_MsgQueue[gTTIA_MsgQueueRI].MsgProc;
+
+	gTTIA_MsgArg = gTTIA_MsgQueue[gTTIA_MsgQueueRI].MsgArg;
+
+	gTTIA_MsgQueueRI++;
+
+	if(gTTIA_MsgQueueRI >= MSG_QUEUE_MAX)
+	{
+		gTTIA_MsgQueueRI = 0;
+	}
+}
+
+bool TTIA_MsgAppendQueue(TTIA_MSG_PROC_t MsgProc, uint16_t MsgArg)
+{
+	if(gTTIA_MsgQueueWI >= MSG_QUEUE_MAX
+		 && gTTIA_MsgQueueRI == 0)
+		return FALSE;
+
+	gTTIA_MsgQueue[gTTIA_MsgQueueWI].MsgProc = MsgProc;
+
+	gTTIA_MsgQueue[gTTIA_MsgQueueWI].MsgArg._U16 = MsgArg;
+
+	gTTIA_MsgQueueWI++;
+
+	if(gTTIA_MsgQueueWI >= MSG_QUEUE_MAX)
+	{
+		gTTIA_MsgQueueWI = 0;
+	}
+
+	return TRUE;
+}
+
+void TTIA_MsgAppendEvent(TTIA_EVENT_TYPE_t EventType, uint8_t EventFlag)
+{
+	MEM_U16_t EventArg;
+
+
+	EventArg._U8[0] = (uint8_t)EventType;
+
+	EventArg._U8[1] = EventFlag;
+
+	TTIA_MsgAppendQueue(MSG_SEND_EVENT, EventArg._U16);
+}
+
+void TTIA_MsgGetInfo(void)
+{
+	uint8_t i;
+	uint32_t TEMP;
+
+
+
+	gMONITOR_CURR.GPSData.u8StlNum = g_SysInfo.gpsHandle.u8StlNum;
+
+	gMONITOR_CURR.GPSData.Status = (g_SysInfo.gpsHandle.bStatus == TRUE) ? 0x01 : 0x00;
+
+	gMONITOR_CURR.GPSData.tLongitude = g_SysInfo.gpsHandle.gpsLon;
+
+	gMONITOR_CURR.GPSData.tLatitude = g_SysInfo.gpsHandle.gpsLat;
+
+	gMONITOR_CURR.GPSData.Direction = g_SysInfo.gpsHandle.u16Course;
+
+	gMONITOR_CURR.GPSData.IntSpeed = M_2_KM(g_SysInfo.VehicleState.u32Speed);
+
+	gMONITOR_CURR.GPSData.UTC = g_SysInfo.gpsHandle.utcTime;
+
+	for(i = 0; i < POS_SPEED_CURR; i++)
+		gMONITOR_CURR.IntSpeed[i] = gMONITOR_CURR.IntSpeed[i + 1];
+
+	gMONITOR_CURR.IntSpeed[POS_SPEED_CURR] = M_2_KM(g_SysInfo.VehicleState.u32Speed);
+
+	TEMP = 0;
+
+	for(i = 0; i < MAX_GET_SPEED_SIZE; i++)
+		TEMP +=	gMONITOR_CURR.IntSpeed[i];
+
+	gMONITOR_CURR.AvgSpeed = TEMP / MAX_GET_SPEED_SIZE;
+
+	for(i = 0; i < POS_RPM_CURR; i++)
+		gMONITOR_CURR.RPM[i] = gMONITOR_CURR.RPM[i + 1];
+
+	gMONITOR_CURR.RPM[POS_RPM_CURR] = g_SysInfo.VehicleState.u16RPM;
+
+	// RTOSprintf 勤務狀態, 暫訂
+	gMONITOR_CURR.DutyStatus = TTIA_DUTY_STATUS_OK;
+
+	// RTOSprintf 行車狀態, 暫訂
+	gMONITOR_CURR.BusStatus = TTIA_BUS_STATUS_OK;
+
+	gMONITOR_CURR.Distance = M_2_10M(g_SysInfo.VehicleState.dDistance);
+}
+
+void TTIA_MsgChkSpeed(void)
+{
+	uint8_t i;
+
+
+	if(gTTIA_Setting.SPDLim == 0)
+		return;
+
+	for(i = POS_SPEED_CURR; i > 0; i--)
+	{
+		if(gMONITOR_CURR.IntSpeed[i] < gTTIA_Setting.SPDLim)
+			return;
+	}
+
+	// 觸發超速事件
+	TTIA_MsgAppendEvent(EVENT_TYPE_0002, 0x01);
+}
+
+void TTIA_MsgChkRPM(void)
+{
+	uint8_t i;
+
+
+	if(gTTIA_Setting.RPMLim == 0)
+		return;
+
+	for(i = POS_RPM_CURR; i > 0; i--)
+	{
+		if(gMONITOR_CURR.RPM[i] < gTTIA_Setting.RPMLim)
+			return;
+	}
+
+	// 觸發超轉事件
+	TTIA_MsgAppendEvent(EVENT_TYPE_0002, 0x00);
+}
+
+bool TTIA_InfoProc(void)
+{
+	TTIA_MsgGetInfo();
+
+	TTIA_MsgChkSpeed();
+
+	TTIA_MsgChkRPM();
+
+	return TRUE;
+}
+
+void ClrTID_TTIAInfoProc(void)
+{
+	if(TID_TTIAInfoProc == TIMER_INVALID_ID)
+	{
+		return;
+	}
+
+	//SWTIM_ClrTimer(TID_TTIAInfoProc);
+
+	TID_TTIAInfoProc = TIMER_INVALID_ID;
+}
+
+void SetTID_TTIAInfoProc(void)
+{
+	if(TID_TTIAInfoProc != TIMER_INVALID_ID)
+	{
+		return;
+	}
+
+	TTIA_InfoProc();
+
+	//TID_TTIAInfoProc = SWTIM_SetTimer(TIMER_TTIA_GET_INFO, TIMER_CONTINUE, TTIA_InfoProc);
+}
+
+bool TTIA_Build(void)
+{
+	TTIA_MsgAppendQueue(MSG_SEND_REPORT, NULL);
+
+	return TRUE;
+}
+
+void ClrTID_TTIABuild(void)
+{
+	if(TID_TTIABuild == TIMER_INVALID_ID)
+	{
+		return;
+	}
+
+	//SWTIM_ClrTimer(TID_TTIABuild);
+
+	TID_TTIABuild = TIMER_INVALID_ID;
+}
+
+void SetTID_TTIABuild(void)
+{
+	if(TID_TTIABuild != TIMER_INVALID_ID)
+	{
+		return;
+	}
+
+	TTIA_Build();
+
+	//TID_TTIABuild = SWTIM_SetTimer(S_2_mS(g_Setting.GSM_SET.NET_SET.SendNormal), TIMER_CONTINUE, TTIA_Build);
+}
+
+void TTIA_MsgHandle(uint8_t *MsgPkg)
+{
+	PACKAGE_HEADER_t PkgHead;
+
+
+	memcpy((uint8_t*)&PkgHead, MsgPkg, sizeof(PACKAGE_HEADER_t));
+
+	switch(PkgHead.MessageID)
+	{
+		case TTIA_MSG_SEND_REGISTER:
+			gTTIA_MsgProc = MSG_REPLY_REGISTER;
+
+		  break;
+
+		case TTIA_MSG_SEND_ROUTE:
+			gTTIA_MsgProc = MSG_REPLY_ROUTE;
+
+		  break;
+
+		case TTIA_MSG_SEND_REPORT:
+			gTTIA_MsgProc = MSG_REPLY_REPORT;
+
+		  break;
+
+		case TTIA_MSG_SEND_EVENT:
+			gTTIA_MsgProc = MSG_REPLY_EVENT;
+
+		  break;
+
+		case TTIA_MSG_SEND_SHUTDOWN:
+			gTTIA_MsgProc = MSG_REPLY_SHUTDOWN;
+
+		  break;
+
+		case TTIA_MSG_SEND_TROUBLE:
+			gTTIA_MsgProc = MSG_REPLY_TROUBLE;
+
+		  break;
+
+		case TTIA_MSG_SEND_OD:
+			gTTIA_MsgProc = MSG_REPLY_OD;
+
+		  break;
+
+		default:
+			return;
+	}
+
+	usiPkgHeadSequChk = PkgHead.Sequence;
+
+	bTTIA_MsgReplyOK = FALSE;
+
+	uiTTIA_MsgSendStart = HAL_GetTick();
+}
+
+bool TTIA_MsgChkCmdBusy(void)
+{
+	if(gTTIA_MsgProc != MSG_BREAK)
+	{
+		return TRUE;
+	}
+	else
+	{
+		return FALSE;
+	}
+}
+
+void TTIA_MsgPkgHeadCreate(PACKAGE_HEADER_t *PkgHead)
+{
+	memset(PkgHead, 0x00, sizeof(PACKAGE_HEADER_t));
+
+	memcpy(PkgHead->ProtocolID, (char*)TTIA_PROTOCOL_ID, TTIA_PROTOCOL_ID_LEN);
+
+	PkgHead->ProtocolVer = TTIA_PROTOCOL_VER;
+
+	switch(gTTIA_MsgProc)
+	{
+		case MSG_SEND_REGISTER:
+			PkgHead->MessageID = TTIA_MSG_SEND_REGISTER;
+
+		  break;
+
+		case MSG_SEND_ROUTE:
+			PkgHead->MessageID = TTIA_MSG_SEND_ROUTE;
+
+		  break;
+
+		case MSG_SEND_REPORT:
+			PkgHead->MessageID = TTIA_MSG_SEND_REPORT;
+
+		  break;
+
+		case MSG_REPLY_ALARM:
+			PkgHead->MessageID = TTIA_MSG_REPLY_ALARM;
+
+		  break;
+
+		case MSG_SEND_EVENT:
+			PkgHead->MessageID = TTIA_MSG_SEND_EVENT;
+
+		  break;
+
+		case MSG_SEND_SHUTDOWN:
+			PkgHead->MessageID = TTIA_MSG_SEND_SHUTDOWN;
+
+		  break;
+
+		case MSG_SEND_TROUBLE:
+			PkgHead->MessageID = TTIA_MSG_SEND_TROUBLE;
+
+		  break;
+
+		case MSG_SEND_OD:
+			PkgHead->MessageID = TTIA_MSG_SEND_OD;
+
+		  break;
+
+		default:
+			PkgHead->MessageID = TTIA_MSG_INVALID;
+
+		  break;
+	}
+
+	//PkgHead->CustomerID = atoi(g_Setting.szCompName);
+
+	PkgHead->CarID = atoi(g_Setting.tBusInfo.szBus_SN);
+
+	PkgHead->IDStorage = 0;
+
+	PkgHead->DriverID = g_Setting.u32DrvIdNum;
+
+	PkgHead->Sequence = ++usiPkgHeadSequ;
+}
+
+void TTIA_MsgGetDateStr(char *DateStr)
+{
+	time_t rawtime;
+	char szBuff[8];
+
+
+	rawtime = g_SysInfo.ttNow - g_Setting.i32TimeZoneOffset;
+
+	strftime(szBuff, sizeof(szBuff), "%y%m%d", localtime(&rawtime));
+
+	strcpy(DateStr, szBuff);
+}
+
+void TTIA_MsgSendRegister(void)
+{
+	uint16_t BufLen = 0;
+	char szDateStr[8];
+	REG_SEND_t *REG_SEND;
+
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	REG_SEND = (REG_SEND_t*)gTTIA_MsgBuf;
+
+	TTIA_MsgPkgHeadCreate((PACKAGE_HEADER_t *)&REG_SEND->Head);
+
+	REG_SEND->Info.MonitorData.GPSData = gMONITOR_CURR.GPSData;
+
+	REG_SEND->Info.MonitorData.AvgSpeed = gMONITOR_CURR.AvgSpeed;
+
+	REG_SEND->Info.MonitorData.DutyStatus = gMONITOR_CURR.DutyStatus;
+
+	REG_SEND->Info.MonitorData.BusStatus = gMONITOR_CURR.BusStatus;
+
+	REG_SEND->Info.MonitorData.Distance = gMONITOR_CURR.Distance;
+
+	memcpy(&REG_SEND->Info.IMSI, &g_SysInfo.MobileInfo.IMSI, MAX_IMSI_STR_SIZE);
+
+	memcpy(&REG_SEND->Info.IMEI, &g_SysInfo.MobileInfo.IMEI, MAX_IMEI_STR_SIZE);
+
+	REG_SEND->Info.Manufacturer = 0;
+
+	REG_SEND->Info.OBU_Ver[0] = MODEL_NAME;
+
+	REG_SEND->Info.OBU_Ver[1] = VERSION_MAJOR;
+
+	REG_SEND->Info.OBU_Ver[2] = VERSION_MINOR;
+
+	REG_SEND->Info.OBU_Ver[3] = VERSION_BUILD;
+
+	REG_SEND->Info.RegType = 0;
+
+	REG_SEND->Info.DrvIdType = 0;
+
+	REG_SEND->Info.FileNum = REG_FILE_NUM_DEF;
+
+	memcpy(&REG_SEND->File[0].FileName, (char *)TTIA_PROTOCOL_ID, OFFSET_SIZE(REG_FILE_t, FileName));
+
+	TTIA_MsgGetDateStr(szDateStr);
+
+	memcpy(&REG_SEND->File[0].FileVer, szDateStr, OFFSET_SIZE(REG_FILE_t, FileVer));
+
+	REG_SEND->Head.InfoLen = sizeof(REG_INFO_t) + REG_SEND->Info.FileNum * sizeof(REG_FILE_t);
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + REG_SEND->Head.InfoLen;
+
+	DataSend_AddDataToQue((uint8_t *)REG_SEND, BufLen);
+}
+
+void TTIA_MsgReplyRegister(uint8_t *Buf)
+{
+	REG_REPLY_t *REG_REPLY;
+
+
+	REG_REPLY = (REG_REPLY_t*)gTTIA_MsgBuf;
+
+	memcpy(gTTIA_MsgBuf, Buf, sizeof(REG_REPLY_t));
+
+	if(REG_REPLY->Result == 0)
+	{
+		// 重新註冊
+		TTIA_MsgAppendQueue(MSG_SEND_REGISTER, NULL);
+
+		return;
+	}
+
+	gTTIA_Setting.Route = REG_REPLY->Route;
+
+	gTTIA_Setting.RouteStat.ID = 0;
+
+	gTTIA_Setting.SPDLim = 30;
+
+	gTTIA_Setting.EventMask = REG_REPLY->EventMask;
+
+	gTTIA_Setting.RPMLim = REG_REPLY->RPMLim;
+
+	gTTIA_Setting.Accelerate = REG_REPLY->Accelerate;
+
+	gTTIA_Setting.Decelerate = REG_REPLY->Decelerate;
+
+	gTTIA_Setting.Movement = REG_REPLY->Movement;
+}
+
+void TTIA_MsgSendRoute(void)
+{
+	uint16_t BufLen = 0;
+	ROUTE_SEND_t *ROUTE_SEND;
+
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	ROUTE_SEND = (ROUTE_SEND_t*)gTTIA_MsgBuf;
+
+	TTIA_MsgPkgHeadCreate((PACKAGE_HEADER_t*)&ROUTE_SEND->Head);
+
+	ROUTE_SEND->Route = gTTIA_Setting.Route;
+
+	ROUTE_SEND->Head.InfoLen = sizeof(ROUTE_t);
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + ROUTE_SEND->Head.InfoLen;
+
+	DataSend_AddDataToQue((uint8_t*)ROUTE_SEND, BufLen);
+}
+
+void TTIA_MsgSendReport(void)
+{
+	uint16_t BufLen = 0;
+	REPORT_SEND_t *REPORT_SEND;
+
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	REPORT_SEND = (REPORT_SEND_t*)gTTIA_MsgBuf;
+
+	TTIA_MsgPkgHeadCreate((PACKAGE_HEADER_t*)&REPORT_SEND->Head);
+
+	// 回傳訊息筆數, 暫定為 1 筆
+	REPORT_SEND->Info.DataNum = MONITOR_DATA_NUM_DEF;
+
+	memcpy(&REPORT_SEND->Data[0], &gMONITOR_CURR, sizeof(MONITOR_TYPE1_t));
+
+	REPORT_SEND->Head.InfoLen = sizeof(REPORT_INFO_t) + REPORT_SEND->Info.DataNum * sizeof(MONITOR_TYPE1_t);
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + REPORT_SEND->Head.InfoLen;
+
+	DataSend_AddDataToQue((uint8_t*)REPORT_SEND, BufLen);
+}
+
+void TTIA_MsgSendEvent(void)
+{
+	EVENT_SEND_t EVENT_SEND;
+	TTIA_EVENT_TYPE_t EventType;
+	uint16_t BufLen = 0;
+	uint8_t *pBuf;
+	uint8_t EventFlag;
+
+
+	memset(&EVENT_SEND, 0x00, sizeof(EVENT_SEND_t));
+
+	TTIA_MsgPkgHeadCreate(&EVENT_SEND.Head);
+
+	//EVENT_SEND.Info.Route;
+
+	EVENT_SEND.Info.MonitorData.GPSData = gMONITOR_CURR.GPSData;
+
+	EVENT_SEND.Info.MonitorData.AvgSpeed = gMONITOR_CURR.AvgSpeed;
+
+	EVENT_SEND.Info.MonitorData.DutyStatus = gMONITOR_CURR.DutyStatus;
+
+	EVENT_SEND.Info.MonitorData.BusStatus = gMONITOR_CURR.BusStatus;
+
+	EVENT_SEND.Info.MonitorData.Distance = gMONITOR_CURR.Distance;
+
+	EVENT_SEND.Head.InfoLen = sizeof(EVENT_INFO_t);
+
+	pBuf = gTTIA_MsgBuf;
+
+	EventType = (TTIA_EVENT_TYPE_t)gTTIA_MsgArg._U8[0];
+
+	EventFlag = gTTIA_MsgArg._U8[1];
+
+	switch(EventType)
+	{
+		case EVENT_TYPE_0001:
+		{
+			EVENT_DATA_0001_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0001;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.StationID = gTTIA_Setting.RouteStat.ID;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0002:
+		{
+			EVENT_DATA_0002_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0002;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.StationID = gTTIA_Setting.RouteStat.ID;
+
+			EVENT_DATA.Type = EventFlag;
+
+			if(EVENT_DATA.Type == 0x00)
+				EVENT_DATA.Value = gTTIA_Setting.RPMLim;
+
+			if(EVENT_DATA.Type == 0x01)
+				EVENT_DATA.Value = gTTIA_Setting.SPDLim;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0004:
+		{
+			EVENT_DATA_0004_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0004;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.Type = EventFlag;
+
+			if(EVENT_DATA.Type == 0x01)
+				EVENT_DATA.Value = gTTIA_Setting.Accelerate;
+
+			if(EVENT_DATA.Type == 0x02)
+				EVENT_DATA.Value = gTTIA_Setting.Decelerate;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0008:
+		{
+			EVENT_DATA_0008_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0008;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.Type = EventFlag;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0010:
+		{
+			EVENT_DATA_0010_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0010;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.Type = 0x01;
+
+			if(EventFlag & 0x01)
+				EVENT_DATA.Type = 0x02;
+
+			EVENT_DATA.Flag = 0x01;
+
+			if(EventFlag & 0x02)
+				EVENT_DATA.Flag = 0x02;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0020:
+		{
+			EVENT_DATA_0020_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0020;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.Type = gMONITOR_CURR.BusStatus;
+
+			EVENT_DATA.PreType = gMONITOR_CURR.BusStatus;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0040:
+		{
+			EVENT_DATA_0040_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0040;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			EVENT_DATA.Movement = gTTIA_Setting.Movement;
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0080:
+		{
+			EVENT_DATA_0080_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0080;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_0100:
+		{
+			EVENT_DATA_0100_t EVENT_DATA;
+
+
+			EVENT_SEND.Info.EventType = 0x0100;
+
+			EVENT_SEND.Head.InfoLen += sizeof(EVENT_DATA);
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+			pBuf += sizeof(EVENT_SEND_t);
+
+			memset(&EVENT_DATA, 0x00, sizeof(EVENT_DATA));
+
+			memcpy(pBuf, &EVENT_DATA, sizeof(EVENT_DATA));
+		}
+
+		break;
+
+		case EVENT_TYPE_8000:
+			EVENT_SEND.Info.EventType = 0x8000;
+
+			memcpy(pBuf, &EVENT_SEND, sizeof(EVENT_SEND_t));
+
+		  break;
+
+		default:
+			return;
+	}
+
+	pBuf = gTTIA_MsgBuf;
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + EVENT_SEND.Head.InfoLen;
+
+	DataSend_AddDataToQue(pBuf, BufLen);
+}
+
+void TTIA_MsgSendShutdown(void)
+{
+	uint16_t BufLen = 0;
+	SHUTDOWN_SEND_t *SHUTDOWN_SEND;
+
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	SHUTDOWN_SEND = (SHUTDOWN_SEND_t*)gTTIA_MsgBuf;
+
+	TTIA_MsgPkgHeadCreate((PACKAGE_HEADER_t*)&SHUTDOWN_SEND->Head);
+
+	SHUTDOWN_SEND->Info.MonitorData.GPSData = gMONITOR_CURR.GPSData;
+
+	SHUTDOWN_SEND->Info.MonitorData.AvgSpeed = gMONITOR_CURR.AvgSpeed;
+
+	SHUTDOWN_SEND->Info.MonitorData.DutyStatus = gMONITOR_CURR.DutyStatus;
+
+	SHUTDOWN_SEND->Info.MonitorData.BusStatus = gMONITOR_CURR.BusStatus;
+
+	SHUTDOWN_SEND->Info.MonitorData.Distance = gMONITOR_CURR.Distance;
+
+	SHUTDOWN_SEND->Info.PSDReconnect = usiPkgHeadSequ;
+
+	SHUTDOWN_SEND->Info.PacketRatio = 80;
+
+	SHUTDOWN_SEND->Info.GPSRatio = 75;
+
+	SHUTDOWN_SEND->Head.InfoLen = sizeof(SHUTDOWN_INFO_t);
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + SHUTDOWN_SEND->Head.InfoLen;
+
+	DataSend_AddDataToQue((uint8_t*)SHUTDOWN_SEND, BufLen);
+}
+
+void TTIA_MsgSendTrouble(void)
+{
+	uint16_t BufLen = 0;
+	TROUBLE_SEND_t *TROUBLE_SEND;
+
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	TROUBLE_SEND = (TROUBLE_SEND_t*)gTTIA_MsgBuf;
+
+	TTIA_MsgPkgHeadCreate((PACKAGE_HEADER_t*)&TROUBLE_SEND->Head);
+
+	TROUBLE_SEND->Head.InfoLen = sizeof(TROUBLE_INFO_t);
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + TROUBLE_SEND->Head.InfoLen;
+
+	DataSend_AddDataToQue((uint8_t*)TROUBLE_SEND, BufLen);
+}
+
+void TTIA_MsgSendOD(void)
+{
+	uint16_t BufLen = 0;
+	OD_SEND_t *OD_SEND;
+
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	OD_SEND = (OD_SEND_t*)gTTIA_MsgBuf;
+
+	TTIA_MsgPkgHeadCreate((PACKAGE_HEADER_t*)&OD_SEND->Head);
+
+	//OD_SEND->Info.Route;
+
+	OD_SEND->Info.PkgNum = 1;
+
+	//OD_SEND->Info.Record
+
+	OD_SEND->Head.InfoLen = sizeof(OD_INFO_t);
+
+	BufLen = sizeof(PACKAGE_HEADER_t) + OD_SEND->Head.InfoLen;
+
+	DataSend_AddDataToQue((uint8_t*)OD_SEND, BufLen);
+}
+
+void TTIA_MsgReply(GSM_SocketDataTypeDef SocketData)
+{
+	uint8_t *pBuf;
+	PACKAGE_HEADER_t *PkgHead;
+
+
+	if(SocketData.SocketNum != 0)
+		return;
+
+	memset(gTTIA_MsgBuf, 0x00, sizeof(gTTIA_MsgBuf));
+
+	pBuf = gTTIA_MsgBuf;
+
+	memcpy(pBuf, SocketData.cData, SocketData.u16DataLen);
+
+	PkgHead = (PACKAGE_HEADER_t*)gTTIA_MsgBuf;
+
+	pBuf += sizeof(PACKAGE_HEADER_t);
+
+	if(PkgHead->MessageID == TTIA_MSG_SEND_ALARM)
+	{
+		return;
+	}
+
+	// 回應封包序號比對
+	if(PkgHead->Sequence != usiPkgHeadSequChk)
+		return;
+
+	if(PkgHead->MessageID == TTIA_MSG_REPLY_REGISTER)
+	{
+		TTIA_MsgReplyRegister(pBuf);
+	}
+
+	bTTIA_MsgReplyOK = TRUE;
+}
+
+void TTIA_MsgProc(void)
+{
+	switch(gTTIA_MsgProc)
+	{
+		case MSG_BREAK:
+			TTIA_MsgGetQueue();
+
+		  break;
+
+		case MSG_INIT:
+			TTIA_MsgClrReg();
+
+			SetTID_TTIAInfoProc();
+
+			SetTID_TTIABuild();
+
+
+			TTIA_EdrAppendQueue(EDR_INIT, NULL);
+
+
+			gTTIA_MsgProc = MSG_SEND_REGISTER;
+		break;
+
+		case MSG_SEND_REGISTER:
+			if(strlen(g_SysInfo.MobileInfo.IMSI) == 0
+				 || strlen(g_SysInfo.MobileInfo.IMEI) == 0)
+				break;
+
+			TTIA_MsgSendRegister();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+			break;
+
+		case MSG_REPLY_REGISTER:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF REGISTER MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				// 重新註冊
+				TTIA_MsgAppendQueue(MSG_SEND_REGISTER, NULL);
+
+				RTOSprintf("\r\n> PRINTF REGISTER MSG REPLY Timeout!!\r\n");
+			}
+
+		  break;
+
+		case MSG_SEND_ROUTE:
+			TTIA_MsgSendRoute();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_ROUTE:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF ROUTE MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF ROUTE MSG REPLY Timeout!!\r\n");
+			}
+
+			break;
+
+		case MSG_SEND_REPORT:
+			TTIA_MsgSendReport();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_REPORT:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF REPORT MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF REPORT MSG REPLY Timeout!!\r\n");
+			}
+
+		  break;
+
+		case MSG_SEND_ALARM:
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_ALARM:
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_SEND_EVENT:
+			TTIA_MsgSendEvent();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_EVENT:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF EVENT MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF EVENT MSG REPLY Timeout!!\r\n");
+			}
+
+		break;
+
+		case MSG_SEND_SHUTDOWN:
+			TTIA_MsgSendShutdown();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_SHUTDOWN:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				TTIA_MsgClrReg();
+
+				ClrTID_TTIAInfoProc();
+
+				ClrTID_TTIABuild();
+
+				RTOSprintf("\r\n> PRINTF SHUTDOWN MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				TTIA_MsgClrReg();
+
+				ClrTID_TTIAInfoProc();
+
+				ClrTID_TTIABuild();
+
+				RTOSprintf("\r\n> PRINTF SHUTDOWN MSG REPLY Timeout!!\r\n");
+			}
+
+		  break;
+
+		case MSG_SEND_TROUBLE:
+			TTIA_MsgSendTrouble();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_TROUBLE:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF TROUBLE MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF TROUBLE MSG REPLY Timeout!!\r\n");
+			}
+
+		break;
+
+		case MSG_SEND_OD:
+			TTIA_MsgSendOD();
+
+			gTTIA_MsgProc = MSG_BREAK;
+
+		  break;
+
+		case MSG_REPLY_OD:
+			if(bTTIA_MsgReplyOK == TRUE)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF OD-RECODE MSG REPLY is %d mS\r\n", SysTick_2_mS(HAL_GetTick() - uiTTIA_MsgSendStart));
+			}
+			else if(HAL_GetTick() - uiTTIA_MsgSendStart >= MSG_TIMEOUT_DEF)
+			{
+				gTTIA_MsgProc = MSG_BREAK;
+
+				RTOSprintf("\r\n> PRINTF OD-RECODE MSG REPLY Timeout!!\r\n");
+			}
+
+		  break;
+	}
+}
+
+bool TTIA_Process(void)
+{
+	TTIA_MsgProc();
+
+	TTIA_EdrProc();
+
+	return TRUE;
+}
+
+void SetTID_TTIAProc(void)
+{
+	//SWTIM_SetTimer(TIMER_TTIA_PROC, TIMER_CONTINUE, TTIA_Process);
+}
+*/
